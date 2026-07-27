@@ -17,6 +17,8 @@ export default defineConfig({
         'src/utils/scriptHelpers.js',
         'src/utils/expressions.js',
         'src/utils/renderFieldLayoutDialog.js',
+        'src/utils/kanbanRevert.js',
+        'src/utils/kanbanTransitions.js',
       ],
     },
   },
