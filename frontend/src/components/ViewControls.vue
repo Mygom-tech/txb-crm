@@ -1055,10 +1055,12 @@ async function handleKanbanTransition(data) {
     if (!reverted) list.value.reload()
   }
 
-  // Covers the whole body (not just the set_value call below) so that any
-  // throw — including getFields() on partially-hydrated meta, before the
+  // Covers only the pre-commit phase (up to and including set_value) so that
+  // any throw — including getFields() on partially-hydrated meta, before the
   // confirm dialog even opens — reverts the card and toasts instead of
-  // becoming a silent, unhandled rejection.
+  // becoming a silent, unhandled rejection. Once set_value succeeds, the
+  // save is committed server-side; failures after that point must not
+  // revert (see the post-save try/catch below).
   let fieldLabel = fieldname
   try {
     fieldLabel =
@@ -1093,7 +1095,21 @@ async function handleKanbanTransition(data) {
       )
       return
     }
+  } catch (error) {
+    revert()
+    toast.error(
+      error?.messages?.[0] ||
+        error?.message ||
+        __('Failed to update {0}', [fieldLabel]),
+    )
+    return
+  }
 
+  // The save above already succeeded server-side, so any throw from here on
+  // must NOT revert the card or claim the update failed — that would be a
+  // false negative. Badge-sync/ordering-persist failures only get a
+  // non-destructive warning; the underlying data is already correct.
+  try {
     // Keep the moved card's own field in sync so its badge doesn't go stale
     const targetColumn = (list.value?.data?.data || []).find(
       (col) => col.column?.name == data.to,
@@ -1115,12 +1131,11 @@ async function handleKanbanTransition(data) {
         createOrUpdateStandardView()
       }
     }
-  } catch (error) {
-    revert()
-    toast.error(
-      error?.messages?.[0] ||
-        error?.message ||
-        __('Failed to update {0}', [fieldLabel]),
+  } catch {
+    toast.warning(
+      __(
+        'Saved, but the view could not be updated. Refresh to see the latest state.',
+      ),
     )
   }
 }
