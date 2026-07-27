@@ -325,6 +325,8 @@ import { viewsStore } from '@/stores/views'
 import { usersStore } from '@/stores/users'
 import { organizationsStore } from '@/stores/organizations'
 import { getMeta } from '@/stores/meta'
+import { requestKanbanTransition } from '@/utils/kanbanTransitions'
+import { revertCardMove } from '@/utils/kanbanRevert'
 import { isEmoji } from '@/utils'
 import {
   Tooltip,
@@ -975,12 +977,7 @@ function persistCustomView() {
 
 function updateKanbanSettings(data) {
   if (data.item && data.to) {
-    call('frappe.client.set_value', {
-      doctype: props.doctype,
-      name: data.item,
-      fieldname: view.value.column_field,
-      value: data.to,
-    })
+    handleKanbanTransition(data)
     return
   }
 
@@ -1018,6 +1015,75 @@ function updateKanbanSettings(data) {
 
   if (!route.query.view) {
     createOrUpdateStandardView()
+  }
+}
+
+async function handleKanbanTransition(data) {
+  const fieldname = view.value.column_field
+
+  const revert = () => {
+    const reverted = revertCardMove({
+      columns: list.value?.data?.data || [],
+      itemName: data.item,
+      from: data.from,
+      to: data.to,
+      oldIndex: data.oldIndex,
+    })
+    // Board changed underneath (Load More / view switch) — resync instead
+    if (!reverted) list.value.reload()
+  }
+
+  const fieldLabel =
+    getFields()?.find((f) => f.fieldname === fieldname)?.label || fieldname
+
+  const confirmed = await requestKanbanTransition({
+    doctype: props.doctype,
+    itemName: data.item,
+    fieldname,
+    fieldLabel,
+    from: data.from,
+    to: data.to,
+  })
+  if (!confirmed) {
+    revert()
+    return
+  }
+
+  try {
+    await call('frappe.client.set_value', {
+      doctype: props.doctype,
+      name: data.item,
+      fieldname,
+      value: data.to,
+    })
+  } catch (error) {
+    revert()
+    toast.error(
+      error.messages?.[0] ||
+        error.message ||
+        __('Failed to update {0}', [fieldLabel]),
+    )
+    return
+  }
+
+  // Keep the moved card's own field in sync so its badge doesn't go stale
+  const targetColumn = (list.value?.data?.data || []).find(
+    (col) => col.column?.name == data.to,
+  )
+  const card = targetColumn?.data?.find((row) => row.name == data.item)
+  if (card) card[fieldname] = data.to
+
+  // Persist card ordering (was silently discarded on cross-column moves)
+  if (data.kanban_columns?.length) {
+    if (!defaultParams.value) {
+      defaultParams.value = getParams()
+    }
+    list.value.params = defaultParams.value
+    list.value.params.kanban_columns = data.kanban_columns
+    view.value.kanban_columns = data.kanban_columns
+    if (!route.query.view) {
+      createOrUpdateStandardView()
+    }
   }
 }
 
