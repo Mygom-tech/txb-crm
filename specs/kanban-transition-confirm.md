@@ -1,6 +1,6 @@
 # Kanban transition confirm
 
-Status: approved design, pre-implementation
+Status: implemented (2026-07-27)
 Date: 2026-07-27
 Branch: `feature/kanban-transition-confirm`
 
