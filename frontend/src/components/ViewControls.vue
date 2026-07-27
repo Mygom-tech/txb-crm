@@ -1020,8 +1020,20 @@ function updateKanbanSettings(data) {
 
 async function handleKanbanTransition(data) {
   const fieldname = view.value.column_field
+  const viewName = view.value.name
+
+  // `view`/`list` re-derive for whatever view is active *now* — if the user
+  // navigates away (list/group_by, or a different kanban view) while the
+  // confirm dialog or set_value round trip is in flight, neither the revert
+  // nor the ordering-persist below may touch the new view's data.
+  const viewStillMatches = () =>
+    route.params.viewType === 'kanban' &&
+    view.value.name === viewName &&
+    view.value.column_field === fieldname
 
   const revert = () => {
+    // View changed underneath — bail silently, don't reload the new view.
+    if (!viewStillMatches()) return
     const reverted = revertCardMove({
       columns: list.value?.data?.data || [],
       itemName: data.item,
@@ -1073,8 +1085,9 @@ async function handleKanbanTransition(data) {
   const card = targetColumn?.data?.find((row) => row.name == data.item)
   if (card) card[fieldname] = data.to
 
-  // Persist card ordering (was silently discarded on cross-column moves)
-  if (data.kanban_columns?.length) {
+  // Persist card ordering (was silently discarded on cross-column moves).
+  // Skipped entirely if the view changed underneath during the save.
+  if (data.kanban_columns?.length && viewStillMatches()) {
     if (!defaultParams.value) {
       defaultParams.value = getParams()
     }
