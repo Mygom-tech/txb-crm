@@ -21,20 +21,15 @@ export async function requestKanbanTransition(ctx) {
 
 /**
  * Cancel/OK confirmation for a kanban column transition.
- * Resolves exactly once; Esc, X and outside-click count as Cancel.
+ * Esc, X and outside-click count as Cancel. OK's close() also fires
+ * onDismiss, but a settled Promise ignores later resolve() calls, so the
+ * first outcome wins — no explicit guard needed.
  *
  * @param {Object} ctx - { fieldLabel, from, to } (rest of ctx unused here)
  * @returns {Promise<boolean>}
  */
 export function confirmKanbanTransition({ fieldLabel, from, to }) {
   return new Promise((resolve) => {
-    let resolved = false
-    const resolveOnce = (value) => {
-      if (resolved) return
-      resolved = true
-      resolve(value)
-    }
-
     createDialog({
       title: __('Confirm change'),
       message: __('Change {0} from "{1}" to "{2}"?', [
@@ -42,12 +37,12 @@ export function confirmKanbanTransition({ fieldLabel, from, to }) {
         __(from),
         __(to),
       ]),
-      onDismiss: () => resolveOnce(false),
+      onDismiss: () => resolve(false),
       actions: [
         {
           label: __('Cancel'),
           onClick: ({ close }) => {
-            resolveOnce(false)
+            resolve(false)
             close()
           },
         },
@@ -55,7 +50,7 @@ export function confirmKanbanTransition({ fieldLabel, from, to }) {
           label: __('OK'),
           variant: 'solid',
           onClick: ({ close }) => {
-            resolveOnce(true)
+            resolve(true)
             close()
           },
         },

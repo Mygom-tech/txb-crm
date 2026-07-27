@@ -64,11 +64,13 @@ describe('confirmKanbanTransition', () => {
     await expect(promise).resolves.toBe(false)
   })
 
-  it('resolves exactly once when OK is followed by dismiss', async () => {
+  it('keeps the first outcome when OK is followed by dismiss', async () => {
+    // close() always triggers update:open(false) → onDismiss; a settled
+    // Promise ignores the later resolve(false), so OK's true wins.
     const promise = confirmKanbanTransition(ctx)
     const options = lastDialogOptions()
     options.actions.find((a) => a.label === 'OK').onClick({ close: vi.fn() })
-    options.onDismiss() // close() always triggers update:open(false) → onDismiss
+    options.onDismiss()
     await expect(promise).resolves.toBe(true)
   })
 })

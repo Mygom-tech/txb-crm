@@ -1,9 +1,6 @@
 import { Dialog, ErrorMessage } from 'frappe-ui'
 import { reactive, ref } from 'vue'
 
-// Delay before unmounting a closed dialog so the leave transition can finish.
-const DIALOG_REMOVE_DELAY_MS = 300
-
 let dialogs = ref([])
 let dialogKeyCounter = 0
 
@@ -17,12 +14,16 @@ function onDialogClose(dialog) {
     dialog.onDismiss?.()
   } finally {
     dialog.onDismiss = null
-    setTimeout(() => {
-      const index = dialogs.value.indexOf(dialog)
-      if (index !== -1) {
-        dialogs.value.splice(index, 1)
-      }
-    }, DIALOG_REMOVE_DELAY_MS)
+  }
+}
+
+// Unmount happens on the Dialog's own after-leave emit, so removal always
+// lands exactly when the leave transition ends — no timing constant to keep
+// in sync with the component's CSS.
+function removeDialog(dialog) {
+  const index = dialogs.value.indexOf(dialog)
+  if (index !== -1) {
+    dialogs.value.splice(index, 1)
   }
 }
 
@@ -45,6 +46,7 @@ export let Dialogs = {
             dialog.show = val
           }
         }}
+        onAfterLeave={() => removeDialog(dialog)}
       >
         {{
           default: () => {

@@ -1055,12 +1055,11 @@ async function handleKanbanTransition(data) {
     if (!reverted) list.value.reload()
   }
 
-  // Covers only the pre-commit phase (up to and including set_value) so that
-  // any throw — including getFields() on partially-hydrated meta, before the
-  // confirm dialog even opens — reverts the card and toasts instead of
-  // becoming a silent, unhandled rejection. Once set_value succeeds, the
-  // save is committed server-side; failures after that point must not
-  // revert (see the post-save try/catch below).
+  // Covers only the pre-commit phase (up to and including set_value): any
+  // throw — a rejected save, or getFields() on partially-hydrated meta before
+  // the confirm dialog even opens — reverts the card and toasts. Once
+  // set_value succeeds the save is committed server-side; failures after
+  // that point must not revert (see the post-save try/catch below).
   let fieldLabel = fieldname
   try {
     fieldLabel =
@@ -1079,22 +1078,12 @@ async function handleKanbanTransition(data) {
       return
     }
 
-    try {
-      await call('frappe.client.set_value', {
-        doctype: props.doctype,
-        name: data.item,
-        fieldname,
-        value: data.to,
-      })
-    } catch (error) {
-      revert()
-      toast.error(
-        error.messages?.[0] ||
-          error.message ||
-          __('Failed to update {0}', [fieldLabel]),
-      )
-      return
-    }
+    await call('frappe.client.set_value', {
+      doctype: props.doctype,
+      name: data.item,
+      fieldname,
+      value: data.to,
+    })
   } catch (error) {
     revert()
     toast.error(
