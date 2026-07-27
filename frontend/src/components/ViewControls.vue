@@ -977,7 +977,17 @@ function persistCustomView() {
 
 function updateKanbanSettings(data) {
   if (data.item && data.to) {
-    handleKanbanTransition(data)
+    // handleKanbanTransition() already reverts the card and toasts on any
+    // failure it recognizes (see its own try/catch); this .catch() is only
+    // a backstop so an unexpected throw never becomes a silent, unhandled
+    // rejection that leaves the card visually moved with no feedback.
+    handleKanbanTransition(data).catch((error) => {
+      toast.error(
+        error?.messages?.[0] ||
+          error?.message ||
+          __('Failed to update {0}', [view.value.column_field]),
+      )
+    })
     return
   }
 
@@ -1045,58 +1055,73 @@ async function handleKanbanTransition(data) {
     if (!reverted) list.value.reload()
   }
 
-  const fieldLabel =
-    getFields()?.find((f) => f.fieldname === fieldname)?.label || fieldname
-
-  const confirmed = await requestKanbanTransition({
-    doctype: props.doctype,
-    itemName: data.item,
-    fieldname,
-    fieldLabel,
-    from: data.from,
-    to: data.to,
-  })
-  if (!confirmed) {
-    revert()
-    return
-  }
-
+  // Covers the whole body (not just the set_value call below) so that any
+  // throw — including getFields() on partially-hydrated meta, before the
+  // confirm dialog even opens — reverts the card and toasts instead of
+  // becoming a silent, unhandled rejection.
+  let fieldLabel = fieldname
   try {
-    await call('frappe.client.set_value', {
+    fieldLabel =
+      getFields()?.find((f) => f.fieldname === fieldname)?.label || fieldname
+
+    const confirmed = await requestKanbanTransition({
       doctype: props.doctype,
-      name: data.item,
+      itemName: data.item,
       fieldname,
-      value: data.to,
+      fieldLabel,
+      from: data.from,
+      to: data.to,
     })
+    if (!confirmed) {
+      revert()
+      return
+    }
+
+    try {
+      await call('frappe.client.set_value', {
+        doctype: props.doctype,
+        name: data.item,
+        fieldname,
+        value: data.to,
+      })
+    } catch (error) {
+      revert()
+      toast.error(
+        error.messages?.[0] ||
+          error.message ||
+          __('Failed to update {0}', [fieldLabel]),
+      )
+      return
+    }
+
+    // Keep the moved card's own field in sync so its badge doesn't go stale
+    const targetColumn = (list.value?.data?.data || []).find(
+      (col) => col.column?.name == data.to,
+    )
+    const card = targetColumn?.data?.find((row) => row.name == data.item)
+    if (card) card[fieldname] = data.to
+
+    // Persist card ordering (was silently discarded on cross-column moves).
+    // Skipped entirely if the view changed underneath during the save.
+    if (data.kanban_columns?.length && viewStillMatches()) {
+      if (!defaultParams.value) {
+        defaultParams.value = getParams()
+      }
+      list.value.params = defaultParams.value
+      list.value.params.kanban_columns = data.kanban_columns
+      view.value.kanban_columns = data.kanban_columns
+      viewUpdated.value = true
+      if (!route.query.view) {
+        createOrUpdateStandardView()
+      }
+    }
   } catch (error) {
     revert()
     toast.error(
-      error.messages?.[0] ||
-        error.message ||
+      error?.messages?.[0] ||
+        error?.message ||
         __('Failed to update {0}', [fieldLabel]),
     )
-    return
-  }
-
-  // Keep the moved card's own field in sync so its badge doesn't go stale
-  const targetColumn = (list.value?.data?.data || []).find(
-    (col) => col.column?.name == data.to,
-  )
-  const card = targetColumn?.data?.find((row) => row.name == data.item)
-  if (card) card[fieldname] = data.to
-
-  // Persist card ordering (was silently discarded on cross-column moves).
-  // Skipped entirely if the view changed underneath during the save.
-  if (data.kanban_columns?.length && viewStillMatches()) {
-    if (!defaultParams.value) {
-      defaultParams.value = getParams()
-    }
-    list.value.params = defaultParams.value
-    list.value.params.kanban_columns = data.kanban_columns
-    view.value.kanban_columns = data.kanban_columns
-    if (!route.query.view) {
-      createOrUpdateStandardView()
-    }
   }
 }
 

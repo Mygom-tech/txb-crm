@@ -37,7 +37,11 @@ export function confirmKanbanTransition({ fieldLabel, from, to }) {
 
     createDialog({
       title: __('Confirm change'),
-      message: __('Change {0} from "{1}" to "{2}"?', [fieldLabel, from, to]),
+      message: __('Change {0} from "{1}" to "{2}"?', [
+        __(fieldLabel),
+        __(from),
+        __(to),
+      ]),
       onDismiss: () => resolveOnce(false),
       actions: [
         {
