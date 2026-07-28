@@ -1,0 +1,6 @@
+[
+  {
+    "url": "https://${GH_TOKEN}@github.com/Mygom-tech/txb-crm.git",
+    "branch": "develop"
+  }
+]

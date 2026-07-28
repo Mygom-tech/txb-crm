@@ -61,6 +61,13 @@ Open http://localhost:8080/crm. The `yarn dev` log must say `Local frappe-ui vit
 
 Production bundle: `yarn build` from `apps/crm` (outputs to `crm/public/frontend`, served by the backend at `/crm`).
 
+### Deployment
+
+Production (Coolify + Docker + external MariaDB) is documented in
+[docs/deployment-guide.md](./docs/deployment-guide.md). Images are built
+locally with [`deploy/build.sh`](./deploy/build.sh) and pushed to private
+GHCR; Coolify pins `FRAPPE_VERSION` to the printed sha tag.
+
 ### Fork-specific gotchas
 
 - `frontend/package.json` declares `"@framework/ui": "link:../../frappe/ui"`, but `apps/frappe` (upstream v15) has no `ui/` directory — the link is dangling. Nothing imports it currently; do not import `@framework/ui` until that package is actually added to the bench.
