@@ -325,6 +325,8 @@ import { viewsStore } from '@/stores/views'
 import { usersStore } from '@/stores/users'
 import { organizationsStore } from '@/stores/organizations'
 import { getMeta } from '@/stores/meta'
+import { requestKanbanTransition } from '@/utils/kanbanTransitions'
+import { revertCardMove } from '@/utils/kanbanRevert'
 import { isEmoji } from '@/utils'
 import {
   Tooltip,
@@ -975,11 +977,16 @@ function persistCustomView() {
 
 function updateKanbanSettings(data) {
   if (data.item && data.to) {
-    call('frappe.client.set_value', {
-      doctype: props.doctype,
-      name: data.item,
-      fieldname: view.value.column_field,
-      value: data.to,
+    // handleKanbanTransition() already reverts the card and toasts on any
+    // failure it recognizes (see its own try/catch); this .catch() is only
+    // a backstop so an unexpected throw never becomes a silent, unhandled
+    // rejection that leaves the card visually moved with no feedback.
+    handleKanbanTransition(data).catch((error) => {
+      toast.error(
+        error?.messages?.[0] ||
+          error?.message ||
+          __('Failed to update {0}', [view.value.column_field]),
+      )
     })
     return
   }
@@ -1018,6 +1025,107 @@ function updateKanbanSettings(data) {
 
   if (!route.query.view) {
     createOrUpdateStandardView()
+  }
+}
+
+async function handleKanbanTransition(data) {
+  const fieldname = view.value.column_field
+  const viewName = view.value.name
+
+  // `view`/`list` re-derive for whatever view is active *now* — if the user
+  // navigates away (list/group_by, or a different kanban view) while the
+  // confirm dialog or set_value round trip is in flight, neither the revert
+  // nor the ordering-persist below may touch the new view's data.
+  const viewStillMatches = () =>
+    route.params.viewType === 'kanban' &&
+    view.value.name === viewName &&
+    view.value.column_field === fieldname
+
+  const revert = () => {
+    // View changed underneath — bail silently, don't reload the new view.
+    if (!viewStillMatches()) return
+    const reverted = revertCardMove({
+      columns: list.value?.data?.data || [],
+      itemName: data.item,
+      from: data.from,
+      to: data.to,
+      oldIndex: data.oldIndex,
+    })
+    // Board changed underneath (Load More / view switch) — resync instead
+    if (!reverted) list.value.reload()
+  }
+
+  // Covers only the pre-commit phase (up to and including set_value): any
+  // throw — a rejected save, or getFields() on partially-hydrated meta before
+  // the confirm dialog even opens — reverts the card and toasts. Once
+  // set_value succeeds the save is committed server-side; failures after
+  // that point must not revert (see the post-save try/catch below).
+  let fieldLabel = fieldname
+  try {
+    fieldLabel =
+      getFields()?.find((f) => f.fieldname === fieldname)?.label || fieldname
+
+    const confirmed = await requestKanbanTransition({
+      doctype: props.doctype,
+      itemName: data.item,
+      fieldname,
+      fieldLabel,
+      from: data.from,
+      to: data.to,
+    })
+    if (!confirmed) {
+      revert()
+      return
+    }
+
+    await call('frappe.client.set_value', {
+      doctype: props.doctype,
+      name: data.item,
+      fieldname,
+      value: data.to,
+    })
+  } catch (error) {
+    revert()
+    toast.error(
+      error?.messages?.[0] ||
+        error?.message ||
+        __('Failed to update {0}', [fieldLabel]),
+    )
+    return
+  }
+
+  // The save above already succeeded server-side, so any throw from here on
+  // must NOT revert the card or claim the update failed — that would be a
+  // false negative. Badge-sync/ordering-persist failures only get a
+  // non-destructive warning; the underlying data is already correct.
+  try {
+    // Keep the moved card's own field in sync so its badge doesn't go stale
+    const targetColumn = (list.value?.data?.data || []).find(
+      (col) => col.column?.name == data.to,
+    )
+    const card = targetColumn?.data?.find((row) => row.name == data.item)
+    if (card) card[fieldname] = data.to
+
+    // Persist card ordering (was silently discarded on cross-column moves).
+    // Skipped entirely if the view changed underneath during the save.
+    if (data.kanban_columns?.length && viewStillMatches()) {
+      if (!defaultParams.value) {
+        defaultParams.value = getParams()
+      }
+      list.value.params = defaultParams.value
+      list.value.params.kanban_columns = data.kanban_columns
+      view.value.kanban_columns = data.kanban_columns
+      viewUpdated.value = true
+      if (!route.query.view) {
+        createOrUpdateStandardView()
+      }
+    }
+  } catch {
+    toast.warning(
+      __(
+        'Saved, but the view could not be updated. Refresh to see the latest state.',
+      ),
+    )
   }
 }
 

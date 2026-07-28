@@ -21,6 +21,52 @@
 
 </div>
 
+## Development setup (Mygom fork)
+
+> This section applies to the `Mygom-tech/txb-crm` fork running inside the `txb-crm-be` bench. The upstream instructions further below do **not** cover the fork-specific parts.
+
+### One-time setup
+
+The frontend build **requires** the local `frappe-ui` checkout — it is a git submodule at `apps/crm/frappe-ui`. Without it, `yarn dev` falls back to the npm `frappe-ui` package and fails with dozens of `Could not resolve "~icons/lucide/*"` errors.
+
+```sh
+# from the bench root (txb-crm-be/)
+cd apps/crm
+git submodule update --init frappe-ui
+cd frappe-ui && yarn install
+cd .. && yarn install
+```
+
+The dev site's `sites/{site}/site_config.json` needs these flags (on top of the db settings):
+
+```json
+"developer_mode": 1,
+"ignore_csrf": 1
+```
+
+`developer_mode` is required by the SPA's dev boot endpoint (`get_context_for_dev`, otherwise HTTP 417); `ignore_csrf` is required when developing through the Vite proxy on port 8080 (otherwise POSTs fail CSRF and the app redirects to `/crm/not-permitted`).
+
+### Running the stack
+
+```sh
+# terminal 1 — backend (bench root): redis, web :8000, socketio :9000, workers
+bench start
+
+# terminal 2 — frontend dev server with HMR on :8080
+cd apps/crm
+yarn dev
+```
+
+Open http://localhost:8080/crm. The `yarn dev` log must say `Local frappe-ui vite plugin found, using local plugin` — if it says "using npm package" instead, the submodule is missing (see one-time setup).
+
+Production bundle: `yarn build` from `apps/crm` (outputs to `crm/public/frontend`, served by the backend at `/crm`).
+
+### Fork-specific gotchas
+
+- `frontend/package.json` declares `"@framework/ui": "link:../../frappe/ui"`, but `apps/frappe` (upstream v15) has no `ui/` directory — the link is dangling. Nothing imports it currently; do not import `@framework/ui` until that package is actually added to the bench.
+- The dev site may point at a **remote** MariaDB (see `site_config.json`). `bench start` runs the scheduler and workers against that database — avoid destructive bench commands (migrations, `set-admin-password`, etc.) unless you know who else uses it.
+- `frontend/` unit tests: `cd frontend && yarn test:run`.
+
 ## Frappe CRM
 
 Frappe CRM is a simple, affordable, open-source CRM tool designed for modern sales teams with unlimited users. Frappe CRM is crafted for providing a great user experience, packed with features for core CRM activities helping you build strong customer relationships while keeping things clean and organised.

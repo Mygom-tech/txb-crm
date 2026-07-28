@@ -265,6 +265,11 @@ const links = [
     icon: PhoneIcon,
     to: 'Call Logs',
   },
+  {
+    label: 'Domanto Linkas',
+    icon: PhoneIcon,
+    to: 'Call Logs',
+  },
 ]
 
 const allViews = computed(() => {

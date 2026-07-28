@@ -256,8 +256,29 @@ function addColumn(e) {
 function updateColumn(d, fetchNewColumns = false) {
   let toColumn = d?.to?.dataset.column
   let fromColumn = d?.from?.dataset.column
-  let itemName = d?.item?.dataset.name
 
+  if (toColumn != fromColumn) {
+    moveCardBetweenColumns(d)
+    return
+  }
+
+  emit('update', { kanban_columns: serializeColumns(), fetchNewColumns })
+}
+
+// Cross-column drag: vuedraggable has already moved the card optimistically.
+// ViewControls owns confirm/save/revert; oldIndex is only a position hint for
+// the revert (the card itself is re-resolved by name there).
+function moveCardBetweenColumns(d) {
+  emit('update', {
+    item: d.item.dataset.name,
+    to: d.to.dataset.column,
+    from: d.from.dataset.column,
+    oldIndex: d.oldIndex,
+    kanban_columns: serializeColumns(),
+  })
+}
+
+function serializeColumns() {
   let _columns = []
   columns.value.forEach((col) => {
     col.column['order'] = col.data.map((d) => d.name)
@@ -266,13 +287,6 @@ function updateColumn(d, fetchNewColumns = false) {
     }
     _columns.push(col.column)
   })
-
-  let data = { kanban_columns: _columns, fetchNewColumns }
-
-  if (toColumn != fromColumn) {
-    data = { item: itemName, to: toColumn, kanban_columns: _columns }
-  }
-
-  emit('update', data)
+  return _columns
 }
 </script>
