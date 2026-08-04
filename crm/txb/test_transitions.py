@@ -3,9 +3,11 @@
 
 """TXB-110: the transition graph derived from the action registry."""
 
+import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from crm.txb.constants import (
+	ADMIN_ROLE,
 	PIPELINE_DELIVERING_COACHING,
 	PIPELINE_INDIVIDUAL_SESSION,
 	PIPELINE_STATUSES,
@@ -19,6 +21,10 @@ from crm.txb.pipelines.transitions import (
 	get_transitions,
 	is_allowed,
 )
+from crm.txb.test_permissions import ensure_user
+
+COACH = "txb-coach@example.com"
+ADMIN = "txb-admin@example.com"
 
 
 class TestTransitionGraph(FrappeTestCase):
@@ -141,3 +147,91 @@ class TestTransitionApi(FrappeTestCase):
 
 		spec = find_action(PIPELINE_WORKSHOP, "run_workshop")
 		self.assertIn("ws_outcome", spec["to_state_map"])
+
+
+class TestTransitionEnforcement(FrappeTestCase):
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		ensure_user(COACH, ["Sales User"])
+		ensure_user(ADMIN, ["Sales User", ADMIN_ROLE])
+		frappe.db.commit()  # nosemgrep -- roles must outlive per-test rollback
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+		frappe.flags.txb_action = False
+		frappe.db.rollback()
+
+	def make_deal(self, status, pipeline=PIPELINE_INDIVIDUAL_SESSION):
+		return frappe.get_doc(
+			{"doctype": "CRM Deal", "pipeline_type": pipeline, "status": status}
+		).insert(ignore_permissions=True)
+
+	def test_an_off_graph_move_is_refused(self):
+		deal = self.make_deal("Submitted")
+		frappe.set_user(COACH)
+		deal.reload()
+		deal.status = "Session Run"  # not reachable from Submitted
+
+		with self.assertRaises(frappe.ValidationError):
+			deal.save(ignore_permissions=True)
+
+	def test_an_on_graph_move_still_needs_the_action(self):
+		"""Submitted -> Session Set is a legal edge, but only Book a BAP may make it."""
+		deal = self.make_deal("Submitted")
+		frappe.set_user(COACH)
+		deal.reload()
+		deal.status = "Session Set"
+
+		with self.assertRaises(frappe.ValidationError):
+			deal.save(ignore_permissions=True)
+
+	def test_an_on_graph_move_through_an_action_is_allowed(self):
+		deal = self.make_deal("Submitted")
+		frappe.set_user(COACH)
+		deal.reload()
+		deal.status = "Session Set"
+		frappe.flags.txb_action = True
+		deal.save(ignore_permissions=True)
+
+		self.assertEqual(
+			frappe.db.get_value("CRM Deal", deal.name, "status"), "Session Set"
+		)
+
+	def test_an_admin_may_move_off_graph(self):
+		"""The documented recovery hatch: a mis-click stays fixable in the UI."""
+		deal = self.make_deal("Submitted")
+		frappe.set_user(ADMIN)
+		deal.reload()
+		deal.status = "Session Run"
+		deal.save(ignore_permissions=True)
+
+		self.assertEqual(
+			frappe.db.get_value("CRM Deal", deal.name, "status"), "Session Run"
+		)
+
+	def test_inserts_are_exempt(self):
+		frappe.set_user(COACH)
+		deal = self.make_deal("Session Set")
+		self.assertTrue(deal.name)
+
+	def test_a_deal_with_no_state_machine_is_untouched(self):
+		"""Stock deals with no pipeline_type must keep working."""
+		deal = frappe.get_doc(
+			{"doctype": "CRM Deal", "status": "Qualification"}
+		).insert(ignore_permissions=True)
+		frappe.set_user(COACH)
+		deal.reload()
+		deal.status = "Demo/Making"
+		deal.save(ignore_permissions=True)
+
+		self.assertEqual(
+			frappe.db.get_value("CRM Deal", deal.name, "status"), "Demo/Making"
+		)
+
+	def test_editing_other_fields_is_untouched(self):
+		deal = self.make_deal("Submitted")
+		frappe.set_user(COACH)
+		deal.reload()
+		deal.session_notes = "unchanged status"
+		deal.save(ignore_permissions=True)

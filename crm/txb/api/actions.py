@@ -114,13 +114,20 @@ def execute_action(deal: str, action: str, data: str | dict | None = None) -> di
 	values = parse_data(data)
 	validate_required(spec, values)
 
-	spec["handler"](doc, values)
+	# Tells `guard_transition` this write is an action rather than a bare status set. A
+	# request-scoped flag, cleared in `finally` so a throw cannot leave it armed for the
+	# rest of the request.
+	frappe.flags.txb_action = True
+	try:
+		spec["handler"](doc, values)
 
-	to_state = resolve_to_state(spec, values)
-	if to_state:
-		doc.status = to_state
+		to_state = resolve_to_state(spec, values)
+		if to_state:
+			doc.status = to_state
 
-	doc.save()
+		doc.save()
+	finally:
+		frappe.flags.txb_action = False
 
 	return {"deal": doc.name, "status": doc.status}
 
