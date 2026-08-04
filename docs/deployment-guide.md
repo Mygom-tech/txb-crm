@@ -108,9 +108,16 @@ Open the Coolify UI, finish onboarding, point your DNS `A` record
 (`crm.example.com`) at the VPS. Coolify's Traefik will issue Let's Encrypt
 certificates automatically once a resource claims the domain.
 
-**2.3 GHCR access** — in Coolify: *Settings → Registries* (or the project's
-registry settings) add `ghcr.io` with a GitHub PAT that has `read:packages`,
-so the VPS can pull the private image.
+**2.3 GHCR access** — Coolify has no per-resource private-registry credential
+UI; it relies on the host Docker daemon's credentials. One-time, on the VPS:
+
+```bash
+vps$ docker login ghcr.io -u <github-username> -p <PAT with read:packages only>
+```
+
+After that, compose pulls of the private image authenticate transparently.
+The PAT lives in the server's `~/.docker/config.json` — keep it
+`read:packages`-only and rotate it if the box is ever compromised.
 
 ---
 
@@ -142,11 +149,21 @@ GH_TOKEN=<PAT-1> ./deploy/build.sh          # prints the sha tag when done
 ```
 
 Notes:
-- The script prints a **token-leak check** — the app's git remote inside the
-  image may retain the clone URL with the token. Expected mitigation: image
-  stays private + PAT #1 is read-only + rotate it if a build artifact ever
-  leaves GHCR. If the check shows the token and that's not acceptable,
-  strip it in a follow-up image layer (`git remote set-url`).
+- apps.json is passed as a **BuildKit secret** (`--secret id=apps_json`) —
+  frappe_docker's current Containerfiles do NOT read the old
+  `APPS_JSON_BASE64` build arg (an unconsumed arg silently builds a
+  frappe-only image; the script's **app-presence gate** now hard-fails
+  before pushing if `apps/crm` is missing). Secrets never persist in image
+  layers, and the build strips `.git` dirs, so the token cannot leak via
+  the image (this is also why `bench version` shows apps as UNVERSIONED).
+- Secret mounts are invisible to BuildKit's layer cache — without the
+  `CACHE_BUST` build-arg the script passes, a rebuild can silently reuse a
+  stale app-install layer. Never remove that arg.
+- Tags are `<commit-sha>-<timestamp>`, unique per build **by design**:
+  Docker never re-pulls a tag it has cached locally, so re-pushing the same
+  tag means servers keep running the old bytes with no error anywhere.
+  `:latest` is pushed for humans browsing GHCR — it must never appear in
+  `FRAPPE_VERSION`.
 - Pin `FRAPPE_BRANCH` (default `version-15` via the script) to whatever prod
   actually runs — see "Adapting the existing Coolify stack" step 1.
 - frappe_docker moves occasionally — if `images/layered/Containerfile` is
@@ -320,19 +337,46 @@ kanban drag shows the confirm modal (yes, your feature is the smoke test),
 and `bench --site ${SITE_NAME} doctor` reports scheduler enabled + workers
 online.
 
+**Beware the create-site guard:** the compose's `create-site` service skips
+whenever the site *directory* exists — including after a provision that
+failed halfway (site created, app install failed). It will then skip
+forever, silently. After any first deploy, prove the site is whole:
+`bench --site ${SITE_NAME} list-apps` must list **both** `frappe` and
+`crm`; if not, see Troubleshooting.
+
 ---
 
 ## Phase 6 — Deploy & operate
 
-**Deploy flow** (every release): merge to `develop` → Action builds image →
-in Coolify hit *Redeploy* (or enable auto-deploy via Coolify's GHCR webhook) →
-then run migrations:
+**Deploy flow** (every release): merge to `develop` → `deploy/build.sh` →
+pin the printed tag as `FRAPPE_VERSION` in Coolify → *Redeploy* → then:
 
 ```bash
 docker exec <backend> bench --site all migrate
+docker exec <backend> bench --site all clear-website-cache
 ```
 
-Wire that as Coolify's **post-deployment command** so it's never forgotten.
+Wire both as Coolify's **post-deployment command** so they're never
+forgotten. The cache clear matters because asset bundle hashes change per
+build, and the redis-backed website page cache survives redeploys — stale
+cached HTML then references bundles that no longer exist (symptom: CSS 404s
+with `text/html` MIME errors after an upgrade).
+
+**Post-deploy verification checklist** — run after EVERY deploy; a deploy
+is not done until all four pass:
+
+```bash
+# 1. Containers run the tag you just pinned (not a cached older build)
+docker ps --format '{{.Names}}  {{.Image}}' | grep txb-crm
+# 2. The running backend contains the app
+docker exec <backend> ls apps                       # → crm frappe
+# 3. The site responds and serves fresh assets
+curl -s https://<site>/api/method/ping              # → {"message":"pong"}
+curl -sI "https://<site>$(curl -s https://<site>/login \
+  | grep -o 'assets/frappe/dist/css/login\.bundle\.[A-Z0-9]*\.css' | head -1)" \
+  | head -1                                          # → HTTP 200 (not 404)
+# 4. The app works: log in, open kanban, drag a card → confirm modal
+```
 Rollback = point the compose image tag at the previous `:sha` and redeploy
 (migrations are forward-only — restore a DB backup if a migration must be
 undone).
@@ -354,38 +398,176 @@ volume grows with file uploads); MariaDB storage/connections on the DB side.
 
 ---
 
-## Adapting the EXISTING Coolify stack (crm.txbconsulting.com)
+## Troubleshooting — field-tested (every entry below actually happened)
 
-Production already runs the standard frappe_docker topology with
-`FRAPPE_IMAGE`/`FRAPPE_VERSION` env vars (default `frappe/crm:develop`).
-Deploying the fork is an image swap, not a new stack — Phases 2 and 4 above
-are already done. The delta:
+| Symptom | Cause | Fix |
+|---|---|---|
+| Image builds fine but contains only `frappe`, no `crm` | apps.json not reaching the build: wrong build-arg name, or BuildKit cache reusing the app-install layer | `deploy/build.sh` handles both (secret mount + CACHE_BUST); its app-presence gate blocks the push. If it fires: check `deploy/apps.json` renders valid JSON with the token |
+| Redeployed but behavior unchanged; asset hashes in HTML don't match the new image | VPS kept a locally-cached image for a reused tag (`:latest` or a re-pushed sha) | Deploy only unique `<sha>-<timestamp>` tags; verify with checklist step 1 |
+| `bench new-site`/`install-app` "failed", later runs say "already exists, skipping" | The create-site guard is directory-based: a half-failed provision leaves the site dir and is skipped forever after | `bench --site <site> list-apps`; if `crm` missing → `install-app crm` + `migrate`. If the DB is empty garbage → `bench drop-site` and let create-site re-run |
+| Lead/Deal create modal blank; console: `Cannot read properties of undefined (reading 'name')` in statuses.js | App installed but seed data missing (statuses etc.) — another half-provision artifact; the frontend assumes ≥1 status exists | `bench --site <site> execute crm.install.after_install` (idempotent, `db.exists` guards) + `clear-cache` |
+| CSS/JS 404 with `text/html` MIME errors after an upgrade | Redis-backed website page cache serving pre-upgrade HTML with old bundle hashes | `bench --site all clear-website-cache` (now in the post-deploy command); hard-refresh the browser |
+| Traefik `404 page not found` (plain text) on the domain | No router matches the Host — domain changed but Coolify/Traefik labels didn't | Update the frontend service's domain in Coolify; keep https + letsencrypt |
+| Frappe stack traces `AppNotInstalledError` / `'ErrorPage' object has no attribute 'app_path'` on random paths like `/config/.env` | Request Host resolves to no (or a half-provisioned) bench site; scanners trigger it constantly | Set `FRAPPE_SITE_NAME_HEADER: <site>` on frontend; fix the site itself if it's every request |
+| Local build fails: `error getting credentials` on public images | Docker Desktop's WSL credential helper (`credsStore: desktop.exe`) broken | Remove `credsStore` from `~/.docker/config.json`, `docker login ghcr.io` again |
+| git commands resolve to a bizarre repo root (`/`, home dir) | Stray `.git` directory in an ancestor (accidental `git init`) | Find with `git rev-parse --show-toplevel` from the puzzled directory; delete the stray `.git` |
 
-1. **Resolve version drift first.** `frappe/crm:develop` is a rolling tag —
-   prod's DB schema tracks whatever upstream develop was at the last
-   redeploy, which may be ahead of this fork's base commit. On the VPS:
-   `docker exec <backend> bench version` → note frappe + crm versions. Merge
-   upstream `frappe/crm` develop into the fork up to at least that commit,
-   re-run the frontend test suite, and build the custom image with the
-   **matching** `FRAPPE_BRANCH`. Never deploy app code older than the DB
-   schema it meets.
-2. Run **Phase 0** (clean-clone build test) and **Phase 3** (local
-   `deploy/build.sh` → GHCR).
-3. In Coolify: add GHCR registry credentials, set
-   `FRAPPE_IMAGE=ghcr.io/mygom-tech/txb-crm` and `FRAPPE_VERSION=<sha-tag>`
-   (pin by sha — rolling tags caused item 1), redeploy. The idempotent
-   `create-site` service skips the existing site; data is untouched.
-4. **Compose fixes to apply in the same pass:**
-   - Add a migrate step — post-deployment command
-     `docker exec <backend> bench --site all migrate` or a one-shot service
-     after `create-site`. Today schema changes in a new image are never
-     applied deliberately.
-   - Add a data volume to `redis-queue` (queued jobs currently die with the
-     container).
-   - Set `FRAPPE_SITE_NAME_HEADER: ${SITE_NAME}` on `frontend` explicitly
-     (today relies on site name == domain via the `$host` default).
-5. Verify per Phase 5.3/Phase 6: prod site config has no dev flags, kanban
-   confirm modal works on the live site, backups run and land off-VPS.
+## Runbook — restore production data into staging (rehearsal / refresh)
+
+Used for: rehearsing a production cutover/migration on staging, and for
+periodically refreshing staging with real data. Field-tested 2026-08-04
+(prod `crm.txbconsulting.com` → staging `txb-crm.mygom-test.tech`).
+Differing site names are irrelevant — a site name is a directory + config,
+not data; restore replaces the DB contents wholesale.
+
+1. **Backup prod** (inside prod backend container):
+   ```bash
+   bench --site crm.txbconsulting.com backup --with-files
+   ```
+   Produces 4 artifacts in `sites/<site>/private/backups/`:
+   `*-site_config_backup.json` (contains the **encryption_key**),
+   `*-database.sql.gz`, `*-files.tar`, `*-private-files.tar`.
+
+2. **Copy them to the staging stack:**
+   ```bash
+   docker cp <prod-backend>:/home/frappe/frappe-bench/sites/<site>/private/backups/ ./prod-backup/
+   # scp/rsync to the staging VPS if separate, then:
+   docker cp ./prod-backup/. <staging-backend>:/home/frappe/frappe-bench/sites/
+   ```
+
+3. **Set prod's encryption_key on staging FIRST** (from the config backup
+   json) — without it, every encrypted credential in the restored DB is
+   unreadable:
+   ```bash
+   bench --site txb-crm.mygom-test.tech set-config encryption_key '<value>'
+   ```
+
+4. **Restore** (overwrites staging's DB — intended; may prompt for MariaDB
+   root credentials since the database is recreated):
+   ```bash
+   bench --site txb-crm.mygom-test.tech --force restore \
+     /home/frappe/frappe-bench/sites/<ts>-database.sql.gz \
+     --with-public-files  /home/frappe/frappe-bench/sites/<ts>-files.tar \
+     --with-private-files /home/frappe/frappe-bench/sites/<ts>-private-files.tar
+   ```
+
+5. **The rehearsal itself** — run prod's future migration on the fork image:
+   ```bash
+   bench --site txb-crm.mygom-test.tech migrate
+   bench --site txb-crm.mygom-test.tech clear-website-cache
+   ```
+   A clean migrate + working app (log in with a **prod** account — staging's
+   users were just replaced) = the cutover is proven. A migrate failure here
+   is a production outage caught early: fix, rebuild, re-run this runbook.
+
+6. Notes: staging now holds real customer data — same GDPR/access discipline
+   as prod. Delete the backup artifacts from `sites/` afterwards.
+
+## Runbook — production cutover (official frappe/crm image → this fork)
+
+Pre-conditions, in order — do not start without all three:
+
+- **Version drift resolved**: prod's `bench --site all list-apps` versions
+  are ≤ the fork's merged base (merge upstream `frappe/crm` develop into the
+  fork if not; never deploy code older than the schema it meets), and the
+  image was built with the frappe branch prod actually runs.
+- **Rehearsal passed**: the restore-to-staging runbook above ran clean on
+  the exact image tag being promoted.
+- **Fresh prod backup** taken and copied off-VPS (this is the rollback).
+
+Cutover (~15 min window):
+
+1. Maintenance window announced; final `bench backup --with-files` on prod.
+2. Prod Coolify stack env: `FRAPPE_IMAGE=ghcr.io/mygom-tech/txb-crm`,
+   `FRAPPE_VERSION=<the staging-validated tag>` → Redeploy. (`create-site`
+   skips the existing site; prod data untouched.)
+3. `bench --site all migrate && bench --site all clear-website-cache`.
+4. Run the post-deploy verification checklist (Phase 6) + smoke real flows
+   (login, lead list, deal kanban + confirm modal, email if configured).
+5. **Rollback path**: repoint the old image tag + restore the step-1 backup
+   (restore is required if migrate ran — schema is forward-only).
+6. Same-pass compose fixes if not already applied: migrate+cache-clear as
+   post-deployment command, `redis-queue` data volume,
+   `FRAPPE_SITE_NAME_HEADER: ${SITE_NAME}` on frontend, and confirm prod
+   site config has no dev flags (`developer_mode`, `ignore_csrf`).
+
+## Making changes — UI and backend, dev → prod
+
+Every process runs from the same image, so backend/frontend/workers/scheduler
+update atomically on redeploy. Quick reference:
+
+| Change | Workflow |
+|---|---|
+| Frontend (`frontend/src/...`) | commit → `deploy/build.sh` → Coolify redeploy |
+| Python code (API, hooks) | same |
+| Schema (DocType JSON, `patches.txt`) | same **+ `bench --site all migrate`** (the post-deploy command) |
+| New Python dep (`pyproject.toml`) / JS dep (`frontend/package.json`) | image rebuild covers it |
+| Server Scripts | DB-stored — no deploy at all |
+
+### UI change, step by step
+
+1. `git checkout develop && git pull && git checkout -b feature/<name>`
+   (or `fix/<name>`).
+2. Run dev stack: `bench start` (bench root) + `yarn dev` (apps/crm) →
+   edit `frontend/src/...`, HMR at `http://localhost:8080/crm`.
+   The `yarn dev` log must say "Local frappe-ui vite plugin found".
+3. Tests + hygiene: `cd frontend && yarn test:run`; prettier/eslint on
+   touched files. Add unit tests for any new pure logic in `src/utils/`.
+4. PR into `develop`, review, merge.
+5. Release: `git checkout develop && git pull`, then
+   `GH_TOKEN=<pat> ./deploy/build.sh` → note the sha tag.
+6. Coolify: set `FRAPPE_VERSION=<sha>` → Redeploy. The migrate post-deploy
+   command runs (no-op for pure UI — harmless).
+7. Smoke-check the live page the change touches; hard-refresh if the PWA
+   service worker clings to the old bundle.
+
+### Backend change, step by step
+
+All backend code lives in `crm/` (Python package in this repo). Where to edit:
+
+| Goal | Location |
+|---|---|
+| API endpoint (`call('crm.api.x.y')`) | `crm/api/x.py`, function `y`, `@frappe.whitelist()` — dotted path == file path |
+| Record business logic / validation | `crm/fcrm/doctype/<name>/<name>.py` (e.g. `crm_deal.py` validate) |
+| DocType fields/schema | Desk UI on dev bench (developer_mode) → writes `crm/fcrm/doctype/<name>/<name>.json` — commit that |
+| Doc events, scheduled jobs, overrides | `crm/hooks.py` |
+| One-off data migration | module in `crm/patches/` + line in `crm/patches.txt` |
+| Integrations | `crm/integrations/` |
+| Boot payload | `crm/www/crm.py` |
+| Server tests | `crm/tests/` |
+
+(`apps/frappe` is the framework — read it, never edit it; override via
+`crm/overrides/` + `hooks.py`.)
+
+1. Same branch flow as UI.
+2. Run the dev stack; edit Python per the table above. The dev web server
+   auto-reloads on save; workers and scheduler need a `bench start` restart
+   to pick up code they import.
+3. **Schema changes** only via the dev bench with its `developer_mode: 1`:
+   create/edit DocTypes in the Desk UI at `localhost:8000/app` — that writes
+   the DocType JSON into `crm/fcrm/doctype/...` for committing. Data
+   backfills go in a patch module + `patches.txt` entry. (Prod has
+   developer_mode off — DocTypes cannot and must not be edited there.)
+4. Test: `bench --site localhost run-tests --app crm` for server tests
+   (plus `yarn test:run` if the change touches API responses the frontend
+   consumes). `bench --site localhost migrate` locally to prove patches run.
+5. Merge → `deploy/build.sh` → pin sha in Coolify → Redeploy; the
+   post-deploy `bench --site all migrate` applies schema/patches.
+6. Verify: `docker exec <backend> bench version` shows the new build;
+   exercise the changed endpoint; check `docker logs` on `queue-short`/
+   `scheduler` for import errors after the restart.
+
+## Appendix — Hetzner notes
+
+- **CPU arch**: build.sh on an x86 dev machine produces an amd64 image — it
+  will NOT run on Hetzner CAX (ARM) servers. Use CX/CPX (x86), or add
+  buildx `--platform` to the script before choosing ARM.
+- **DB networking**: if the MariaDB host is also Hetzner, attach both to a
+  Hetzner private network and use the private IP as `DB_HOST`; otherwise
+  firewall the DB port to the VPS IP. Do not ship the current dev pattern
+  (public-internet MariaDB with plaintext creds).
+- **Backups**: Hetzner Storage Box / Object Storage (EU region) as the
+  off-VPS target for nightly `bench backup` artifacts.
 
 ## Appendix — GDPR notes (EU customer data in a CRM)
 

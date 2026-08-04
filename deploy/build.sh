@@ -13,8 +13,12 @@ REGISTRY_IMAGE="${REGISTRY_IMAGE:-ghcr.io/mygom-tech/txb-crm}"
 FRAPPE_BRANCH="${FRAPPE_BRANCH:-version-15}"
 FD_DIR="${FD_DIR:-/tmp/frappe_docker}"
 
-REPO_ROOT="$(git rev-parse --show-toplevel)"
-TAG="${1:-$(git -C "$REPO_ROOT" rev-parse --short HEAD)}"
+# Resolve the repo from this script's own location — never from the caller's
+# cwd (stray ancestor .git dirs have burned us before).
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+# commit sha + build timestamp: rebuilding the same commit (new base images,
+# fixed tooling) must produce a NEW tag, or servers keep their cached copy
+TAG="${1:-$(git -C "$REPO_ROOT" rev-parse --short HEAD)-$(date +%Y%m%d%H%M)}"
 
 : "${GH_TOKEN:?Set GH_TOKEN to a read-only PAT that can clone Mygom-tech/txb-crm}"
 
@@ -24,23 +28,32 @@ else
   git clone --depth 1 https://github.com/frappe/frappe_docker "$FD_DIR"
 fi
 
+# frappe_docker consumes apps.json as a BuildKit SECRET (id=apps_json), not a
+# build arg — an unconsumed arg builds a frappe-only image with zero errors
+# (we learned this in production). The secret is never written to image layers.
+APPS_JSON_FILE="$(mktemp)"
+trap 'rm -f "$APPS_JSON_FILE"' EXIT
+chmod 600 "$APPS_JSON_FILE"
 # Substitute ONLY ${GH_TOKEN} so other $-signs in apps.json survive verbatim
-APPS_JSON_BASE64="$(GH_TOKEN="$GH_TOKEN" envsubst '$GH_TOKEN' \
-  < "$REPO_ROOT/deploy/apps.json" | base64 -w0)"
+GH_TOKEN="$GH_TOKEN" envsubst '$GH_TOKEN' \
+  < "$REPO_ROOT/deploy/apps.json" > "$APPS_JSON_FILE"
 
-docker build "$FD_DIR" \
+DOCKER_BUILDKIT=1 docker build "$FD_DIR" \
   -f "$FD_DIR/images/layered/Containerfile" \
+  --secret "id=apps_json,src=$APPS_JSON_FILE" \
   --build-arg FRAPPE_PATH=https://github.com/frappe/frappe \
   --build-arg FRAPPE_BRANCH="$FRAPPE_BRANCH" \
-  --build-arg APPS_JSON_BASE64="$APPS_JSON_BASE64" \
+  --build-arg CACHE_BUST="$(date +%s)" \
   -t "$REGISTRY_IMAGE:$TAG" \
   -t "$REGISTRY_IMAGE:latest"
 
-# The clone URL (token included) can survive inside the image — check, and
-# treat a hit as expected: keep the image private and the PAT read-only.
-echo "--- token-leak check (app git remote inside image) ---"
-docker run --rm "$REGISTRY_IMAGE:$TAG" \
-  bash -c "cd apps/crm 2>/dev/null && git remote -v || true" | sed "s/${GH_TOKEN}/<REDACTED>/g"
+# HARD GATE: refuse to push an image that doesn't contain the crm app.
+echo "--- app-presence gate ---"
+if ! docker run --rm --entrypoint ls "$REGISTRY_IMAGE:$TAG" apps | grep -qx crm; then
+  echo "FATAL: 'crm' app missing from image — not pushing." >&2
+  exit 1
+fi
+echo "ok: apps/crm present in image"
 
 docker push "$REGISTRY_IMAGE:$TAG"
 docker push "$REGISTRY_IMAGE:latest"
