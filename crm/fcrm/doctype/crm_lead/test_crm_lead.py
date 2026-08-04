@@ -7,7 +7,7 @@ from frappe.desk.form.assign_to import add as assign_add
 from frappe.desk.form.assign_to import remove as assign_remove
 from frappe.tests import IntegrationTestCase
 
-from crm.fcrm.doctype.crm_lead.crm_lead import convert_to_deal
+from crm.fcrm.doctype.crm_lead.crm_lead import CONTACT_ORGANIZATION_LINK_FIELD, convert_to_deal
 
 
 class TestCRMLead(IntegrationTestCase):
@@ -404,6 +404,72 @@ class TestCRMLead(IntegrationTestCase):
 		# Verify existing organization is linked
 		self.assertEqual(deal.organization, existing_org.name)
 
+	def test_contact_gets_organization_link_on_convert(self):
+		"""A contact created during conversion points at the resolved organization"""
+		create_contact_organization_link_field()
+
+		lead = create_lead(
+			first_name="Linked",
+			last_name="Person",
+			email="linked@orglink.com",
+			organization="Org Link Corp",
+		)
+
+		deal = frappe.get_doc("CRM Deal", lead.convert_to_deal())
+		contact = frappe.get_doc("Contact", deal.contacts[0].contact)
+
+		self.assertTrue(deal.organization)
+		self.assertEqual(contact.get(CONTACT_ORGANIZATION_LINK_FIELD), deal.organization)
+
+	def test_existing_contact_organization_not_overwritten(self):
+		"""Reusing a contact must not repoint the organization it already has"""
+		create_contact_organization_link_field()
+
+		other_org = frappe.get_doc(
+			{"doctype": "CRM Organization", "organization_name": "Other Org Ltd"}
+		).insert()
+
+		existing_contact = frappe.get_doc(
+			{
+				"doctype": "Contact",
+				"first_name": "Reused",
+				"last_name": "Contact",
+				"email_ids": [{"email_id": "reused@orglink.com", "is_primary": 1}],
+				CONTACT_ORGANIZATION_LINK_FIELD: other_org.name,
+			}
+		).insert()
+
+		lead = create_lead(
+			first_name="Reused",
+			last_name="Contact",
+			email="reused@orglink.com",
+			organization="Different Corp",
+		)
+
+		deal = frappe.get_doc("CRM Deal", lead.convert_to_deal())
+
+		self.assertEqual(deal.contacts[0].contact, existing_contact.name)
+		existing_contact.reload()
+		self.assertEqual(existing_contact.get(CONTACT_ORGANIZATION_LINK_FIELD), other_org.name)
+
+	def test_convert_reuses_existing_organization(self):
+		"""Converting reuses a matching organization instead of duplicating it"""
+		existing_org = frappe.get_doc(
+			{"doctype": "CRM Organization", "organization_name": "Dedup Corp"}
+		).insert()
+
+		lead = create_lead(
+			first_name="Dedup",
+			last_name="Tester",
+			email="dedup@example.com",
+			organization="Dedup Corp",
+		)
+
+		deal = frappe.get_doc("CRM Deal", lead.convert_to_deal())
+
+		self.assertEqual(deal.organization, existing_org.name)
+		self.assertEqual(frappe.db.count("CRM Organization", {"organization_name": "Dedup Corp"}), 1)
+
 	def test_convert_to_deal_api(self):
 		"""Test convert_to_deal API function"""
 		lead = create_lead(
@@ -580,6 +646,29 @@ def create_lead_deal_custom_fields():
 	)
 	frappe.clear_cache(doctype="CRM Lead")
 	frappe.clear_cache(doctype="CRM Deal")
+
+
+def create_contact_organization_link_field():
+	"""Mirror the site's Contact -> CRM Organization custom field.
+
+	The conversion code guards on `has_field`, so without this the link is silently skipped
+	and the assertions would pass vacuously.
+	"""
+	create_custom_fields(
+		{
+			"Contact": [
+				{
+					"fieldname": CONTACT_ORGANIZATION_LINK_FIELD,
+					"fieldtype": "Link",
+					"options": "CRM Organization",
+					"insert_after": "company_name",
+					"label": "Organization",
+				}
+			]
+		},
+		ignore_validate=True,
+	)
+	frappe.clear_cache(doctype="Contact")
 
 
 def conversion_region_field(fieldname):
