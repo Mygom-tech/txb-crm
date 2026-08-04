@@ -1061,10 +1061,14 @@ class TestConversionOwnership(OwnershipTestCase):
 		frappe.set_user(SALESMAN)
 		self.convert(lead)
 
-		contact = frappe.db.get_value(
-			"Contact", {"email_id": "convert-owner@example.com"}, "custom_contact_owner"
+		# Contact's email lives in the `Contact Email` child table, not on the parent.
+		parents = frappe.get_all(
+			"Contact Email", filters={"email_id": "convert-owner@example.com"}, pluck="parent"
 		)
-		self.assertEqual(contact, SALESMAN)
+		self.assertEqual(len(parents), 1)
+		self.assertEqual(
+			frappe.db.get_value("Contact", parents[0], "custom_contact_owner"), SALESMAN
+		)
 
 	def test_conversion_is_not_blocked_by_not_owning_the_lead(self):
 		"""Explicitly required: conversion must not depend on source ownership."""
@@ -1074,7 +1078,14 @@ class TestConversionOwnership(OwnershipTestCase):
 		self.assertTrue(self.convert(lead))
 
 	def test_an_existing_contact_keeps_its_owner_through_conversion(self):
-		"""A reused Contact is not a new record, so its owner is not up for grabs."""
+		"""A reused Contact is not a new record, so its owner is not up for grabs.
+
+		The two records share an email but not a name, and both halves matter.
+		`CRMLead.contact_exists` matches on email alone, so a differing email would make
+		conversion mint a *new* contact and this assertion would pass without testing
+		anything. A matching name as well would trip `prevent_duplicate`, which rejects a
+		lead whose first name, last name and email all match an existing Contact.
+		"""
 		self.make_contact(
 			first_name="Reused",
 			last_name="Person",
@@ -1082,8 +1093,9 @@ class TestConversionOwnership(OwnershipTestCase):
 			email_ids=[{"email_id": "reused-owner@example.com", "is_primary": 1}],
 		)
 		lead = self.make_lead(
-			first_name="Reused",
-			last_name="Person",
+			first_name="Different",
+			last_name="Spelling",
+			email="reused-owner@example.com",
 			lead_owner=OTHER_SALESMAN,
 			organization="Reuse Co",
 		)
@@ -1091,10 +1103,15 @@ class TestConversionOwnership(OwnershipTestCase):
 		frappe.set_user(SALESMAN)
 		self.convert(lead)
 
-		owner = frappe.db.get_value(
-			"Contact", {"email_id": "reused-owner@example.com"}, "custom_contact_owner"
+		contacts = frappe.get_all(
+			"Contact",
+			filters={"name": ("in", frappe.get_all(
+				"Contact Email", filters={"email_id": "reused-owner@example.com"}, pluck="parent"
+			))},
+			fields=["name", "custom_contact_owner"],
 		)
-		self.assertEqual(owner, OTHER_SALESMAN)
+		self.assertEqual(len(contacts), 1, "conversion should reuse the contact, not mint one")
+		self.assertEqual(contacts[0].custom_contact_owner, OTHER_SALESMAN)
 ```
 
 - [ ] **Step 2: Run it and confirm the Admin case fails**
