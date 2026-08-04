@@ -22,6 +22,11 @@
         :website="doc.website"
         @done="onEnriched"
       />
+      <Button
+        v-if="!userIsAdmin()"
+        :label="__('Request Ownership')"
+        @click="showRequestOwnership = true"
+      />
       <AssignTo v-model="assignees.data" doctype="CRM Lead" :docname="leadId" />
       <Dropdown
         v-if="doc && document.statuses"
@@ -237,6 +242,13 @@
     doctype="CRM Lead"
     :document="document"
   />
+  <RequestOwnershipModal
+    v-if="showRequestOwnership"
+    v-model="showRequestOwnership"
+    doctype="CRM Lead"
+    :docname="leadId"
+    :current-owner="doc?.lead_owner"
+  />
 </template>
 <script setup>
 import DeleteLinkedDocModal from '@/components/DeleteLinkedDocModal.vue'
@@ -266,6 +278,7 @@ import SidePanelLayout from '@/components/SidePanelLayout.vue'
 import SLASection from '@/components/SLASection.vue'
 import CustomActions from '@/components/CustomActions.vue'
 import ConvertToDealModal from '@/components/Modals/ConvertToDealModal.vue'
+import RequestOwnershipModal from '@/components/Modals/RequestOwnershipModal.vue'
 import EnrichFromWebsite from '@/components/EnrichFromWebsite.vue'
 import {
   openWebsite,
@@ -279,6 +292,7 @@ import { getSettings } from '@/stores/settings'
 import { globalStore } from '@/stores/global'
 import { statusesStore } from '@/stores/statuses'
 import { getMeta } from '@/stores/meta'
+import { transitionsStore } from '@/stores/transitions'
 import { useDocument } from '@/data/document'
 import { whatsappEnabled } from '@/composables/whatsapp'
 import { callEnabled } from '@/composables/telephony'
@@ -301,6 +315,7 @@ import { useActiveTabManager } from '@/composables/useActiveTabManager'
 const { brand } = getSettings()
 const { $dialog, $socket, makeCall } = globalStore()
 const { statusOptions, getLeadStatus } = statusesStore()
+const { isAdmin: userIsAdmin } = transitionsStore()
 const { doctypeMeta } = getMeta('CRM Lead')
 
 const route = useRoute()
@@ -317,6 +332,7 @@ const errorMessage = ref('')
 const showDeleteLinkedDocModal = ref(false)
 const showConvertToDealModal = ref(false)
 const showFilesUploader = ref(false)
+const showRequestOwnership = ref(false)
 
 const {
   triggerOnChange,

@@ -22,6 +22,11 @@
         :website="doc.website"
         @done="onEnriched"
       />
+      <Button
+        v-if="!userIsAdmin()"
+        :label="__('Request Ownership')"
+        @click="showRequestOwnership = true"
+      />
       <AssignTo v-model="assignees.data" doctype="CRM Deal" :docname="dealId" />
       <Dropdown
         v-if="availableActions.length"
@@ -361,6 +366,13 @@
     doctype="CRM Deal"
     :document="document"
   />
+  <RequestOwnershipModal
+    v-if="showRequestOwnership"
+    v-model="showRequestOwnership"
+    doctype="CRM Deal"
+    :docname="dealId"
+    :current-owner="doc?.deal_owner"
+  />
 </template>
 <script setup>
 import DeleteLinkedDocModal from '@/components/DeleteLinkedDocModal.vue'
@@ -396,6 +408,7 @@ import SidePanelLayout from '@/components/SidePanelLayout.vue'
 import SLASection from '@/components/SLASection.vue'
 import CustomActions from '@/components/CustomActions.vue'
 import EnrichFromWebsite from '@/components/EnrichFromWebsite.vue'
+import RequestOwnershipModal from '@/components/Modals/RequestOwnershipModal.vue'
 import {
   openWebsite,
   setupCustomizations,
@@ -448,7 +461,7 @@ const { on } = useBroadcast()
 const { brand } = getSettings()
 const { $dialog, $socket, makeCall } = globalStore()
 const { statusOptions, getDealStatus, pipelineStatuses } = statusesStore()
-const { transitionMap } = transitionsStore()
+const { transitionMap, isAdmin: userIsAdmin } = transitionsStore()
 const isAdmin = computed(() => dealActions.data?.is_admin === true)
 const { doctypeMeta } = getMeta('CRM Deal')
 
@@ -465,6 +478,7 @@ const props = defineProps({
 const errorTitle = ref('')
 const errorMessage = ref('')
 const showDeleteLinkedDocModal = ref(false)
+const showRequestOwnership = ref(false)
 
 const {
   triggerOnChange,
