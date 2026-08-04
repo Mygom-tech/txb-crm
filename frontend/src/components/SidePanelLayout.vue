@@ -439,6 +439,14 @@ import { parseLinkFilters } from '@/utils/fieldTransforms'
 import { usersStore } from '@/stores/users'
 import { statusesStore } from '@/stores/statuses'
 import { statusLinkFilters } from '@/utils/pipelineStatuses'
+import {
+  allowedTargets,
+  candidateActions,
+  prefillFor,
+} from '@/utils/dealTransitions'
+import { chooseAction } from '@/utils/kanbanTransitions'
+import { runAction } from '@/utils/takeAction'
+import { transitionsStore } from '@/stores/transitions'
 
 // Fields expressing delivery state; mirrors crm/txb/constants.py STATUS_FIELDS.
 const STATUS_FIELDS = ['status', 'custom_delivery_status']
@@ -482,6 +490,7 @@ const { getFormattedPercent, getFormattedFloat, getFormattedCurrency } =
 
 const { users, isManager, getUser } = usersStore()
 const { pipelineStatuses } = statusesStore()
+const { transitionMap } = transitionsStore()
 
 // Whether this user may move this deal's status. Shares a cache key with the deal page's
 // resource, so both read one answer — the same one the server enforces.
@@ -490,12 +499,14 @@ const dealActions = createResource({
   cache: ['deal-actions', props.docname],
   makeParams: () => ({ deal: props.docname }),
   auto: props.doctype === 'CRM Deal' && Boolean(props.docname),
-  initialData: { can_change_status: true },
+  initialData: { can_change_status: true, is_admin: false },
 })
 
 const canChangeDealStatus = computed(
   () => dealActions.data?.can_change_status !== false,
 )
+
+const isDealAdmin = computed(() => dealActions.data?.is_admin === true)
 
 const showSidePanelModal = ref(false)
 
@@ -584,21 +595,39 @@ function parsedField(field) {
     })
   }
 
-  // Restrict a deal's status to its own pipeline, so statuses belonging to other
-  // pipelines are not offered. The current status is always kept selectable.
+  // Restrict a deal's status to its own pipeline, and — for anyone without the recovery
+  // hatch — to the statuses the state machine can actually reach from here.
   //
   // Derived on every evaluation and never written back to `link_filters`, so switching
   // pipeline_type recomputes the list instead of reusing the previous one.
-  const pipelineStatusFilters =
+  const isDealStatusField =
     field.fieldtype === 'Link' &&
     field.options === 'CRM Deal Status' &&
     props.doctype === 'CRM Deal'
-      ? statusLinkFilters(
-          doc.value?.pipeline_type,
-          doc.value?.status,
-          pipelineStatuses.data,
-        )
-      : null
+
+  let pipelineStatusFilters = null
+  if (isDealStatusField) {
+    if (isDealAdmin.value) {
+      pipelineStatusFilters = statusLinkFilters(
+        doc.value?.pipeline_type,
+        doc.value?.status,
+        pipelineStatuses.data,
+      )
+    } else {
+      const reachable = allowedTargets(
+        transitionMap.data?.transitions,
+        doc.value?.pipeline_type,
+        doc.value?.status,
+      )
+      pipelineStatusFilters = reachable.length
+        ? { name: ['in', [doc.value.status, ...reachable]] }
+        : statusLinkFilters(
+            doc.value?.pipeline_type,
+            doc.value?.status,
+            pipelineStatuses.data,
+          )
+    }
+  }
 
   const read_only_via_depends_on = evaluateDependsOnValue(
     field.read_only_depends_on,
@@ -655,6 +684,41 @@ function openExternalUrl(value) {
 
 async function fieldChange(value, df) {
   if (props.preview) return
+
+  // Changing a deal's status runs the action that owns the transition, exactly as a
+  // kanban drop does — otherwise the same move records completely different data
+  // depending on which control was used. This applies to Admins too: the hatch is for
+  // edges the state machine does not describe, not for skipping the form.
+  if (
+    props.doctype === 'CRM Deal' &&
+    df.fieldname === 'status' &&
+    value !== doc.value?.status
+  ) {
+    const candidates = candidateActions(
+      transitionMap.data?.transitions,
+      doc.value?.pipeline_type,
+      doc.value?.status,
+      value,
+      dealActions.data?.actions || [],
+    )
+
+    if (candidates.length) {
+      const action = await chooseAction(candidates, value)
+      if (!action) return
+
+      const result = await runAction(props.docname, action, {
+        defaults: prefillFor(action, value),
+      })
+      if (!result) return
+
+      dealActions.reload()
+      emit('reload')
+      return
+    }
+
+    // No action covers this edge. Only an Admin may write it bare.
+    if (!isDealAdmin.value) return
+  }
 
   await triggerOnChange(df.fieldname, value)
 
