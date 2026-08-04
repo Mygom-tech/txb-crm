@@ -12,7 +12,7 @@ const DEAL_DOCTYPE = 'CRM Deal'
  * commit. Every other board keeps the plain confirm it has today.
  *
  * @param {Object} ctx - { doctype, itemName, fieldname, fieldLabel, from, to,
- *                         pipelineType, transitions, available }
+ *                         pipelineType, transitions, available, isAdmin }
  * @returns {Promise<{proceed: boolean, alreadySaved: boolean, finalStatus: string}>}
  *   `alreadySaved` tells the caller not to write the field itself — execute_action
  *   already did. `finalStatus` is where the deal actually ended up, which for a
@@ -40,7 +40,14 @@ async function dealStatusTransition(ctx) {
 
   // The drag guard should have refused this drop, so reaching here means the board and
   // the server disagree — refuse rather than guess.
-  if (!candidates.length) return refused
+  if (!candidates.length) {
+    // The hatch: an Admin may land on a status no action describes. The caller performs
+    // the write, exactly as it does for a non-deal board.
+    if (ctx.isAdmin) {
+      return { proceed: true, alreadySaved: false, finalStatus: ctx.to }
+    }
+    return refused
+  }
 
   const action = await chooseAction(candidates, ctx.to)
   if (!action) return refused

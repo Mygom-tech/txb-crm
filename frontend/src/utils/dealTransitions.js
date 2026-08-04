@@ -84,10 +84,23 @@ export function prefillFor(action, to) {
  *
  * A user who may not change the status at all (a coach on Delivering Coaching, per
  * TXB-105) is refused every column.
+ *
+ * `adminStatuses`, when given, is the pipeline's full status list and means the user
+ * holds the recovery hatch: they may move the deal anywhere within its own pipeline. The
+ * action modal still opens when an action owns the edge, so nothing an action records is
+ * skipped — the hatch widens where they may go, not what gets captured.
  */
-export function canDropOn(transitions, pipeline, from, to, canChangeStatus) {
+export function canDropOn(
+  transitions,
+  pipeline,
+  from,
+  to,
+  canChangeStatus,
+  adminStatuses = null,
+) {
   if (!canChangeStatus) return false
   if (from === to) return true
+  if (adminStatuses) return adminStatuses.includes(to)
 
   return allowedTargets(transitions, pipeline, from).includes(to)
 }

@@ -270,6 +270,7 @@ import { statusesStore } from '@/stores/statuses'
 import { transitionsStore } from '@/stores/transitions'
 import { callEnabled } from '@/composables/telephony'
 import { canDropOn } from '@/utils/dealTransitions'
+import { allowedStatusesFor } from '@/utils/pipelineStatuses'
 import { formatDate, timeAgo, website, formatTime } from '@/utils'
 import { timestampCell } from '@/composables/useTimelinePreferences'
 import { useOnboarding, useTelemetry } from 'frappe-ui/frappe'
@@ -282,8 +283,8 @@ const { getFormattedPercent, getFormattedFloat, getFormattedCurrency } =
 const { makeCall } = globalStore()
 const { getUser } = usersStore()
 const { getOrganization } = organizationsStore()
-const { getDealStatus } = statusesStore()
-const { transitionMap, canChangeStatusFor } = transitionsStore()
+const { getDealStatus, pipelineStatuses } = statusesStore()
+const { transitionMap, canChangeStatusFor, isAdmin } = transitionsStore()
 const { updateOnboardingStep } = useOnboarding('frappecrm')
 const { capture } = useTelemetry()
 const { showModal } = useDoctypeModal()
@@ -311,12 +312,19 @@ function dealTransitionGuard({ from, to, card }) {
   const pipeline = card?.pipeline_type
   if (!pipeline) return true
 
+  // An Admin may move a deal anywhere inside its own pipeline (the recovery hatch);
+  // everyone else is held to the state machine.
+  const adminStatuses = isAdmin()
+    ? allowedStatusesFor(pipeline, from, pipelineStatuses.data)
+    : null
+
   return canDropOn(
     transitionMap.data?.transitions,
     pipeline,
     from,
     to,
     canChangeStatusFor(pipeline),
+    adminStatuses,
   )
 }
 

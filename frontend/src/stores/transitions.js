@@ -31,5 +31,10 @@ export const transitionsStore = defineStore('crm-transitions', () => {
     return transitionMap.data?.can_change_status?.[pipeline] !== false
   }
 
-  return { transitionMap, canChangeStatusFor }
+  /** Whether the current user holds the Admin role — the recovery hatch. */
+  function isAdmin() {
+    return transitionMap.data?.is_admin === true
+  }
+
+  return { transitionMap, canChangeStatusFor, isAdmin }
 })

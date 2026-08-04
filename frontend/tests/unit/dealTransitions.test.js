@@ -149,6 +149,47 @@ describe('canDropOn', () => {
   })
 })
 
+describe('canDropOn — the Admin hatch', () => {
+  it('lets an Admin drop on any status in the pipeline', () => {
+    const statuses = ['Workshop set', 'Sold', 'Lost']
+    expect(
+      canDropOn(
+        TRANSITIONS,
+        'Workshop',
+        'Workshop set',
+        'Sold',
+        true,
+        statuses,
+      ),
+    ).toBe(true)
+  })
+
+  it('still refuses a status outside the pipeline for an Admin', () => {
+    expect(
+      canDropOn(TRANSITIONS, 'Workshop', 'Workshop set', 'Active', true, [
+        'Sold',
+      ]),
+    ).toBe(false)
+  })
+
+  it('still refuses everything when the user may not change status at all', () => {
+    expect(
+      canDropOn(TRANSITIONS, 'Workshop', 'Workshop set', 'Sold', false, [
+        'Sold',
+      ]),
+    ).toBe(false)
+  })
+
+  it('falls back to the graph when no admin status list is given', () => {
+    expect(
+      canDropOn(TRANSITIONS, 'Workshop', 'Workshop set', 'Sold', true),
+    ).toBe(false)
+    expect(
+      canDropOn(TRANSITIONS, 'Workshop', 'Workshop set', 'Workshop ran', true),
+    ).toBe(true)
+  })
+})
+
 describe('off-list statuses fall back to universal actions', () => {
   it('offers the universal targets from a status with no graph entry', () => {
     expect(allowedTargets(TRANSITIONS, 'Workshop', 'Active')).toEqual(['Lost'])

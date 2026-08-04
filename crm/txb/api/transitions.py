@@ -10,7 +10,7 @@ graph; the browser is not a security boundary.
 
 import frappe
 
-from crm.txb.permissions import can_change_status
+from crm.txb.permissions import can_change_status, is_admin
 from crm.txb.pipelines.actions import PIPELINE_ACTIONS, find_action, get_actions
 from crm.txb.pipelines import transitions
 
@@ -53,4 +53,5 @@ def get_transition_map() -> dict:
 		"can_change_status": {
 			pipeline: can_change_status(pipeline) for pipeline in PIPELINE_ACTIONS
 		},
+		"is_admin": is_admin(),
 	}

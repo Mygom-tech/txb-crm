@@ -175,6 +175,11 @@ class TestTransitionApi(FrappeTestCase):
 	def test_pipelines_without_universal_actions_have_no_star_key(self):
 		self.assertNotIn("*", get_transition_map()[PIPELINE_DELIVERING_COACHING])
 
+	def test_the_endpoint_reports_whether_the_caller_is_admin(self):
+		from crm.txb.api.transitions import get_transition_map as api_map
+
+		self.assertIn("is_admin", api_map())
+
 
 class TestTransitionEnforcement(FrappeTestCase):
 	@classmethod

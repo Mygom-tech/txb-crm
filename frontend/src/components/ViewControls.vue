@@ -372,7 +372,7 @@ const { $dialog, $socket } = globalStore()
 const { reload: reloadView, getDefaultView, getView } = viewsStore()
 const { isManager } = usersStore()
 const { organizations } = organizationsStore()
-const { transitionMap } = transitionsStore()
+const { transitionMap, isAdmin } = transitionsStore()
 
 const list = defineModel({ type: Object, default: () => ({}) })
 const loadMore = defineModel('loadMore', { type: Boolean })
@@ -1111,6 +1111,7 @@ async function handleKanbanTransition(data) {
       pipelineType: card?.pipeline_type,
       transitions: transitionMap.data?.transitions,
       available,
+      isAdmin: isAdmin(),
     })
 
     if (!outcome.proceed) {
