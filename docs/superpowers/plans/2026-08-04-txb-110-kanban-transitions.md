@@ -2300,3 +2300,370 @@ EOF
 - Extracting the duplicated status block shared by `Deal.vue` and `MobileDeal.vue` into a composable. Real, but a separate refactor with its own review.
 - Bulk status changes and list-view inline edits still bypass the modal flow. They hit `guard_transition`, so they cannot make an *illegal* move, but a non-Admin will simply be refused. Worth a follow-up ticket.
 - Configurable transition rules in the database. Deliberately refused — see the spec's *Out of scope*.
+
+---
+
+# Phase 6 — Post-review corrections
+
+Both found by the controller's whole-branch analysis after Task 14, and both confirmed by
+the user. They share `dealTransitions.js`, so they run in order.
+
+### Task 15: Make the client agree with the server about off-list statuses
+
+Task 5's fix round 3 gave `is_allowed` a fallback: an action declaring no `from_states`
+applies from **any** status, including one outside the pipeline's own list. That fix was
+server-side only. `allowedTargets` still reads the graph, which is keyed solely on statuses
+in `PIPELINE_STATUSES`, so the client is now *more restrictive* than the server:
+
+```
+server:  is_allowed('Workshop', 'Active', 'Lost')   -> True
+client:  allowedTargets('Workshop', 'Active')       -> []
+```
+
+One live deal is affected — a Workshop sitting at `Active`. Its board columns are all
+greyed, and its detail dropdown offers `Lost` and then refuses it. The Take Action button
+still works, so the deal is not stuck, but the controls disagree.
+
+**Files:**
+- Modify: `crm/txb/api/transitions.py`
+- Modify: `crm/txb/test_transitions.py`
+- Modify: `frontend/src/utils/dealTransitions.js`
+- Modify: `frontend/tests/unit/dealTransitions.test.js`
+
+**Interfaces:**
+- Produces: the served graph gains a `"*"` key per pipeline holding the universal edges.
+  `allowedTargets` and `candidateActions` keep their existing signatures — consumers are
+  untouched.
+
+- [ ] **Step 1: Write the failing backend test**
+
+Add to `TestTransitionApi` in `crm/txb/test_transitions.py`:
+
+```python
+	def test_the_endpoint_serves_universal_edges_under_a_star_key(self):
+		"""Actions with no from_states apply from any status, including off-list ones.
+
+		A Workshop deal really does sit at "Active", which is not a Workshop status. The
+		server allows Cancel Workshop from there; the client must be told so, or it greys
+		every column and then refuses a status it just offered.
+		"""
+		from crm.txb.api.transitions import get_transition_map as api_map
+
+		universal = api_map()["transitions"][PIPELINE_WORKSHOP]["*"]
+		names = sorted(action["name"] for action in universal["Lost"])
+
+		self.assertEqual(names, ["cancel_workshop", "workshop_not_interested"])
+
+	def test_pipelines_without_universal_actions_have_no_star_key(self):
+		self.assertNotIn("*", get_transition_map()[PIPELINE_DELIVERING_COACHING])
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+`bench --site localhost run-tests --module crm.txb.test_transitions`
+Expected: FAIL with `KeyError: '*'`.
+
+- [ ] **Step 3: Serve the universal edges**
+
+In `crm/txb/api/transitions.py`, after building `labelled[pipeline]`, add the `"*"` entry.
+Import `action_targets` and `get_actions` alongside the existing imports:
+
+```python
+		# Actions declaring no `from_states` apply from ANY status -- including one outside
+		# this pipeline's list, which real data contains. `is_allowed` was given the same
+		# fallback server-side; without this key the browser would grey every column for
+		# such a deal and then refuse a status it had just offered.
+		universal = {}
+		for action in get_actions(pipeline):
+			if not action.get("changes_status") or action.get("from_states"):
+				continue
+			for target in transitions.action_targets(action):
+				universal.setdefault(target, []).append(
+					{"name": action["name"], "label": action["label"]}
+				)
+
+		if universal:
+			labelled[pipeline]["*"] = universal
+```
+
+- [ ] **Step 4: Run the backend tests**
+
+`bench --site localhost run-tests --module crm.txb.test_transitions` — expect 33/33.
+
+- [ ] **Step 5: Write the failing frontend test**
+
+Add to `frontend/tests/unit/dealTransitions.test.js`, and extend the shared `TRANSITIONS`
+fixture with a `'*'` entry on `Workshop`:
+
+```js
+const TRANSITIONS = {
+  Workshop: {
+    'Workshop set': {
+      'Workshop ran': [{ name: 'run_workshop', label: 'Run Workshop' }],
+      Lost: [
+        { name: 'run_workshop', label: 'Run Workshop' },
+        { name: 'cancel_workshop', label: 'Cancel Workshop' },
+      ],
+    },
+    '*': {
+      Lost: [{ name: 'cancel_workshop', label: 'Cancel Workshop' }],
+    },
+  },
+}
+
+describe('off-list statuses fall back to universal actions', () => {
+  it('offers the universal targets from a status with no graph entry', () => {
+    expect(allowedTargets(TRANSITIONS, 'Workshop', 'Active')).toEqual(['Lost'])
+  })
+
+  it('resolves the universal action as a candidate', () => {
+    const found = candidateActions(TRANSITIONS, 'Workshop', 'Active', 'Lost', AVAILABLE)
+    expect(found.map((a) => a.name)).toEqual(['cancel_workshop'])
+  })
+
+  it('prefers the status-specific entry when one exists', () => {
+    // "Workshop set" has its own row; the universal row must not shadow or duplicate it.
+    expect(allowedTargets(TRANSITIONS, 'Workshop', 'Workshop set').sort()).toEqual([
+      'Lost',
+      'Workshop ran',
+    ])
+    const found = candidateActions(
+      TRANSITIONS, 'Workshop', 'Workshop set', 'Lost', AVAILABLE,
+    )
+    expect(found.map((a) => a.name)).toEqual(['run_workshop', 'cancel_workshop'])
+  })
+
+  it('is silent when the pipeline has no universal actions', () => {
+    expect(allowedTargets({ Workshop: {} }, 'Workshop', 'Active')).toEqual([])
+  })
+})
+```
+
+- [ ] **Step 6: Run it and watch it fail**
+
+`cd frontend && yarn vitest run tests/unit/dealTransitions.test.js`
+
+- [ ] **Step 7: Add the fallback to the helpers**
+
+In `frontend/src/utils/dealTransitions.js`, add a private helper and route both public
+functions through it:
+
+```js
+/**
+ * The edges available from `from`.
+ *
+ * A status outside its pipeline's own list has no graph row — real data contains one, a
+ * Workshop sitting at "Active". Actions declaring no `from_states` still apply from
+ * there, and the server's `is_allowed` says so, so the `"*"` row stands in. A status
+ * WITH its own row already includes those actions (the graph expands empty `from_states`
+ * across the pipeline's statuses), so the rows are alternatives, never merged.
+ */
+function edgesFrom(transitions, pipeline, from) {
+  const graph = transitions?.[pipeline] || {}
+  return graph[from] || graph['*'] || {}
+}
+
+export function allowedTargets(transitions, pipeline, from) {
+  return Object.keys(edgesFrom(transitions, pipeline, from))
+}
+
+export function candidateActions(transitions, pipeline, from, to, available) {
+  const names = (edgesFrom(transitions, pipeline, from)[to] || []).map((a) => a.name)
+  const byName = new Map((available || []).map((a) => [a.name, a]))
+
+  return names.filter((name) => byName.has(name)).map((name) => byName.get(name))
+}
+```
+
+- [ ] **Step 8: Run everything**
+
+`cd frontend && yarn vitest run tests/unit/dealTransitions.test.js` then `yarn test:run`
+(expect 183) and `yarn build`.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add crm/txb/api/transitions.py crm/txb/test_transitions.py frontend/src/utils/dealTransitions.js frontend/tests/unit/dealTransitions.test.js
+git commit -m "fix(deals): let the client see the universal actions the server already allows"
+```
+
+---
+
+### Task 16: Extend the Admin recovery hatch to the kanban board
+
+The board's drop guard is purely graph-based, so an Admin sees the same greying as a
+coach. The spec's hatch was written as "a free Status *dropdown*", so the board was never
+covered — the two controls disagree about what an Admin may do. User decision: **an Admin
+may drop on any status in the deal's own pipeline, and the action modal still opens when
+an action owns the edge.**
+
+**Files:**
+- Modify: `crm/txb/api/transitions.py`
+- Modify: `crm/txb/test_transitions.py`
+- Modify: `frontend/src/stores/transitions.js`
+- Modify: `frontend/src/utils/dealTransitions.js`
+- Modify: `frontend/tests/unit/dealTransitions.test.js`
+- Modify: `frontend/src/utils/kanbanTransitions.js`
+- Modify: `frontend/src/components/ViewControls.vue`
+- Modify: `frontend/src/pages/Deals.vue`
+
+- [ ] **Step 1: Serve `is_admin` from the transition endpoint**
+
+The board needs it before any drag begins, so it belongs on the map, not on the per-deal
+call. In `crm/txb/api/transitions.py`, import `is_admin` alongside `can_change_status` and
+add to the returned dict:
+
+```python
+		"is_admin": is_admin(),
+```
+
+Add to `TestTransitionApi`:
+
+```python
+	def test_the_endpoint_reports_whether_the_caller_is_admin(self):
+		from crm.txb.api.transitions import get_transition_map as api_map
+
+		self.assertIn("is_admin", api_map())
+```
+
+- [ ] **Step 2: Expose it from the store**
+
+In `frontend/src/stores/transitions.js`, add alongside `canChangeStatusFor`:
+
+```js
+  /** Whether the current user holds the Admin role — the recovery hatch. */
+  function isAdmin() {
+    return transitionMap.data?.is_admin === true
+  }
+```
+
+and return it: `return { transitionMap, canChangeStatusFor, isAdmin }`.
+
+- [ ] **Step 3: Write the failing `canDropOn` tests**
+
+```js
+describe('canDropOn — the Admin hatch', () => {
+  it('lets an Admin drop on any status in the pipeline', () => {
+    const statuses = ['Workshop set', 'Sold', 'Lost']
+    expect(
+      canDropOn(TRANSITIONS, 'Workshop', 'Workshop set', 'Sold', true, statuses),
+    ).toBe(true)
+  })
+
+  it('still refuses a status outside the pipeline for an Admin', () => {
+    expect(
+      canDropOn(TRANSITIONS, 'Workshop', 'Workshop set', 'Active', true, ['Sold']),
+    ).toBe(false)
+  })
+
+  it('still refuses everything when the user may not change status at all', () => {
+    expect(
+      canDropOn(TRANSITIONS, 'Workshop', 'Workshop set', 'Sold', false, ['Sold']),
+    ).toBe(false)
+  })
+
+  it('falls back to the graph when no admin status list is given', () => {
+    expect(canDropOn(TRANSITIONS, 'Workshop', 'Workshop set', 'Sold', true)).toBe(false)
+    expect(
+      canDropOn(TRANSITIONS, 'Workshop', 'Workshop set', 'Workshop ran', true),
+    ).toBe(true)
+  })
+})
+```
+
+- [ ] **Step 4: Add the parameter**
+
+```js
+/**
+ * Whether a card dragged from `from` may be dropped on `to`.
+ *
+ * `adminStatuses`, when given, is the pipeline's full status list and means the user
+ * holds the recovery hatch: they may move the deal anywhere within its own pipeline. The
+ * action modal still opens when an action owns the edge, so nothing an action records is
+ * skipped — the hatch widens where they may go, not what gets captured.
+ */
+export function canDropOn(
+  transitions,
+  pipeline,
+  from,
+  to,
+  canChangeStatus,
+  adminStatuses = null,
+) {
+  if (!canChangeStatus) return false
+  if (from === to) return true
+  if (adminStatuses) return adminStatuses.includes(to)
+
+  return allowedTargets(transitions, pipeline, from).includes(to)
+}
+```
+
+- [ ] **Step 5: Let an Admin's off-graph drop write directly**
+
+In `frontend/src/utils/kanbanTransitions.js`, in `dealStatusTransition`, replace the
+no-candidates refusal:
+
+```js
+  if (!candidates.length) {
+    // The hatch: an Admin may land on a status no action describes. The caller performs
+    // the write, exactly as it does for a non-deal board.
+    if (ctx.isAdmin) {
+      return { proceed: true, alreadySaved: false, finalStatus: ctx.to }
+    }
+    return refused
+  }
+```
+
+- [ ] **Step 6: Pass `isAdmin` through the context**
+
+In `frontend/src/components/ViewControls.vue`, destructure `isAdmin` from the store
+alongside `transitionMap`, and add to the `requestKanbanTransition` context object:
+
+```js
+      isAdmin: isAdmin(),
+```
+
+- [ ] **Step 7: Give the board the Admin status list**
+
+In `frontend/src/pages/Deals.vue`, pull in the pipeline statuses and pass them when the
+user is an Admin:
+
+```js
+const { pipelineStatuses } = statusesStore()
+const { transitionMap, canChangeStatusFor, isAdmin } = transitionsStore()
+
+function dealTransitionGuard({ from, to, card }) {
+  const pipeline = card?.pipeline_type
+  if (!pipeline) return true
+
+  // An Admin may move a deal anywhere inside its own pipeline (the recovery hatch);
+  // everyone else is held to the state machine.
+  const adminStatuses = isAdmin()
+    ? allowedStatusesFor(pipeline, from, pipelineStatuses.data)
+    : null
+
+  return canDropOn(
+    transitionMap.data?.transitions,
+    pipeline,
+    from,
+    to,
+    canChangeStatusFor(pipeline),
+    adminStatuses,
+  )
+}
+```
+
+Import `allowedStatusesFor` from `@/utils/pipelineStatuses` and `statusesStore` from
+`@/stores/statuses` if not already present.
+
+- [ ] **Step 8: Verify**
+
+`bench --site localhost run-tests --module crm.txb.test_transitions` (expect 34),
+`cd frontend && yarn test:run` (expect 187) and `yarn build`.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add crm/txb/api/transitions.py crm/txb/test_transitions.py frontend/
+git commit -m "feat(deals): extend the Admin recovery hatch to the kanban board"
+```
