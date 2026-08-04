@@ -436,6 +436,8 @@ import SidePanelModal from '@/components/Modals/SidePanelModal.vue'
 import { getMeta } from '@/stores/meta'
 import { parseLinkFilters } from '@/utils/fieldTransforms'
 import { usersStore } from '@/stores/users'
+import { statusesStore } from '@/stores/statuses'
+import { statusLinkFilters } from '@/utils/pipelineStatuses'
 import { isMobileView } from '@/composables/settings'
 import {
   getFormat,
@@ -474,6 +476,7 @@ const { getFormattedPercent, getFormattedFloat, getFormattedCurrency } =
   getMeta(props.doctype)
 
 const { users, isManager, getUser } = usersStore()
+const { pipelineStatuses } = statusesStore()
 
 const showSidePanelModal = ref(false)
 
@@ -534,6 +537,26 @@ function parsedField(field) {
       ignore_user_type: 1,
       ...(parseLinkFilters(field.link_filters) || {}),
     })
+  }
+
+  // Restrict a deal's status to its own pipeline, so statuses belonging to other
+  // pipelines are not offered. The current status is always kept selectable.
+  if (
+    field.fieldtype === 'Link' &&
+    field.options === 'CRM Deal Status' &&
+    props.doctype === 'CRM Deal'
+  ) {
+    const pipelineFilters = statusLinkFilters(
+      doc.value?.pipeline_type,
+      doc.value?.status,
+      pipelineStatuses.data,
+    )
+    if (pipelineFilters) {
+      field.link_filters = JSON.stringify({
+        ...pipelineFilters,
+        ...(parseLinkFilters(field.link_filters) || {}),
+      })
+    }
   }
 
   const read_only_via_depends_on = evaluateDependsOnValue(

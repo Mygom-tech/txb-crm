@@ -381,6 +381,7 @@ import {
   isTranslatable,
 } from '@/utils'
 import { getView } from '@/utils/view'
+import { allowedStatusesFor } from '@/utils/pipelineStatuses'
 import { getSettings } from '@/stores/settings'
 import { globalStore } from '@/stores/global'
 import { statusesStore } from '@/stores/statuses'
@@ -416,7 +417,7 @@ import { useActiveTabManager } from '@/composables/useActiveTabManager'
 const { on } = useBroadcast()
 const { brand } = getSettings()
 const { $dialog, $socket, makeCall } = globalStore()
-const { statusOptions, getDealStatus } = statusesStore()
+const { statusOptions, getDealStatus, pipelineStatuses } = statusesStore()
 const { doctypeMeta } = getMeta('CRM Deal')
 
 const { updateOnboardingStep, isOnboardingStepsCompleted } =
@@ -552,9 +553,20 @@ const title = computed(() => {
 })
 
 const statuses = computed(() => {
+  // A form script may pin an explicit list; otherwise restrict to the deal's pipeline so
+  // statuses belonging to other pipelines are not offered.
   let customStatuses = document.statuses?.length
     ? document.statuses
     : document._statuses || []
+
+  if (!customStatuses.length) {
+    customStatuses = allowedStatusesFor(
+      doc.value?.pipeline_type,
+      doc.value?.status,
+      pipelineStatuses.data,
+    )
+  }
+
   return statusOptions('deal', customStatuses, triggerStatusChange)
 })
 
