@@ -12,6 +12,16 @@ PIPELINE_DELIVERING_COACHING = "Delivering Coaching"
 # Deal statuses referenced by automation.
 STATUS_WORKSHOP_SET = "Workshop set"
 
+# The CRM calls this role "Admin" in Settings > Users; it maps to the Frappe role
+# System Manager (see frontend/src/components/Settings/Users.vue and stores/users.js).
+ADMIN_ROLE = "System Manager"
+
+# Fields that express a deal's delivery state. `custom_delivery_status` duplicates
+# `status` for the Delivering Coaching pipeline and is blank on almost every deal; it is
+# guarded alongside `status` so it cannot be used to sidestep the restriction. Removing it
+# is tracked separately.
+STATUS_FIELDS = ("status", "custom_delivery_status")
+
 # The statuses each pipeline may use, in display order.
 #
 # Single source of truth. This previously existed as four separate copies inside Form

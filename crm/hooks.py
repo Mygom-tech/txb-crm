@@ -199,6 +199,8 @@ doc_events = {
 		"on_update": ["crm.api.whatsapp.on_update"],
 	},
 	"CRM Deal": {
+		# Guards every status-writing path: status field, Kanban, Take Action and the API.
+		"validate": ["crm.txb.permissions.guard_status_change"],
 		"before_validate": [
 			"crm.txb.doc_events.deal.generate_registration_token",
 			"crm.txb.doc_events.deal.sync_contact_name",

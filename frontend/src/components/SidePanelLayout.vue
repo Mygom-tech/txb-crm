@@ -439,6 +439,9 @@ import { parseLinkFilters } from '@/utils/fieldTransforms'
 import { usersStore } from '@/stores/users'
 import { statusesStore } from '@/stores/statuses'
 import { statusLinkFilters } from '@/utils/pipelineStatuses'
+
+// Fields expressing delivery state; mirrors crm/txb/constants.py STATUS_FIELDS.
+const STATUS_FIELDS = ['status', 'custom_delivery_status']
 import { isMobileView } from '@/composables/settings'
 import {
   getFormat,
@@ -459,6 +462,7 @@ import {
   TextInput,
   TimePicker,
   Tooltip,
+  createResource,
 } from 'frappe-ui'
 import { useDocument } from '@/data/document'
 import { ref, computed, getCurrentInstance } from 'vue'
@@ -478,6 +482,20 @@ const { getFormattedPercent, getFormattedFloat, getFormattedCurrency } =
 
 const { users, isManager, getUser } = usersStore()
 const { pipelineStatuses } = statusesStore()
+
+// Whether this user may move this deal's status. Shares a cache key with the deal page's
+// resource, so both read one answer — the same one the server enforces.
+const dealActions = createResource({
+  url: 'crm.txb.api.actions.get_available_actions',
+  cache: ['deal-actions', props.docname],
+  makeParams: () => ({ deal: props.docname }),
+  auto: props.doctype === 'CRM Deal' && Boolean(props.docname),
+  initialData: { can_change_status: true },
+})
+
+const canChangeDealStatus = computed(
+  () => dealActions.data?.can_change_status !== false,
+)
 
 const showSidePanelModal = ref(false)
 
@@ -587,13 +605,21 @@ function parsedField(field) {
     doc.value,
   )
 
+  // Restricted pipelines: the status is read-only unless the user may change it. The
+  // server refuses either way; this stops the user finding out via an error.
+  const statusLockedByPermission =
+    props.doctype === 'CRM Deal' &&
+    STATUS_FIELDS.includes(field.fieldname) &&
+    !canChangeDealStatus.value
+
   // Script overrides for read_only take priority over depends_on
   const scriptReadOnly = overrides?.read_only
   const effectiveReadOnly =
-    scriptReadOnly !== undefined
+    statusLockedByPermission ||
+    (scriptReadOnly !== undefined
       ? scriptReadOnly
       : field.read_only ||
-        (field.read_only_depends_on && read_only_via_depends_on)
+        (field.read_only_depends_on && read_only_via_depends_on))
 
   let _field = {
     ...field,

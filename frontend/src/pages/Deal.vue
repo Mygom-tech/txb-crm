@@ -24,7 +24,14 @@
       />
       <AssignTo v-model="assignees.data" doctype="CRM Deal" :docname="dealId" />
       <Dropdown
-        v-if="doc && document.statuses"
+        v-if="availableActions.length"
+        :options="takeActionOptions"
+        placement="right"
+      >
+        <Button :label="__('Take Action')" iconRight="chevron-down" />
+      </Dropdown>
+      <Dropdown
+        v-if="doc && document.statuses && canChangeStatus"
         :options="statuses"
         placement="right"
       >
@@ -40,6 +47,20 @@
           </Button>
         </template>
       </Dropdown>
+      <Tooltip
+        v-else-if="doc?.status"
+        :text="
+          __('Only Admins can change the status of a {0} opportunity', [
+            __(doc.pipeline_type),
+          ])
+        "
+      >
+        <Button :label="statusLabel(doc.status)" :disabled="true">
+          <template #prefix>
+            <IndicatorIcon :class="getDealStatus(doc.status).color" />
+          </template>
+        </Button>
+      </Tooltip>
     </template>
   </LayoutHeader>
   <div v-if="doc.name" class="flex h-full overflow-hidden">
@@ -382,6 +403,7 @@ import {
 } from '@/utils'
 import { getView } from '@/utils/view'
 import { allowedStatusesFor } from '@/utils/pipelineStatuses'
+import { actionOptions, runAction } from '@/utils/takeAction'
 import { getSettings } from '@/stores/settings'
 import { globalStore } from '@/stores/global'
 import { statusesStore } from '@/stores/statuses'
@@ -551,6 +573,43 @@ const title = computed(() => {
   let t = doctypeMeta.value?.title_field || 'name'
   return doc.value?.[t] || props.dealId
 })
+
+// What this user may do to this deal. The server filters by current status and role, so
+// the menu can never offer something execute_action would refuse, and the status control
+// disables itself from the same answer that enforces the rule.
+const dealActions = createResource({
+  url: 'crm.txb.api.actions.get_available_actions',
+  cache: ['deal-actions', props.dealId],
+  makeParams: () => ({ deal: props.dealId }),
+  auto: true,
+  initialData: { actions: [], can_change_status: true },
+})
+
+const availableActions = computed(() => dealActions.data?.actions || [])
+const canChangeStatus = computed(
+  () => dealActions.data?.can_change_status !== false,
+)
+
+const takeActionOptions = computed(() =>
+  actionOptions(availableActions.value, onTakeAction),
+)
+
+async function onTakeAction(action) {
+  try {
+    const result = await runAction(props.dealId, action)
+    if (!result) return
+    reloadResources()
+    dealActions.reload()
+  } catch (error) {
+    toast.error(error.messages?.[0] || __('Could not complete the action'))
+  }
+}
+
+// The available actions depend on the status, so re-ask whenever it moves.
+watch(
+  () => doc.value?.status,
+  () => dealActions.reload(),
+)
 
 const statuses = computed(() => {
   // A form script may pin an explicit list; otherwise restrict to the deal's pipeline so
