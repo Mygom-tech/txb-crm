@@ -361,8 +361,23 @@ def is_allowed(pipeline_type: str | None, from_status: str | None, to_status: st
 	if from_status == to_status:
 		return True
 
-	return to_status in get_transitions(pipeline_type).get(from_status, {})
+	if to_status in get_transitions(pipeline_type).get(from_status, {}):
+		return True
+
+	# An action declaring no `from_states` may be taken from ANY status -- including one
+	# outside this pipeline's list, which real data contains (a Workshop sitting in
+	# "Active"). `is_available` already reads the declaration that way, so the graph must
+	# agree; otherwise the menu offers an action whose save the guard then refuses, and
+	# the deal is stuck.
+	return any(
+		action.get("changes_status")
+		and not action.get("from_states")
+		and to_status in action_targets(action)
+		for action in get_actions(pipeline_type)
+	)
 ```
+
+**Added in Task 5's fix round 3**, after enforcement made the disagreement visible: `is_available` in `crm/txb/api/actions.py` treats an empty `from_states` as "from any status", while `action_sources` above expands it to only the pipeline's own list. One live deal — a Workshop at `Active` — sits at a status outside its pipeline's list, and without this clause it would be offered `Cancel Workshop` and then refused.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -854,10 +869,12 @@ In `crm/txb/api/actions.py`, wrap the mutating half of `execute_action`. Replace
 	values = parse_data(data)
 	validate_required(spec, values)
 
-	# Tells `guard_transition` this write is an action rather than a bare status set. A
-	# request-scoped flag, cleared in `finally` so a throw cannot leave it armed for the
-	# rest of the request.
-	frappe.flags.txb_action = True
+	# Tells `guard_transition` this write is an action rather than a bare status set.
+	# Holds the deal's NAME, not True: a request-wide boolean would exempt every other
+	# CRM Deal saved inside this block, so the first handler that touches a second deal
+	# would silently bypass the origin rule. Cleared in `finally` so a throw cannot leave
+	# it armed for the rest of the request.
+	frappe.flags.txb_action = doc.name
 	try:
 		spec["handler"](doc, values)
 
@@ -867,8 +884,12 @@ In `crm/txb/api/actions.py`, wrap the mutating half of `execute_action`. Replace
 
 		doc.save()
 	finally:
-		frappe.flags.txb_action = False
+		frappe.flags.txb_action = None
 ```
+
+The matching check in `guard_transition` is `if frappe.flags.get("txb_action") != doc.name:`.
+
+(Both narrowed in fix round 3 — the original request-wide boolean was flagged as an undocumented, unenforced invariant.)
 
 - [ ] **Step 5: Register the hook**
 
