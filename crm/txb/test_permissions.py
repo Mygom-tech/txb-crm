@@ -9,7 +9,7 @@ rule directly rather than through any one of those paths, since that is the poin
 """
 
 import frappe
-from frappe.tests import IntegrationTestCase
+from frappe.tests.utils import FrappeTestCase
 
 from crm.txb.constants import ADMIN_ROLE, PIPELINE_DELIVERING_COACHING
 from crm.txb.permissions import can_change_status
@@ -36,7 +36,7 @@ def ensure_user(email: str, roles: list[str]):
 	return user
 
 
-class TestStatusPermission(IntegrationTestCase):
+class TestStatusPermission(FrappeTestCase):
 	@classmethod
 	def setUpClass(cls):
 		super().setUpClass()
@@ -133,7 +133,7 @@ class TestStatusPermission(IntegrationTestCase):
 		).insert(ignore_permissions=True)
 
 
-class TestActionVisibility(IntegrationTestCase):
+class TestActionVisibility(FrappeTestCase):
 	"""What the Take Action menu offers must match what execute_action would allow."""
 
 	def actions_for(self, status: str, may_change_status: bool):
