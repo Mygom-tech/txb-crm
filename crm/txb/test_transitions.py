@@ -14,6 +14,7 @@ from crm.txb.constants import (
 	PIPELINE_WORKSHOP,
 )
 from crm.txb.pipelines.actions import PIPELINE_ACTIONS
+from crm.txb.pipelines.individual_session import BAP_TYPES, LOCATION_TYPES
 from crm.txb.pipelines.transitions import (
 	action_targets,
 	candidates,
@@ -93,6 +94,15 @@ class TestTransitionGraph(FrappeTestCase):
 			for names in targets.values():
 				self.assertNotIn("log_coaching_call", names)
 
+	def test_a_universal_action_applies_from_an_off_list_status(self):
+		"""Real data holds a Workshop deal sitting in "Active", not a Workshop status.
+
+		`is_available` offers Cancel Workshop there because the action declares no
+		from_states. `is_allowed` must agree, or the action is offered and then refused.
+		"""
+		self.assertTrue(is_allowed(PIPELINE_WORKSHOP, "Active", "Lost"))
+		self.assertFalse(is_allowed(PIPELINE_WORKSHOP, "Active", "Workshop set"))
+
 
 class TestNoDeadEnds(FrappeTestCase):
 	"""Every status must have a way out, or enforcing the graph traps deals.
@@ -159,13 +169,19 @@ class TestTransitionEnforcement(FrappeTestCase):
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
-		frappe.flags.txb_action = False
+		frappe.flags.txb_action = None
 		frappe.db.rollback()
 
-	def make_deal(self, status, pipeline=PIPELINE_INDIVIDUAL_SESSION):
-		return frappe.get_doc(
-			{"doctype": "CRM Deal", "pipeline_type": pipeline, "status": status}
-		).insert(ignore_permissions=True)
+	def make_deal(self, status, pipeline=PIPELINE_INDIVIDUAL_SESSION, owner=None):
+		"""`owner` matters only for execute_action, which is the one status path that
+		enforces has_deal_permission (crm/permissions/org_hierarchy.py) and has no
+		ignore_permissions escape. A coach may act only on deals they own or are
+		assigned, so a test of that path must own the deal.
+		"""
+		values = {"doctype": "CRM Deal", "pipeline_type": pipeline, "status": status}
+		if owner:
+			values["deal_owner"] = owner
+		return frappe.get_doc(values).insert(ignore_permissions=True)
 
 	def test_an_off_graph_move_is_refused(self):
 		deal = self.make_deal("Submitted")
@@ -173,7 +189,7 @@ class TestTransitionEnforcement(FrappeTestCase):
 		deal.reload()
 		deal.status = "Session Run"  # not reachable from Submitted
 
-		with self.assertRaises(frappe.ValidationError):
+		with self.assertRaisesRegex(frappe.ValidationError, "cannot move from"):
 			deal.save(ignore_permissions=True)
 
 	def test_an_on_graph_move_still_needs_the_action(self):
@@ -183,7 +199,7 @@ class TestTransitionEnforcement(FrappeTestCase):
 		deal.reload()
 		deal.status = "Session Set"
 
-		with self.assertRaises(frappe.ValidationError):
+		with self.assertRaisesRegex(frappe.ValidationError, "Take Action"):
 			deal.save(ignore_permissions=True)
 
 	def test_an_on_graph_move_through_an_action_is_allowed(self):
@@ -191,7 +207,7 @@ class TestTransitionEnforcement(FrappeTestCase):
 		frappe.set_user(COACH)
 		deal.reload()
 		deal.status = "Session Set"
-		frappe.flags.txb_action = True
+		frappe.flags.txb_action = deal.name
 		deal.save(ignore_permissions=True)
 
 		self.assertEqual(
@@ -246,3 +262,72 @@ class TestTransitionEnforcement(FrappeTestCase):
 		deal.reload()
 		deal.session_notes = "unchanged status"
 		deal.save(ignore_permissions=True)
+
+		self.assertEqual(
+			frappe.db.get_value("CRM Deal", deal.name, "session_notes"),
+			"unchanged status",
+		)
+
+	def test_execute_action_arms_and_clears_the_origin_flag(self):
+		"""The flag is the entire origin mechanism and nothing else exercises it.
+
+		A typo in the flag name would leave every other test green while locking every
+		non-Admin out of every status change in production.
+		"""
+		from crm.txb.api.actions import execute_action
+
+		deal = self.make_deal("Submitted", owner=COACH)
+		frappe.set_user(COACH)
+
+		execute_action(
+			deal.name,
+			"book_bap",
+			{
+				"bap_type": BAP_TYPES[0],
+				"bap_set_by": COACH,
+				"bap_date_set": "2026-08-10",
+				"bap_datetime": "2026-08-10 10:00:00",
+				"bap_location_type": LOCATION_TYPES[0],
+			},
+		)
+
+		self.assertEqual(
+			frappe.db.get_value("CRM Deal", deal.name, "status"), "Session Set"
+		)
+		self.assertFalse(frappe.flags.get("txb_action"))
+
+	def test_the_origin_flag_is_cleared_when_an_action_fails(self):
+		"""Proves the `finally`, rather than trusting it by inspection.
+
+		A flag left armed by a throw would silently exempt every later write in the same
+		request from the origin check.
+		"""
+		from crm.txb.api.actions import execute_action
+		from crm.txb.pipelines.actions import find_action
+
+		spec = find_action(PIPELINE_INDIVIDUAL_SESSION, "book_bap")
+		original = spec["handler"]
+
+		def boom(deal, values):
+			raise frappe.ValidationError("boom")
+
+		spec["handler"] = boom
+		try:
+			deal = self.make_deal("Submitted", owner=COACH)
+			frappe.set_user(COACH)
+			with self.assertRaisesRegex(frappe.ValidationError, "boom"):
+				execute_action(
+					deal.name,
+					"book_bap",
+					{
+						"bap_type": BAP_TYPES[0],
+						"bap_set_by": COACH,
+						"bap_date_set": "2026-08-10",
+						"bap_datetime": "2026-08-10 10:00:00",
+						"bap_location_type": LOCATION_TYPES[0],
+					},
+				)
+		finally:
+			spec["handler"] = original
+
+		self.assertFalse(frappe.flags.get("txb_action"))

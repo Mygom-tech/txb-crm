@@ -114,10 +114,11 @@ def execute_action(deal: str, action: str, data: str | dict | None = None) -> di
 	values = parse_data(data)
 	validate_required(spec, values)
 
-	# Tells `guard_transition` this write is an action rather than a bare status set. A
-	# request-scoped flag, cleared in `finally` so a throw cannot leave it armed for the
-	# rest of the request.
-	frappe.flags.txb_action = True
+	# Tells `guard_transition` this write is an action rather than a bare status set.
+	# Scoped to this document's name, not just truthy, so the exemption cannot leak onto
+	# another CRM Deal saved inside the same request. Cleared in `finally` so a throw
+	# cannot leave it armed for the rest of the request.
+	frappe.flags.txb_action = doc.name
 	try:
 		spec["handler"](doc, values)
 
@@ -127,7 +128,7 @@ def execute_action(deal: str, action: str, data: str | dict | None = None) -> di
 
 		doc.save()
 	finally:
-		frappe.flags.txb_action = False
+		frappe.flags.txb_action = None
 
 	return {"deal": doc.name, "status": doc.status}
 

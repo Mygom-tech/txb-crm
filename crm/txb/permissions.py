@@ -114,7 +114,7 @@ def guard_transition(doc, method=None):
 			title=_("Transition not allowed"),
 		)
 
-	if not frappe.flags.get("txb_action"):
+	if frappe.flags.get("txb_action") != doc.name:
 		frappe.throw(
 			_('Change the status of a {0} opportunity through Take Action, so the details that go with the change are recorded.').format(
 				_(doc.pipeline_type)

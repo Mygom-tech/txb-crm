@@ -68,4 +68,17 @@ def is_allowed(pipeline_type: str | None, from_status: str | None, to_status: st
 	if from_status == to_status:
 		return True
 
-	return to_status in get_transitions(pipeline_type).get(from_status, {})
+	if to_status in get_transitions(pipeline_type).get(from_status, {}):
+		return True
+
+	# An action declaring no `from_states` may be taken from ANY status -- including one
+	# outside this pipeline's list, which real data contains (a Workshop sitting in
+	# "Active"). `is_available` already reads the declaration that way, so the graph must
+	# agree; otherwise the menu offers an action whose save this guard then refuses, and
+	# the deal is stuck.
+	return any(
+		action.get("changes_status")
+		and not action.get("from_states")
+		and to_status in action_targets(action)
+		for action in get_actions(pipeline_type)
+	)
