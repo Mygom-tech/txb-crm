@@ -269,9 +269,10 @@ const tabsWith = (...fieldnames) => [
 ]
 
 describe('excludeSelfRenderedFields', () => {
-  it('drops the synthesised status field the modal renders itself', () => {
-    const result = excludeSelfRenderedFields(tabsWith('status'), SELF_RENDERED_FIELDS)
-    expect(result).toEqual([])
+  it('drops the synthesised status field, leaving no section to render', () => {
+    // status is the only reqd field without a default on CRM Deal, so the synthesised
+    // section holds nothing else -- and [] is how FieldLayout is told not to render.
+    expect(excludeSelfRenderedFields(tabsWith('status'), SELF_RENDERED_FIELDS)).toEqual([])
   })
 
   it('drops pipeline_type too, should it ever become required', () => {
@@ -292,8 +293,12 @@ describe('excludeSelfRenderedFields', () => {
     expect(result[0].sections[0].columns[0].fields).toHaveLength(2)
   })
 
-  it('returns [] when every field was self-rendered, so the section does not render', () => {
-    expect(excludeSelfRenderedFields(tabsWith('status'), SELF_RENDERED_FIELDS)).toEqual([])
+  it('does not mutate the layout it was given', () => {
+    // dealTabs.data is the resource's own cached value; a transform that edited it in
+    // place would corrupt the cache the way stores/meta.js does.
+    const tabs = tabsWith('status', 'deal_value')
+    excludeSelfRenderedFields(tabs, SELF_RENDERED_FIELDS)
+    expect(tabs[0].sections[0].columns[0].fields).toHaveLength(2)
   })
 
   it('tolerates the empty and undefined layouts the endpoint can return', () => {
