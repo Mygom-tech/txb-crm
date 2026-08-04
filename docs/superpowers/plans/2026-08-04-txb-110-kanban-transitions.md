@@ -2143,14 +2143,20 @@ bench --site localhost run-tests --module crm.txb.test_registration_token
 
 Expected: all green.
 
-- [ ] **Step 2: Check lint and formatting**
+- [ ] **Step 2: Check formatting and diff hygiene**
+
+There is **no `yarn lint` script** in `frontend/package.json`. Linting in this repo is pre-commit-managed (`.pre-commit-config.yaml` runs oxlint, prettier@3.2.5 and eslint), and `pre-commit` is not installed on this machine, so the practical local check is prettier alone:
 
 ```bash
-cd frontend && yarn lint
-git diff --stat
+cd frontend && npx prettier@3.2.5 --check "src/**/*.{js,vue}"
+cd .. && git diff --stat $(git merge-base develop HEAD)..HEAD
 ```
 
-Expected: no lint errors; the diff touches only the files this plan names. If `e2e/` or unrelated files appear, a wrong prettier version was used — revert those hunks and re-run with `prettier@3.2.5`.
+Expected: prettier reports no changes needed for the files this branch touched, and the diff touches only files this plan names.
+
+Two traps:
+- `--check` will report pre-existing formatting drift in files this branch never touched. Only fix files this branch actually changed; leave the rest alone.
+- If `e2e/` or unrelated files appear in the diff, a wrong prettier version was used somewhere — revert those hunks and re-run with `prettier@3.2.5`. The pre-commit config pins that version; a newer one reformats unrelated code.
 
 - [ ] **Step 3: Walk the manual matrix**
 
