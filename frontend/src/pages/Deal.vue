@@ -598,17 +598,40 @@ async function onTakeAction(action) {
   try {
     const result = await runAction(props.dealId, action)
     if (!result) return
-    reloadResources()
+
+    // An action writes the deal, a note, and often a task. Activities watches this ref
+    // and reloads both the activity feed and the document, which is what refreshes
+    // doc.status — and that in turn re-filters the action menu through the watch below.
+    // (reloadResources takes a description of what changed; calling it bare did nothing.)
+    reload.value = true
     dealActions.reload()
   } catch (error) {
     toast.error(error.messages?.[0] || __('Could not complete the action'))
   }
 }
 
-// The available actions depend on the status, so re-ask whenever it moves.
+// The available actions are filtered by the deal's status **on the server**, so they may
+// only be refetched once the server has actually accepted the change.
+//
+// A local edit mutates doc.status optimistically *before* the save is sent
+// (triggerStatusChange calls triggerOnChange, then saves), so reacting to the status
+// alone asks the server while it still holds the previous value — which is exactly how
+// the menu came back showing the old pipeline stage's actions.
+watch(
+  () => document.save?.loading,
+  (saving, wasSaving) => {
+    if (wasSaving && !saving) dealActions.reload()
+  },
+)
+
+// A status that moves with no local edit pending came from the server — a realtime
+// update, or a reload after Take Action — so it is safe to act on directly.
 watch(
   () => doc.value?.status,
-  () => dealActions.reload(),
+  () => {
+    if (document.isDirty) return
+    dealActions.reload()
+  },
 )
 
 const statuses = computed(() => {

@@ -129,10 +129,15 @@ def parse_data(data: str | dict | None) -> dict:
 
 
 def validate_required(spec: dict, values: dict):
+	"""Only None and empty string count as missing.
+
+	A falsy check would reject a required Int of 0 or a required Check left unticked --
+	and zero participants is exactly what gets recorded on a workshop being marked lost.
+	"""
 	missing = [
 		field["label"]
 		for field in spec["fields"]
-		if field.get("reqd") and not values.get(field["fieldname"])
+		if field.get("reqd") and values.get(field["fieldname"]) in (None, "")
 	]
 	if missing:
 		frappe.throw(

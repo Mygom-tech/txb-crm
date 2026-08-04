@@ -9,7 +9,7 @@
         </template>
       </Breadcrumbs>
       <div class="absolute right-0">
-        <Dropdown v-if="doc" :options="statuses">
+        <Dropdown v-if="doc && canChangeStatus" :options="statuses">
           <template #default="{ open }">
             <Button
               v-if="doc.status"
@@ -22,6 +22,15 @@
             </Button>
           </template>
         </Dropdown>
+        <Button
+          v-else-if="doc?.status"
+          :label="statusLabel(doc.status)"
+          disabled
+        >
+          <template #prefix>
+            <IndicatorIcon :class="getDealStatus(doc.status).color" />
+          </template>
+        </Button>
       </div>
     </header>
   </LayoutHeader>
@@ -31,6 +40,9 @@
   >
     <AssignTo v-model="assignees.data" doctype="CRM Deal" :docname="dealId" />
     <div class="flex items-center gap-2">
+      <Dropdown v-if="availableActions.length" :options="takeActionOptions">
+        <Button :label="__('Take Action')" iconRight="chevron-down" />
+      </Dropdown>
       <CustomActions
         v-if="document._actions?.length"
         :actions="document._actions"
@@ -284,6 +296,7 @@ import CustomActions from '@/components/CustomActions.vue'
 import { setupCustomizations, isTranslatable } from '@/utils'
 import { getView } from '@/utils/view'
 import { allowedStatusesFor } from '@/utils/pipelineStatuses'
+import { actionOptions, runAction } from '@/utils/takeAction'
 import { getSettings } from '@/stores/settings'
 import { globalStore } from '@/stores/global'
 import { statusesStore } from '@/stores/statuses'
@@ -309,6 +322,57 @@ import { useRoute, useRouter } from 'vue-router'
 const { brand } = getSettings()
 const { $dialog, $socket } = globalStore()
 const { statusOptions, getDealStatus, pipelineStatuses } = statusesStore()
+
+// Take Action, mirroring the desktop page. Shares a cache key with Deal.vue and the side
+// panel, so one request answers for all of them.
+const dealActions = createResource({
+  url: 'crm.txb.api.actions.get_available_actions',
+  cache: ['deal-actions', props.dealId],
+  makeParams: () => ({ deal: props.dealId }),
+  auto: true,
+  initialData: { actions: [], can_change_status: true },
+})
+
+const availableActions = computed(() => dealActions.data?.actions || [])
+const canChangeStatus = computed(
+  () => dealActions.data?.can_change_status !== false,
+)
+
+const takeActionOptions = computed(() =>
+  actionOptions(availableActions.value, onTakeAction),
+)
+
+async function onTakeAction(action) {
+  try {
+    const result = await runAction(props.dealId, action)
+    if (!result) return
+
+    // Activities watches this ref and reloads both the feed and the document, which is
+    // what refreshes doc.status and therefore re-filters the action menu.
+    reload.value = true
+    dealActions.reload()
+  } catch (error) {
+    toast.error(error.messages?.[0] || __('Could not complete the action'))
+  }
+}
+
+// Refetch once the server has accepted a change: a local edit mutates doc.status
+// optimistically before the save is sent, so reacting to the status alone would ask the
+// server while it still holds the previous value. See Deal.vue for the full reasoning.
+watch(
+  () => document.save?.loading,
+  (saving, wasSaving) => {
+    if (wasSaving && !saving) dealActions.reload()
+  },
+)
+
+watch(
+  () => doc.value?.status,
+  () => {
+    if (document.isDirty) return
+    dealActions.reload()
+  },
+)
 
 const statuses = computed(() => {
   // A form script may pin an explicit list; otherwise restrict to the deal's pipeline.

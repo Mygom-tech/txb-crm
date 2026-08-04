@@ -55,6 +55,38 @@
         </template>
       </div>
 
+      <div class="h-px w-full border-t my-6" />
+
+      <div class="mb-4 flex items-center gap-2 text-ink-gray-5">
+        <label class="block text-base">{{ __('Pipeline') }}</label>
+      </div>
+      <div class="ml-6 flex flex-col gap-3.5">
+        <div class="flex flex-col gap-1.5">
+          <div class="text-sm text-ink-gray-5">
+            {{ __('Pipeline Type') }}
+            <span class="text-ink-red-2">*</span>
+          </div>
+          <Select
+            v-model="pipelineType"
+            class="form-control"
+            :options="pipelineTypeOptions"
+            :placeholder="__('Select Pipeline Type...')"
+          />
+        </div>
+        <div v-if="pipelineType" class="flex flex-col gap-1.5">
+          <div class="text-sm text-ink-gray-5">
+            {{ __('Status') }}
+            <span class="text-ink-red-2">*</span>
+          </div>
+          <Select
+            v-model="pipelineStatus"
+            class="form-control"
+            :options="pipelineStatusOptions"
+            :placeholder="__('Select Status...')"
+          />
+        </div>
+      </div>
+
       <div v-if="dealTabs.data?.length" class="h-px w-full border-t my-6" />
 
       <FieldLayout
@@ -92,11 +124,13 @@ import { useDocument } from '@/data/document'
 import { usersStore } from '@/stores/users'
 import { sessionStore } from '@/stores/session'
 import { statusesStore } from '@/stores/statuses'
+import { viewsStore } from '@/stores/views'
+import { allowedStatusesFor } from '@/utils/pipelineStatuses'
 import { getMeta } from '@/stores/meta'
 import { showQuickEntryModal, quickEntryProps } from '@/composables/modals'
 import { isMobileView } from '@/composables/settings'
 import { useOnboarding, useTelemetry } from 'frappe-ui/frappe'
-import { Dialog, createResource, call } from 'frappe-ui'
+import { Dialog, Select, createResource, call } from 'frappe-ui'
 import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
@@ -108,7 +142,8 @@ const show = defineModel({ type: Boolean })
 
 const router = useRouter()
 
-const { statusOptions, getDealStatus } = statusesStore()
+const { statusOptions, getDealStatus, pipelineStatuses } = statusesStore()
+const { views } = viewsStore()
 const { isManager } = usersStore()
 const { user } = sessionStore()
 const { updateOnboardingStep } = useOnboarding('frappecrm')
@@ -136,6 +171,20 @@ async function convertToDeal() {
     error.value = __('Please select or create an organization')
     return
   }
+
+  if (!pipelineType.value) {
+    error.value = __('Please select a pipeline type')
+    return
+  }
+
+  if (!pipelineStatus.value) {
+    error.value = __('Please select a status')
+    return
+  }
+
+  // Carried in the existing payload, which convert_to_deal applies to the new deal.
+  deal.doc.pipeline_type = pipelineType.value
+  deal.doc.status = pipelineStatus.value
 
   await triggerConvertToDeal?.(props.lead, deal.doc, () => (show.value = false))
 
@@ -170,9 +219,72 @@ async function convertToDeal() {
       localStorage.setItem('firstDeal' + user, _deal)
     })
     capture('convert_lead_to_deal')
-    router.push({ name: 'Deal', params: { dealId: _deal } })
+    router.push(destinationAfterConvert(_deal))
   }
 }
+
+/**
+ * Where to land after converting.
+ *
+ * The pipelines each have their own kanban board, and landing on the board the new deal
+ * belongs to is the behaviour users have. The form script did this by mapping pipeline
+ * names to hardcoded view ids (16/17/18/28) and assigning window.location; the boards are
+ * ordinary views whose labels match the pipeline names, so look one up instead.
+ *
+ * Falls back to the deal itself if no matching board exists.
+ */
+function destinationAfterConvert(dealName) {
+  const board = (views.data || []).find(
+    (view) =>
+      view.dt === 'CRM Deal' &&
+      view.type === 'kanban' &&
+      view.label === pipelineType.value,
+  )
+
+  if (!board) return { name: 'Deal', params: { dealId: dealName } }
+
+  return {
+    name: 'Deals',
+    params: { viewType: 'kanban' },
+    query: { view: board.name },
+  }
+}
+
+// Pipeline Type and Status. The deal does not exist yet, so these are held locally and
+// written into deal.doc, which convert_to_deal already applies to the new deal.
+//
+// Replaces a form script that injected these two selects as raw HTML and monkey-patched
+// window.fetch to splice them into the request on its way out.
+const pipelineType = ref('')
+const pipelineStatus = ref('')
+
+const { doctypeMeta: dealMeta } = getMeta('CRM Deal')
+
+const pipelineTypeOptions = computed(() => {
+  const field = dealMeta.value?.fields?.find(
+    (f) => f.fieldname === 'pipeline_type',
+  )
+  return (field?.options || '')
+    .split('\n')
+    .filter(Boolean)
+    .map((value) => ({ label: __(value), value }))
+})
+
+// Same source of truth as the deal page: the server-owned pipeline -> statuses map.
+const pipelineStatusOptions = computed(() =>
+  allowedStatusesFor(pipelineType.value, null, pipelineStatuses.data).map(
+    (value) => ({ label: __(value), value }),
+  ),
+)
+
+// Changing the pipeline invalidates a status chosen for the previous one.
+watch(pipelineType, () => {
+  if (
+    !pipelineStatusOptions.value.some((o) => o.value === pipelineStatus.value)
+  ) {
+    pipelineStatus.value = ''
+  }
+})
 
 const dealStatuses = computed(() => statusOptions('deal'))
 

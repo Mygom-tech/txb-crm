@@ -54,6 +54,10 @@ PIPELINE_STATUSES = {
 		"Lost",
 	],
 	PIPELINE_SELLING_TRAINING: [
+		# The pipeline's entry status. Both Form Script copies of this map omitted it, so
+		# it could never be selected and "Set Discovery Meeting" -- which starts from it --
+		# was unreachable.
+		"Training submitted",
 		"Training discovery meeting set",
 		"Training discovery meeting run",
 		"Training proposal submitted",
