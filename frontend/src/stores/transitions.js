@@ -1,4 +1,3 @@
-import { computed } from 'vue'
 import { defineStore } from 'pinia'
 import { createResource } from 'frappe-ui'
 
@@ -8,6 +7,13 @@ import { createResource } from 'frappe-ui'
  * Mirrors the pipelineStatuses resource in stores/statuses.js: one source of truth,
  * served by the backend, cached by frappe-ui's module-level resource cache so every
  * board and every deal page reads the same answer.
+ *
+ * Deliberately exposes the resource itself rather than a `computed` over its data.
+ * Pinia builds a setup store with `reactive()`, which unwraps top-level refs — so
+ * `const { transitions } = transitionsStore()` would hand back a frozen plain snapshot
+ * (`{}` before the fetch resolves) and `.value` would be `undefined`. A `createResource`
+ * is a reactive *object*, so destructuring it keeps the same reference and `.data` stays
+ * live. That is exactly why `pipelineStatuses` is safe to destructure everywhere today.
  */
 export const transitionsStore = defineStore('crm-transitions', () => {
   const transitionMap = createResource({
@@ -17,8 +23,6 @@ export const transitionsStore = defineStore('crm-transitions', () => {
     auto: true,
   })
 
-  const transitions = computed(() => transitionMap.data?.transitions || {})
-
   /**
    * Whether this user may move statuses in a pipeline at all (TXB-105).
    * Unknown pipelines are unrestricted, matching the backend default.
@@ -27,5 +31,5 @@ export const transitionsStore = defineStore('crm-transitions', () => {
     return transitionMap.data?.can_change_status?.[pipeline] !== false
   }
 
-  return { transitionMap, transitions, canChangeStatusFor }
+  return { transitionMap, canChangeStatusFor }
 })
