@@ -356,10 +356,22 @@ async function onTakeAction(action) {
   }
 }
 
-// The available actions depend on the status, so re-ask whenever it moves.
+// Refetch once the server has accepted a change: a local edit mutates doc.status
+// optimistically before the save is sent, so reacting to the status alone would ask the
+// server while it still holds the previous value. See Deal.vue for the full reasoning.
+watch(
+  () => document.save?.loading,
+  (saving, wasSaving) => {
+    if (wasSaving && !saving) dealActions.reload()
+  },
+)
+
 watch(
   () => doc.value?.status,
-  () => dealActions.reload(),
+  () => {
+    if (document.isDirty) return
+    dealActions.reload()
+  },
 )
 
 const statuses = computed(() => {
