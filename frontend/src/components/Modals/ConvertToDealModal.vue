@@ -25,47 +25,34 @@
         <label class="block text-base">{{ __('Organization') }}</label>
       </div>
       <div class="ml-6 text-ink-gray-9">
-        <div class="flex items-center justify-between text-base">
-          <div>{{ __('Choose Existing') }}</div>
-          <Switch v-model="existingOrganizationChecked" />
+        <div
+          v-if="leadOrganization && !changeOrganization"
+          class="flex items-center justify-between gap-2 text-base"
+        >
+          <div class="truncate">{{ leadOrganization }}</div>
+          <Button
+            variant="ghost"
+            :label="__('Change')"
+            @click="changeOrganization = true"
+          />
         </div>
-        <Link
-          v-if="existingOrganizationChecked"
-          class="form-control mt-2.5"
-          size="md"
-          :value="existingOrganization"
-          doctype="CRM Organization"
-          @change="(data) => (existingOrganization = data)"
-        />
-        <div v-else class="mt-2.5 text-base">
-          {{
-            __(
-              'New organization will be created based on the data in details section',
-            )
-          }}
-        </div>
-      </div>
-
-      <div class="mb-4 mt-6 flex items-center gap-2 text-ink-gray-5">
-        <ContactsIcon class="h-4 w-4" />
-        <label class="block text-base">{{ __('Contact') }}</label>
-      </div>
-      <div class="ml-6 text-ink-gray-9">
-        <div class="flex items-center justify-between text-base">
-          <div>{{ __('Choose Existing') }}</div>
-          <Switch v-model="existingContactChecked" />
-        </div>
-        <Link
-          v-if="existingContactChecked"
-          class="form-control mt-2.5"
-          size="md"
-          :value="existingContact"
-          doctype="Contact"
-          @change="(data) => (existingContact = data)"
-        />
-        <div v-else class="mt-2.5 text-base">
-          {{ __("New contact will be created based on the person's details") }}
-        </div>
+        <template v-else>
+          <Link
+            class="form-control"
+            size="md"
+            :value="existingOrganization"
+            doctype="CRM Organization"
+            :onCreate="openOrganizationModal"
+            @change="(data) => (existingOrganization = data)"
+          />
+          <div class="mt-2 text-sm text-ink-gray-5">
+            {{
+              __(
+                'Every opportunity needs an organization. Choose an existing one or create a new one.',
+              )
+            }}
+          </div>
+        </template>
       </div>
 
       <div v-if="dealTabs.data?.length" class="h-px w-full border-t my-6" />
@@ -84,12 +71,22 @@
       </div>
     </template>
   </Dialog>
+
+  <OrganizationModal
+    v-if="showOrganizationModal"
+    v-model="showOrganizationModal"
+    :data="newOrganization"
+    :options="{
+      redirect: false,
+      afterInsert: (doc) => (existingOrganization = doc.name),
+    }"
+  />
 </template>
 <script setup>
 import OrganizationsIcon from '@/components/Icons/OrganizationsIcon.vue'
-import ContactsIcon from '@/components/Icons/ContactsIcon.vue'
 import EditIcon from '@/components/Icons/EditIcon.vue'
 import FieldLayout from '@/components/FieldLayout/FieldLayout.vue'
+import OrganizationModal from '@/components/Modals/OrganizationModal.vue'
 import Link from '@/components/Controls/Link.vue'
 import { useDocument } from '@/data/document'
 import { usersStore } from '@/stores/users'
@@ -99,7 +96,7 @@ import { getMeta } from '@/stores/meta'
 import { showQuickEntryModal, quickEntryProps } from '@/composables/modals'
 import { isMobileView } from '@/composables/settings'
 import { useOnboarding, useTelemetry } from 'frappe-ui/frappe'
-import { Switch, Dialog, createResource, call } from 'frappe-ui'
+import { Dialog, createResource, call } from 'frappe-ui'
 import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
@@ -117,11 +114,14 @@ const { user } = sessionStore()
 const { updateOnboardingStep } = useOnboarding('frappecrm')
 const { doctypeMeta: leadMeta } = getMeta('CRM Lead')
 
-const existingContactChecked = ref(false)
-const existingOrganizationChecked = ref(false)
+// The lead's own organization is used as-is unless the user explicitly overrides it; the
+// backend resolves it by name, which is what keeps a duplicate from being created.
+const leadOrganization = computed(() => props.lead.organization || '')
+const changeOrganization = ref(false)
 
-const existingContact = ref('')
 const existingOrganization = ref('')
+const showOrganizationModal = ref(false)
+const newOrganization = ref({})
 const error = ref('')
 const { capture } = useTelemetry()
 
@@ -131,22 +131,10 @@ const { document: deal } = useDocument('CRM Deal')
 async function convertToDeal() {
   error.value = ''
 
-  if (existingContactChecked.value && !existingContact.value) {
-    error.value = __('Please select an existing contact')
+  // A deal without an organization renders untitled, since organization is the title field.
+  if (!leadOrganization.value && !existingOrganization.value) {
+    error.value = __('Please select or create an organization')
     return
-  }
-
-  if (existingOrganizationChecked.value && !existingOrganization.value) {
-    error.value = __('Please select an existing organization')
-    return
-  }
-
-  if (!existingContactChecked.value && existingContact.value) {
-    existingContact.value = ''
-  }
-
-  if (!existingOrganizationChecked.value && existingOrganization.value) {
-    existingOrganization.value = ''
   }
 
   await triggerConvertToDeal?.(props.lead, deal.doc, () => (show.value = false))
@@ -154,7 +142,6 @@ async function convertToDeal() {
   let _deal = await call('crm.fcrm.doctype.crm_lead.crm_lead.convert_to_deal', {
     lead: props.lead.name,
     deal: deal.doc,
-    existing_contact: existingContact.value,
     existing_organization: existingOrganization.value,
   }).catch((err) => {
     if (err.exc_type == 'MandatoryError') {
@@ -176,9 +163,7 @@ async function convertToDeal() {
   })
   if (_deal) {
     show.value = false
-    existingContactChecked.value = false
-    existingOrganizationChecked.value = false
-    existingContact.value = ''
+    changeOrganization.value = false
     existingOrganization.value = ''
     error.value = ''
     updateOnboardingStep('convert_lead_to_deal', true, false, () => {
@@ -300,6 +285,12 @@ function isCustomField(field) {
 
 function hasValue(value) {
   return value != null && value !== ''
+}
+
+function openOrganizationModal(value, close) {
+  newOrganization.value = { organization_name: value }
+  showOrganizationModal.value = true
+  close()
 }
 
 function openQuickEntryModal() {

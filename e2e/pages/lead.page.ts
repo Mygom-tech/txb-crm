@@ -22,13 +22,19 @@ export class LeadPage {
 		await this.page.waitForLoadState('networkidle')
 	}
 
-	/** Open the Convert-to-Deal modal and confirm; resolves once it closes. */
-	async convertToDeal() {
+	/** Open the Convert-to-Deal modal and return its locator, leaving it open. */
+	async openConvertToDealModal() {
 		await this.page.getByRole('button', { name: 'Convert to Deal' }).click()
 		const dialog = this.page.getByRole('dialog')
 		await expect(
 			dialog.getByRole('heading', { name: 'Convert to Deal' }),
 		).toBeVisible()
+		return dialog
+	}
+
+	/** Open the Convert-to-Deal modal and confirm; resolves once it closes. */
+	async convertToDeal() {
+		const dialog = await this.openConvertToDealModal()
 		await dialog.getByRole('button', { name: 'Convert', exact: true }).click()
 		// A successful conversion closes the modal; the created deal is then
 		// asserted via the API (see convert.spec).
