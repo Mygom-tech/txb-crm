@@ -2009,7 +2009,10 @@ Add the covering test to `crm/txb/test_transitions.py`:
 	def test_available_actions_report_admin(self):
 		from crm.txb.api.actions import get_available_actions
 
-		deal = self.make_deal("Submitted")
+		# owner=COACH because get_available_actions enforces has_deal_permission, which
+		# scopes a Sales User to deals they own or are assigned -- same reason
+		# test_execute_action_arms_and_clears_the_origin_flag owns its deal.
+		deal = self.make_deal("Submitted", owner=COACH)
 		frappe.set_user(COACH)
 		self.assertFalse(get_available_actions(deal.name)["is_admin"])
 ```
