@@ -23,3 +23,7 @@ REGISTRATION_TOKEN_BYTES = 32
 # Public base URL used to build registration links.
 # TODO: move to site config so non-production environments generate their own links.
 REGISTRATION_BASE_URL = "https://crm.txbconsulting.com"
+
+# Delivery coach fields on CRM Deal.
+FIELD_DELIVERY_COACH = "custom_delivery_coach"
+FIELD_DELIVERY_COACH_NAME = "custom_delivery_coach_name"
