@@ -1257,7 +1257,7 @@ export function canDropOn(transitions, pipeline, from, to, canChangeStatus) {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd frontend && yarn vitest run tests/unit/dealTransitions.test.js`
-Expected: PASS (14 tests).
+Expected: PASS (12 tests).
 
 - [ ] **Step 5: Add to coverage and format**
 
