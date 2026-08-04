@@ -38,7 +38,7 @@ Two pieces of groundwork already exist and this feature is their intended consum
    matching branch value, so confirming unchanged does what the drop implied. The field
    stays editable; if the user changes it, the card lands where the action actually put it
    and a toast names the real status.
-4. **The detail Status dropdown becomes a third trigger for the same flow.** For
+4. **The detail Status dropdown becomes a third trigger for the same flow.** (Revised 2026-08-04: this applies to Admins too whenever the edge has candidate actions; the Admin hatch covers only edges no action describes.) For
    non-Admins it lists only graph-allowed targets, and picking one opens the same
    picker/modal a drag would, reverting the field on cancel. A bare status write can never
    skip an action's side effects.

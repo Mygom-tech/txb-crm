@@ -1895,17 +1895,14 @@ Add `is_admin: false` to the `dealActions` resource's `initialData` so the defau
 Replace `triggerStatusChange`:
 
 ```js
-// An Admin sets the status directly — the documented recovery hatch. Everyone else goes
-// through the action that owns the transition, so the note, the task and the deal fields
-// that belong with the change are always recorded. Writing the status bare would reach
-// "Session Set" with no BAP details at all.
+// The action that owns a transition runs it — for everyone, Admins included. Whoever
+// changes the status, the note, the task and the deal fields that belong with the change
+// are recorded. A bare write would reach "Session Set" with no BAP details at all, and
+// would reach "Lost" with no reason, where CRMDeal.validate_lost_reason simply throws.
+//
+// The Admin hatch is for moves the state machine does NOT describe: only when no action
+// covers this edge does an Admin write directly. A non-Admin is refused there.
 async function triggerStatusChange(value) {
-  if (isAdmin.value) {
-    await triggerOnChange('status', value)
-    setLostReason()
-    return
-  }
-
   const candidates = candidateActions(
     transitions.value,
     doc.value?.pipeline_type,
@@ -1913,17 +1910,23 @@ async function triggerStatusChange(value) {
     value,
     availableActions.value,
   )
-  if (!candidates.length) {
+
+  if (candidates.length) {
+    const action = await chooseAction(candidates, value)
+    if (!action) return
+    await onTakeAction(action, prefillFor(action, value))
+    return
+  }
+
+  if (!isAdmin.value) {
     toast.error(
       __('"{0}" cannot be reached from "{1}".', [__(value), __(doc.value?.status)]),
     )
     return
   }
 
-  const action = await chooseAction(candidates, value)
-  if (!action) return
-
-  await onTakeAction(action, prefillFor(action, value))
+  await triggerOnChange('status', value)
+  setLostReason()
 }
 ```
 
@@ -2080,13 +2083,13 @@ In `fieldChange(value, df)`, before the existing `await triggerOnChange(...)`:
 
 ```js
 async function fieldChange(value, df) {
-  // A non-Admin changing a deal's status must go through the action that owns the
-  // transition, exactly as a kanban drop does — otherwise the same move records
-  // completely different data depending on which control was used.
+  // Changing a deal's status runs the action that owns the transition, exactly as a
+  // kanban drop does — otherwise the same move records completely different data
+  // depending on which control was used. This applies to Admins too: the hatch is for
+  // edges the state machine does not describe, not for skipping the form.
   if (
     props.doctype === 'CRM Deal' &&
     df.fieldname === 'status' &&
-    !isDealAdmin.value &&
     value !== doc.value?.status
   ) {
     const candidates = candidateActions(
@@ -2096,19 +2099,23 @@ async function fieldChange(value, df) {
       value,
       dealActions.data?.actions || [],
     )
-    if (!candidates.length) return
 
-    const action = await chooseAction(candidates, value)
-    if (!action) return
+    if (candidates.length) {
+      const action = await chooseAction(candidates, value)
+      if (!action) return
 
-    const result = await runAction(props.docname, action, {
-      defaults: prefillFor(action, value),
-    })
-    if (!result) return
+      const result = await runAction(props.docname, action, {
+        defaults: prefillFor(action, value),
+      })
+      if (!result) return
 
-    dealActions.reload()
-    emit('reload')
-    return
+      dealActions.reload()
+      emit('reload')
+      return
+    }
+
+    // No action covers this edge. Only an Admin may write it bare.
+    if (!isDealAdmin.value) return
   }
 
   // ...existing body...
