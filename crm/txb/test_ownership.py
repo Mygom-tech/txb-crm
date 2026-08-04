@@ -12,7 +12,7 @@ reaches them.
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
-from crm.txb.constants import ADMIN_ROLE, OWNER_FIELDS
+from crm.txb.constants import ADMIN_ROLE
 
 SALESMAN = "txb-owner-sales@example.com"
 OTHER_SALESMAN = "txb-owner-sales2@example.com"

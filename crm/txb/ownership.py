@@ -6,6 +6,10 @@ any one screen. Every write path -- the side panel, list bulk edit, Kanban,
 guarding there closes all of them at once. The same reasoning put the status rules in
 `crm.txb.permissions`.
 
+Also governs `crm.txb.pipelines.common.create_coaching_deal`, where a won Individual
+Session or Workshop spawns a Delivering Coaching deal -- the coach who ran the winning
+action owns the new deal.
+
 Replaces the `Auto Assign Lead Owner` and `Protect Lead Owner` Server Scripts and the
 `Lead Owner Read-Only` Form Script, which enforced nothing -- it injected CSS.
 """
@@ -27,8 +31,15 @@ def owner_field(doctype: str) -> str | None:
 def claim_owner_on_insert(doc, method=None):
 	"""Own every new record as the creating user.
 
-	Covers direct creation and all three conversions -- Lead to Contact, Lead to Deal and
-	Contact to Deal -- because in each the converting user is the session user.
+	Covers direct creation, Lead to Contact, and Contact to Deal, where the converting
+	user is the session user and no owner reaches this hook pre-populated.
+
+	Lead to Deal is the exception until TXB-106 Task 5 lands: `CRMLead.create_deal`
+	copies `lead_owner` onto `deal_owner` through `LEAD_DEAL_FIELD_MAP` before insert,
+	so for an *Admin* converter the field is already truthy and reads here as a
+	deliberate nomination -- leaving the deal with the lead's owner rather than the
+	Admin's. A non-Admin converter is overwritten as intended. Task 5 empties that map,
+	which removes the seam for both.
 	"""
 	field = owner_field(doc.doctype)
 	if not field or not doc.meta.has_field(field):
