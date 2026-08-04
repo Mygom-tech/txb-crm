@@ -172,6 +172,19 @@ def training_not_interested(deal, data):
 	)
 
 
+def reopen(deal, data: dict):
+	"""Return a lost opportunity to the top of the pipeline.
+
+	The lost reason is cleared, otherwise the deal carries a stale explanation for a
+	state it is no longer in.
+	"""
+	deal.lost_reason = None
+	if deal.meta.has_field("lost_reason_detail"):
+		deal.lost_reason_detail = ""
+
+	add_note(deal, "Opportunity Reopened", lines(f"Reason: {data.get('reopen_reason', '')}"))
+
+
 # --------------------------------------------------------------------------------------
 # Transitions
 # --------------------------------------------------------------------------------------
@@ -357,6 +370,24 @@ TRAINING_NOT_INTERESTED = {
 	],
 }
 
+REOPEN = {
+	"name": "reopen",
+	"label": "Reopen",
+	"from_states": [STATUS_NOT_INTERESTED],
+	"to_state": "Training submitted",
+	"changes_status": True,
+	"admin_only": False,
+	"handler": reopen,
+	"fields": [
+		{
+			"fieldname": "reopen_reason",
+			"label": "Why is this being reopened?",
+			"fieldtype": "Small Text",
+			"reqd": 1,
+		},
+	],
+}
+
 SELLING_TRAINING_ACTIONS = (
 	SET_DISCOVERY_MEETING,
 	RUN_DISCOVERY_MEETING,
@@ -367,4 +398,5 @@ SELLING_TRAINING_ACTIONS = (
 	SET_TRAINING_DATE,
 	TRAINING_RUN,
 	TRAINING_NOT_INTERESTED,
+	REOPEN,
 )

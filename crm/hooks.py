@@ -200,7 +200,15 @@ doc_events = {
 	},
 	"CRM Deal": {
 		# Guards every status-writing path: status field, Kanban, Take Action and the API.
-		"validate": ["crm.txb.permissions.guard_status_change"],
+		# guard_status_change is the role rule (TXB-105); guard_transition is the state
+		# machine (TXB-110). Role first, so a coach on Delivering Coaching hears the more
+		# specific message. Note the controller's own CRMDeal.validate() runs ahead of both
+		# (frappe Document.hook.compose), so a bare write to a Lost-type status is refused
+		# by validate_lost_reason before either guard is reached.
+		"validate": [
+			"crm.txb.permissions.guard_status_change",
+			"crm.txb.permissions.guard_transition",
+		],
 		"before_validate": [
 			"crm.txb.doc_events.deal.generate_registration_token",
 			"crm.txb.doc_events.deal.sync_contact_name",

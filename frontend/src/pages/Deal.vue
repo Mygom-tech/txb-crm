@@ -169,6 +169,7 @@
           doctype="CRM Deal"
           :docname="dealId"
           @reload="sections.reload"
+          @action-completed="reload = true"
           @beforeFieldChange="beforeStatusChange"
           @afterFieldChange="reloadResources"
         >
@@ -404,9 +405,16 @@ import {
 import { getView } from '@/utils/view'
 import { allowedStatusesFor } from '@/utils/pipelineStatuses'
 import { actionOptions, runAction } from '@/utils/takeAction'
+import {
+  allowedTargets,
+  candidateActions,
+  prefillFor,
+} from '@/utils/dealTransitions'
+import { chooseAction } from '@/utils/kanbanTransitions'
 import { getSettings } from '@/stores/settings'
 import { globalStore } from '@/stores/global'
 import { statusesStore } from '@/stores/statuses'
+import { transitionsStore } from '@/stores/transitions'
 import { getMeta } from '@/stores/meta'
 import { useDocument } from '@/data/document'
 import { whatsappEnabled } from '@/composables/whatsapp'
@@ -440,6 +448,8 @@ const { on } = useBroadcast()
 const { brand } = getSettings()
 const { $dialog, $socket, makeCall } = globalStore()
 const { statusOptions, getDealStatus, pipelineStatuses } = statusesStore()
+const { transitionMap } = transitionsStore()
+const isAdmin = computed(() => dealActions.data?.is_admin === true)
 const { doctypeMeta } = getMeta('CRM Deal')
 
 const { updateOnboardingStep, isOnboardingStepsCompleted } =
@@ -582,7 +592,7 @@ const dealActions = createResource({
   cache: ['deal-actions', props.dealId],
   makeParams: () => ({ deal: props.dealId }),
   auto: true,
-  initialData: { actions: [], can_change_status: true },
+  initialData: { actions: [], can_change_status: true, is_admin: false },
 })
 
 const availableActions = computed(() => dealActions.data?.actions || [])
@@ -594,9 +604,9 @@ const takeActionOptions = computed(() =>
   actionOptions(availableActions.value, onTakeAction),
 )
 
-async function onTakeAction(action) {
+async function onTakeAction(action, defaults) {
   try {
-    const result = await runAction(props.dealId, action)
+    const result = await runAction(props.dealId, action, { defaults })
     if (!result) return
 
     // An action writes the deal, a note, and often a task. Activities watches this ref
@@ -647,6 +657,19 @@ const statuses = computed(() => {
       doc.value?.status,
       pipelineStatuses.data,
     )
+  }
+
+  // Non-Admins are offered only what the state machine can actually reach, so a user
+  // never picks a status and then hears it was refused.
+  if (!isAdmin.value) {
+    const reachable = allowedTargets(
+      transitionMap.data?.transitions,
+      doc.value?.pipeline_type,
+      doc.value?.status,
+    )
+    if (reachable.length) {
+      customStatuses = [doc.value.status, ...reachable]
+    }
   }
 
   return statusOptions('deal', customStatuses, triggerStatusChange)
@@ -841,7 +864,39 @@ function triggerCall() {
   makeCall(mobile_no)
 }
 
+// The action that owns a transition runs it — for everyone, Admins included. Whoever
+// changes the status, the note, the task and the deal fields that belong with the change
+// are recorded. A bare write would reach "Session Set" with no BAP details at all, and
+// would reach "Lost" with no reason, where CRMDeal.validate_lost_reason simply throws.
+//
+// The Admin hatch is for moves the state machine does NOT describe: only when no action
+// covers this edge does an Admin write directly. A non-Admin is refused there.
 async function triggerStatusChange(value) {
+  const candidates = candidateActions(
+    transitionMap.data?.transitions,
+    doc.value?.pipeline_type,
+    doc.value?.status,
+    value,
+    availableActions.value,
+  )
+
+  if (candidates.length) {
+    const action = await chooseAction(candidates, value)
+    if (!action) return
+    await onTakeAction(action, prefillFor(action, value))
+    return
+  }
+
+  if (!isAdmin.value) {
+    toast.error(
+      __('"{0}" cannot be reached from "{1}".', [
+        __(value),
+        __(doc.value?.status),
+      ]),
+    )
+    return
+  }
+
   await triggerOnChange('status', value)
   setLostReason()
 }

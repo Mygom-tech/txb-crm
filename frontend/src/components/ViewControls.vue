@@ -327,6 +327,7 @@ import { organizationsStore } from '@/stores/organizations'
 import { getMeta } from '@/stores/meta'
 import { requestKanbanTransition } from '@/utils/kanbanTransitions'
 import { revertCardMove } from '@/utils/kanbanRevert'
+import { transitionsStore } from '@/stores/transitions'
 import { isEmoji } from '@/utils'
 import {
   Combobox,
@@ -371,6 +372,7 @@ const { $dialog, $socket } = globalStore()
 const { reload: reloadView, getDefaultView, getView } = viewsStore()
 const { isManager } = usersStore()
 const { organizations } = organizationsStore()
+const { transitionMap, isAdmin } = transitionsStore()
 
 const list = defineModel({ type: Object, default: () => ({}) })
 const loadMore = defineModel('loadMore', { type: Boolean })
@@ -1038,6 +1040,17 @@ function updateKanbanSettings(data) {
   }
 }
 
+// The dragged row, re-resolved by name in the live column data — never a captured
+// reference, for the same reason revertCardMove re-resolves (Load More and view
+// switches replace the column arrays wholesale).
+function findCard(itemName) {
+  for (const column of list.value?.data?.data || []) {
+    const found = (column.data || []).find((row) => row.name === itemName)
+    if (found) return found
+  }
+  return null
+}
+
 async function handleKanbanTransition(data) {
   const fieldname = view.value.column_field
   const viewName = view.value.name
@@ -1075,25 +1088,56 @@ async function handleKanbanTransition(data) {
     fieldLabel =
       getFields()?.find((f) => f.fieldname === fieldname)?.label || fieldname
 
-    const confirmed = await requestKanbanTransition({
+    const isDealStatus = props.doctype === 'CRM Deal' && fieldname === 'status'
+
+    // The card row carries pipeline_type (see Task 11); the available actions are
+    // per-deal and already filtered by status and role on the server.
+    const card = findCard(data.item)
+    let available = []
+    if (isDealStatus) {
+      const response = await call('crm.txb.api.actions.get_available_actions', {
+        deal: data.item,
+      })
+      available = response?.actions || []
+    }
+
+    const outcome = await requestKanbanTransition({
       doctype: props.doctype,
       itemName: data.item,
       fieldname,
       fieldLabel,
       from: data.from,
       to: data.to,
+      pipelineType: card?.pipeline_type,
+      transitions: transitionMap.data?.transitions,
+      available,
+      isAdmin: isAdmin(),
     })
-    if (!confirmed) {
+
+    if (!outcome.proceed) {
       revert()
       return
     }
 
-    await call('frappe.client.set_value', {
-      doctype: props.doctype,
-      name: data.item,
-      fieldname,
-      value: data.to,
-    })
+    // execute_action already committed the change; writing it again would be a second
+    // save and would race the first.
+    if (!outcome.alreadySaved) {
+      await call('frappe.client.set_value', {
+        doctype: props.doctype,
+        name: data.item,
+        fieldname,
+        value: data.to,
+      })
+    }
+
+    // A branching action may land the deal somewhere other than the dropped column.
+    // The server's answer wins.
+    if (outcome.finalStatus && outcome.finalStatus !== data.to) {
+      revert()
+      list.value.reload()
+      toast.success(__('Moved to {0}', [__(outcome.finalStatus)]))
+      return
+    }
   } catch (error) {
     revert()
     toast.error(

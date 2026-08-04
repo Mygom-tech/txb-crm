@@ -38,6 +38,9 @@
       }),
       onNewClick: (column) => onNewClick(column),
     }"
+    :transition-guard="
+      kanbanColumnField === 'status' ? dealTransitionGuard : null
+    "
     @update="(data) => viewControls.updateKanbanSettings(data)"
     @loadMore="(columnName) => viewControls.loadMoreKanban(columnName)"
   >
@@ -264,7 +267,10 @@ import { globalStore } from '@/stores/global'
 import { usersStore } from '@/stores/users'
 import { organizationsStore } from '@/stores/organizations'
 import { statusesStore } from '@/stores/statuses'
+import { transitionsStore } from '@/stores/transitions'
 import { callEnabled } from '@/composables/telephony'
+import { canDropOn } from '@/utils/dealTransitions'
+import { allowedStatusesFor } from '@/utils/pipelineStatuses'
 import { formatDate, timeAgo, website, formatTime } from '@/utils'
 import { timestampCell } from '@/composables/useTimelinePreferences'
 import { useOnboarding, useTelemetry } from 'frappe-ui/frappe'
@@ -277,7 +283,8 @@ const { getFormattedPercent, getFormattedFloat, getFormattedCurrency } =
 const { makeCall } = globalStore()
 const { getUser } = usersStore()
 const { getOrganization } = organizationsStore()
-const { getDealStatus } = statusesStore()
+const { getDealStatus, pipelineStatuses } = statusesStore()
+const { transitionMap, canChangeStatusFor, isAdmin } = transitionsStore()
 const { updateOnboardingStep } = useOnboarding('frappecrm')
 const { capture } = useTelemetry()
 const { showModal } = useDoctypeModal()
@@ -295,6 +302,30 @@ const loadMore = ref(1)
 const triggerResize = ref(1)
 const updatedPageCount = ref(20)
 const viewControls = ref(null)
+
+const kanbanColumnField = computed(() => deals.value?.params?.column_field)
+
+// Only a status board has transition rules; a board grouped by owner or any other
+// field keeps plain drag-and-drop.
+function dealTransitionGuard({ from, to, card }) {
+  const pipeline = card?.pipeline_type
+  if (!pipeline) return true
+
+  // An Admin may move a deal anywhere inside its own pipeline (the recovery hatch);
+  // everyone else is held to the state machine.
+  const adminStatuses = isAdmin()
+    ? allowedStatusesFor(pipeline, from, pipelineStatuses.data)
+    : null
+
+  return canDropOn(
+    transitionMap.data?.transitions,
+    pipeline,
+    from,
+    to,
+    canChangeStatusFor(pipeline),
+    adminStatuses,
+  )
+}
 
 function getRow(name, field) {
   function getValue(value) {

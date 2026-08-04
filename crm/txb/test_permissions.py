@@ -9,7 +9,7 @@ rule directly rather than through any one of those paths, since that is the poin
 """
 
 import frappe
-from frappe.tests import IntegrationTestCase
+from frappe.tests.utils import FrappeTestCase
 
 from crm.txb.constants import ADMIN_ROLE, PIPELINE_DELIVERING_COACHING
 from crm.txb.permissions import can_change_status
@@ -36,7 +36,7 @@ def ensure_user(email: str, roles: list[str]):
 	return user
 
 
-class TestStatusPermission(IntegrationTestCase):
+class TestStatusPermission(FrappeTestCase):
 	@classmethod
 	def setUpClass(cls):
 		super().setUpClass()
@@ -133,7 +133,7 @@ class TestStatusPermission(IntegrationTestCase):
 		).insert(ignore_permissions=True)
 
 
-class TestActionVisibility(IntegrationTestCase):
+class TestActionVisibility(FrappeTestCase):
 	"""What the Take Action menu offers must match what execute_action would allow."""
 
 	def actions_for(self, status: str, may_change_status: bool):
@@ -275,3 +275,23 @@ class TestActionVisibility(IntegrationTestCase):
 			a for a in get_actions(PIPELINE_DELIVERING_COACHING) if a["name"] == "log_coaching_call"
 		)
 		self.assertTrue(is_permitted(log_call, may_change_status=False))
+
+	def test_every_status_changing_action_declares_a_target(self):
+		"""A target set only inside a handler is invisible to the transition graph.
+
+		`mark_lost` used to be the only record that these actions reach "Lost", which
+		meant the derived graph could not know about them -- the same blind spot that
+		let `changes_status` be inferred wrongly from `to_state` before PR #15.
+		"""
+		from crm.txb.pipelines.actions import PIPELINE_ACTIONS
+
+		undeclared = [
+			(pipeline, action["name"])
+			for pipeline, actions in PIPELINE_ACTIONS.items()
+			for action in actions
+			if action.get("changes_status")
+			and not action.get("to_state")
+			and not (action.get("to_state_map") or {})
+		]
+
+		self.assertEqual(undeclared, [])

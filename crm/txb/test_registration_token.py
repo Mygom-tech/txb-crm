@@ -2,7 +2,7 @@
 # See license.txt
 
 import frappe
-from frappe.tests import IntegrationTestCase
+from frappe.tests.utils import FrappeTestCase
 
 from crm.patches.v1_0.reissue_registration_tokens import is_predictable
 from crm.txb.constants import (
@@ -34,7 +34,7 @@ def workshop_deal(name="CRM-DEAL-2026-00356", token=None):
 	return FakeDeal(name, PIPELINE_WORKSHOP, STATUS_WORKSHOP_SET, token)
 
 
-class TestRegistrationToken(IntegrationTestCase):
+class TestRegistrationToken(FrappeTestCase):
 	def test_token_is_not_derived_from_deal_name(self):
 		"""The old scheme made the token the deal number; it must not be guessable now."""
 		deal = workshop_deal()

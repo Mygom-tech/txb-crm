@@ -11,7 +11,7 @@ import json
 import frappe
 from frappe import _
 
-from crm.txb.permissions import can_change_status
+from crm.txb.permissions import can_change_status, is_admin
 from crm.txb.pipelines.actions import find_action, get_actions, resolve_to_state
 
 DEAL_DOCTYPE = "CRM Deal"
@@ -44,11 +44,20 @@ def get_available_actions(deal: str) -> dict:
 				"name": action["name"],
 				"label": action["label"],
 				"to_state": action["to_state"],
+				# The board pre-selects a branch value from the column the card was
+				# dropped on, which it can only do if it can see the mapping.
+				"to_state_map": action.get("to_state_map") or {},
 				"fields": action["fields"],
 			}
 		)
 
-	return {"actions": available, "can_change_status": may_change_status}
+	return {
+		"actions": available,
+		"can_change_status": may_change_status,
+		# The recovery hatch is a role, so the browser must be told about it rather than
+		# inferring it from can_change_status -- which is a different, per-pipeline rule.
+		"is_admin": is_admin(),
+	}
 
 
 def is_available(action: dict, status: str | None) -> bool:
@@ -111,13 +120,21 @@ def execute_action(deal: str, action: str, data: str | dict | None = None) -> di
 	values = parse_data(data)
 	validate_required(spec, values)
 
-	spec["handler"](doc, values)
+	# Tells `guard_transition` this write is an action rather than a bare status set.
+	# Scoped to this document's name, not just truthy, so the exemption cannot leak onto
+	# another CRM Deal saved inside the same request. Cleared in `finally` so a throw
+	# cannot leave it armed for the rest of the request.
+	frappe.flags.txb_action = doc.name
+	try:
+		spec["handler"](doc, values)
 
-	to_state = resolve_to_state(spec, values)
-	if to_state:
-		doc.status = to_state
+		to_state = resolve_to_state(spec, values)
+		if to_state:
+			doc.status = to_state
 
-	doc.save()
+		doc.save()
+	finally:
+		frappe.flags.txb_action = None
 
 	return {"deal": doc.name, "status": doc.status}
 

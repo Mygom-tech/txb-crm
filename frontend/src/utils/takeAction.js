@@ -58,13 +58,16 @@ export function requiredFieldnames(action) {
  *
  * Resolves with the server's response, or null when the user cancels.
  */
-export async function runAction(deal, action, { today } = {}) {
+export async function runAction(deal, action, { today, defaults } = {}) {
   const isoToday = today || new Date().toISOString().split('T')[0]
 
   const data = await renderFieldLayoutDialog({
     title: __(action.label),
     fields: actionFields(action, isoToday),
     required: requiredFieldnames(action),
+    // A kanban drop pre-selects the branch value implied by the column, leaving it
+    // editable — the user may change their mind, and the card follows the result.
+    defaults: defaults || {},
     submitLabel: __('Confirm'),
     cancelLabel: __('Cancel'),
   })

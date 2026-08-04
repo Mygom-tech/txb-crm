@@ -8,6 +8,7 @@ import { createDialog } from '@/utils/dialogs'
 import {
   requestKanbanTransition,
   confirmKanbanTransition,
+  chooseAction,
 } from '@/utils/kanbanTransitions'
 
 const ctx = {
@@ -75,16 +76,74 @@ describe('confirmKanbanTransition', () => {
   })
 })
 
-describe('requestKanbanTransition', () => {
+describe('requestKanbanTransition — non-deal boards keep the confirm', () => {
   beforeEach(() => {
     createDialog.mockReset()
   })
 
-  it('delegates to the confirm dialog', async () => {
+  it('wraps the confirm result in the outcome shape', async () => {
     const promise = requestKanbanTransition(ctx)
     lastDialogOptions()
       .actions.find((a) => a.label === 'OK')
       .onClick({ close: vi.fn() })
-    await expect(promise).resolves.toBe(true)
+
+    await expect(promise).resolves.toEqual({
+      proceed: true,
+      alreadySaved: false,
+      finalStatus: 'Contacted',
+    })
+  })
+
+  it('reports refusal when cancelled', async () => {
+    const promise = requestKanbanTransition(ctx)
+    lastDialogOptions()
+      .actions.find((a) => a.label === 'Cancel')
+      .onClick({ close: vi.fn() })
+
+    await expect(promise).resolves.toMatchObject({
+      proceed: false,
+      alreadySaved: false,
+    })
+  })
+})
+
+describe('chooseAction', () => {
+  beforeEach(() => {
+    createDialog.mockReset()
+  })
+
+  it('does not ask when only one action applies', async () => {
+    const only = { name: 'set_vcs_call', label: 'Set VCS Call' }
+    await expect(chooseAction([only], 'VCS call set')).resolves.toBe(only)
+    expect(createDialog).not.toHaveBeenCalled()
+  })
+
+  it('asks which action when several reach the same status', async () => {
+    const candidates = [
+      { name: 'cancel_workshop', label: 'Cancel Workshop' },
+      { name: 'workshop_not_interested', label: 'Mark as "Not Interested"' },
+    ]
+    const promise = chooseAction(candidates, 'Lost')
+
+    const options = lastDialogOptions()
+    expect(options.actions.map((a) => a.label)).toEqual([
+      'Cancel Workshop',
+      'Mark as "Not Interested"',
+    ])
+
+    options.actions[1].onClick({ close: vi.fn() })
+    await expect(promise).resolves.toBe(candidates[1])
+  })
+
+  it('resolves null when dismissed', async () => {
+    const promise = chooseAction(
+      [
+        { name: 'a', label: 'A' },
+        { name: 'b', label: 'B' },
+      ],
+      'Lost',
+    )
+    lastDialogOptions().onDismiss()
+    await expect(promise).resolves.toBeNull()
   })
 })

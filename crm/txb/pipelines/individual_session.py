@@ -149,6 +149,19 @@ def session_won(deal, data):
 	create_coaching_deal(deal, data.get("coaching_notes") or "")
 
 
+def reopen(deal, data: dict):
+	"""Return a lost opportunity to the top of the pipeline.
+
+	The lost reason is cleared, otherwise the deal carries a stale explanation for a
+	state it is no longer in.
+	"""
+	deal.lost_reason = None
+	if deal.meta.has_field("lost_reason_detail"):
+		deal.lost_reason_detail = ""
+
+	add_note(deal, "Opportunity Reopened", lines(f"Reason: {data.get('reopen_reason', '')}"))
+
+
 # --------------------------------------------------------------------------------------
 # Transitions
 # --------------------------------------------------------------------------------------
@@ -156,7 +169,10 @@ def session_won(deal, data):
 BOOK_BAP = {
 	"name": "book_bap",
 	"label": "Book a BAP",
-	"from_states": ["Submitted"],
+	# "Follow-up" is where a rescheduled BAP lands. Booking is exactly how it comes back,
+	# and the form already records everything re-booking needs -- so this is a from_state,
+	# not a new action.
+	"from_states": ["Submitted", "Follow-up"],
 	"to_state": "Session Set",
 	"changes_status": True,
 	"admin_only": False,
@@ -224,7 +240,10 @@ CANCEL_BAP = {
 	"name": "cancel_bap",
 	"label": "Cancel a BAP",
 	"from_states": [],  # available from any status, as before
-	"to_state": None,  # handler sets Lost together with its reason
+	# Declared, not left to the handler: an invisible target cannot be enforced by the
+	# transition graph. `cancel_bap` still sets the reason via mark_lost, and
+	# execute_action then assigns the same value -- idempotent.
+	"to_state": "Lost",
 	"changes_status": True,
 	"admin_only": False,
 	"handler": cancel_bap,
@@ -243,7 +262,10 @@ NOT_INTERESTED = {
 	"name": "not_interested",
 	"label": 'Mark as "Not Interested"',
 	"from_states": [],
-	"to_state": None,  # handler sets Lost together with its reason
+	# Declared, not left to the handler: an invisible target cannot be enforced by the
+	# transition graph. `not_interested` still sets the reason via mark_lost, and
+	# execute_action then assigns the same value -- idempotent.
+	"to_state": "Lost",
 	"changes_status": True,
 	"admin_only": False,
 	"handler": not_interested,
@@ -267,6 +289,24 @@ SESSION_WON = {
 	],
 }
 
+REOPEN = {
+	"name": "reopen",
+	"label": "Reopen",
+	"from_states": ["Lost"],
+	"to_state": "Submitted",
+	"changes_status": True,
+	"admin_only": False,
+	"handler": reopen,
+	"fields": [
+		{
+			"fieldname": "reopen_reason",
+			"label": "Why is this being reopened?",
+			"fieldtype": "Small Text",
+			"reqd": 1,
+		},
+	],
+}
+
 INDIVIDUAL_SESSION_ACTIONS = (
 	BOOK_BAP,
 	RUN_BAP,
@@ -274,4 +314,5 @@ INDIVIDUAL_SESSION_ACTIONS = (
 	CANCEL_BAP,
 	NOT_INTERESTED,
 	SESSION_WON,
+	REOPEN,
 )

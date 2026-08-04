@@ -188,6 +188,19 @@ def workshop_not_interested(deal, data):
 		)
 
 
+def reopen(deal, data: dict):
+	"""Return a lost opportunity to the top of the pipeline.
+
+	The lost reason is cleared, otherwise the deal carries a stale explanation for a
+	state it is no longer in.
+	"""
+	deal.lost_reason = None
+	if deal.meta.has_field("lost_reason_detail"):
+		deal.lost_reason_detail = ""
+
+	add_note(deal, "Opportunity Reopened", lines(f"Reason: {data.get('reopen_reason', '')}"))
+
+
 # --------------------------------------------------------------------------------------
 # Transitions
 # --------------------------------------------------------------------------------------
@@ -253,7 +266,9 @@ RUN_WORKSHOP = {
 		"ws_outcome": {
 			"Won - proceed to coaching": "Workshop ran",
 			"Follow-up needed": "Workshop rescheduling in progress",
-			# "Lost" is set by the handler along with its reason.
+			# Declared so the graph knows this branch exists; mark_lost still writes
+			# the reason alongside it.
+			"Lost": "Lost",
 		}
 	},
 	"changes_status": True,
@@ -308,7 +323,10 @@ CANCEL_WORKSHOP = {
 	"name": "cancel_workshop",
 	"label": "Cancel Workshop",
 	"from_states": [],  # available from any status, as before
-	"to_state": None,  # handler sets Lost together with its reason
+	# Declared, not left to the handler: an invisible target cannot be enforced by the
+	# transition graph. `cancel_workshop` still sets the reason via mark_lost, and
+	# execute_action then assigns the same value -- idempotent.
+	"to_state": "Lost",
 	"changes_status": True,
 	"admin_only": False,
 	"handler": cancel_workshop,
@@ -327,7 +345,10 @@ WORKSHOP_NOT_INTERESTED = {
 	"name": "workshop_not_interested",
 	"label": 'Mark as "Not Interested"',
 	"from_states": [],
-	"to_state": None,  # handler sets Lost together with its reason
+	# Declared, not left to the handler: an invisible target cannot be enforced by the
+	# transition graph. `workshop_not_interested` still sets the reason via mark_lost, and
+	# execute_action then assigns the same value -- idempotent.
+	"to_state": "Lost",
 	"changes_status": True,
 	"admin_only": False,
 	"handler": workshop_not_interested,
@@ -336,6 +357,24 @@ WORKSHOP_NOT_INTERESTED = {
 		{"fieldname": "ni_notes", "label": "Additional Notes", "fieldtype": "Small Text"},
 		{"fieldname": "ni_followup", "label": "Are you going to follow up?", "fieldtype": "Select", "options": YES_NO, "depends_on": "eval:doc.ni_reason=='Other'"},
 		{"fieldname": "ni_followup_date", "label": "Follow-Up Date", "fieldtype": "Date", "depends_on": "eval:doc.ni_reason=='Other' && doc.ni_followup=='Yes'"},
+	],
+}
+
+REOPEN = {
+	"name": "reopen",
+	"label": "Reopen",
+	"from_states": ["Lost"],
+	"to_state": "Workshop submitted",
+	"changes_status": True,
+	"admin_only": False,
+	"handler": reopen,
+	"fields": [
+		{
+			"fieldname": "reopen_reason",
+			"label": "Why is this being reopened?",
+			"fieldtype": "Small Text",
+			"reqd": 1,
+		},
 	],
 }
 
@@ -348,4 +387,5 @@ WORKSHOP_ACTIONS = (
 	RESCHEDULE_WORKSHOP,
 	CANCEL_WORKSHOP,
 	WORKSHOP_NOT_INTERESTED,
+	REOPEN,
 )

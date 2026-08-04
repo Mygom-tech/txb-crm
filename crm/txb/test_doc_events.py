@@ -10,7 +10,7 @@ test runner, the better.
 """
 
 import frappe
-from frappe.tests import IntegrationTestCase
+from frappe.tests.utils import FrappeTestCase
 
 from crm.txb.doc_events.call_log import default_phone_numbers
 from crm.txb.doc_events.contact import sync_organization
@@ -37,7 +37,7 @@ class FakeContactRow:
 		self.is_primary = is_primary
 
 
-class TestCallLogEvents(IntegrationTestCase):
+class TestCallLogEvents(FrappeTestCase):
 	def test_missing_numbers_get_placeholder(self):
 		"""An empty from/to crashes the frontend, so both are backfilled."""
 		doc = FakeDoc(**{"from": None, "to": ""})
@@ -52,7 +52,7 @@ class TestCallLogEvents(IntegrationTestCase):
 		self.assertEqual(doc.get("to"), "+37061111111")
 
 
-class TestLeadEvents(IntegrationTestCase):
+class TestLeadEvents(FrappeTestCase):
 	def test_disqualified_lead_gets_a_default_reason(self):
 		doc = FakeDoc(status="Disqualified", lost_reason=None)
 		default_disqualified_reason(doc)
@@ -69,7 +69,7 @@ class TestLeadEvents(IntegrationTestCase):
 		self.assertIsNone(doc.lost_reason)
 
 
-class TestDealEvents(IntegrationTestCase):
+class TestDealEvents(FrappeTestCase):
 	def test_primary_contact_prefers_the_primary_flag(self):
 		doc = FakeDoc(contacts=[FakeContactRow("Second"), FakeContactRow("First", is_primary=1)])
 		self.assertEqual(primary_contact(doc), "First")
@@ -90,7 +90,7 @@ class TestDealEvents(IntegrationTestCase):
 		self.assertEqual(doc.last_name, "Already")
 
 
-class TestContactOrganizationSync(IntegrationTestCase):
+class TestContactOrganizationSync(FrappeTestCase):
 	"""Requires the site's custom Contact field, so these touch the DB."""
 
 	def setUp(self):
