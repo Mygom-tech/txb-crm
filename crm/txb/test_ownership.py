@@ -117,3 +117,96 @@ class TestOwnerOnInsert(OwnershipTestCase):
 		finally:
 			frappe.set_user("Administrator")
 		self.assertEqual(deal.deal_owner, SALESMAN)
+
+
+class TestOwnerChangeGuard(OwnershipTestCase):
+	def test_a_salesman_cannot_take_an_owned_deal(self):
+		deal = self.make_deal(deal_owner=OTHER_SALESMAN)
+
+		frappe.set_user(SALESMAN)
+		deal.reload()
+		deal.deal_owner = SALESMAN
+
+		with self.assertRaises(frappe.PermissionError):
+			deal.save(ignore_permissions=True)
+
+	def test_a_salesman_cannot_take_an_unowned_deal(self):
+		"""The hole in the script this replaces: it returned early when there was no
+		previous owner, so anyone could claim an unowned record."""
+		deal = self.make_deal()
+		frappe.db.set_value("CRM Deal", deal.name, "deal_owner", "")
+
+		frappe.set_user(SALESMAN)
+		deal.reload()
+		deal.deal_owner = SALESMAN
+
+		with self.assertRaises(frappe.PermissionError):
+			deal.save(ignore_permissions=True)
+
+	def test_a_salesman_cannot_take_an_owned_lead(self):
+		lead = self.make_lead(lead_owner=OTHER_SALESMAN)
+
+		frappe.set_user(SALESMAN)
+		lead.reload()
+		lead.lead_owner = SALESMAN
+
+		with self.assertRaises(frappe.PermissionError):
+			lead.save(ignore_permissions=True)
+
+	def test_a_salesman_cannot_take_an_owned_contact(self):
+		contact = self.make_contact(custom_contact_owner=OTHER_SALESMAN)
+
+		frappe.set_user(SALESMAN)
+		contact.reload()
+		contact.custom_contact_owner = SALESMAN
+
+		with self.assertRaises(frappe.PermissionError):
+			contact.save(ignore_permissions=True)
+
+	def test_an_admin_may_change_any_owner(self):
+		deal = self.make_deal(deal_owner=OTHER_SALESMAN)
+
+		frappe.set_user(ADMIN)
+		deal.reload()
+		deal.deal_owner = SALESMAN
+		deal.save(ignore_permissions=True)
+
+		self.assertEqual(frappe.db.get_value("CRM Deal", deal.name, "deal_owner"), SALESMAN)
+
+	def test_a_salesman_may_still_edit_other_fields_on_a_deal_they_own(self):
+		"""Day-to-day work must not break; the ticket restricts one field, not the record."""
+		deal = self.make_deal(deal_owner=SALESMAN)
+
+		frappe.set_user(SALESMAN)
+		deal.reload()
+		deal.next_step = "Call them back"
+		deal.save(ignore_permissions=True)
+
+		self.assertEqual(frappe.db.get_value("CRM Deal", deal.name, "next_step"), "Call them back")
+
+	def test_saving_without_touching_the_owner_is_allowed(self):
+		"""A client that round-trips the whole document must not trip the guard."""
+		deal = self.make_deal(deal_owner=OTHER_SALESMAN)
+
+		frappe.set_user(SALESMAN)
+		deal.reload()
+		deal.deal_owner = OTHER_SALESMAN  # unchanged
+		deal.next_step = "Unchanged owner"
+		deal.save(ignore_permissions=True)
+
+		self.assertEqual(
+			frappe.db.get_value("CRM Deal", deal.name, "deal_owner"), OTHER_SALESMAN
+		)
+
+	def test_the_error_names_the_claim_request(self):
+		"""The DoD asks for a clear error, not a silent revert."""
+		deal = self.make_deal(deal_owner=OTHER_SALESMAN)
+
+		frappe.set_user(SALESMAN)
+		deal.reload()
+		deal.deal_owner = SALESMAN
+
+		with self.assertRaises(frappe.PermissionError) as caught:
+			deal.save(ignore_permissions=True)
+
+		self.assertIn("Request Ownership", str(caught.exception))

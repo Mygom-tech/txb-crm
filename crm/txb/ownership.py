@@ -57,3 +57,33 @@ def claim_owner_on_insert(doc, method=None):
 		return
 
 	doc.set(field, frappe.session.user)
+
+
+def guard_owner_change(doc, method=None):
+	"""Refuse an owner change made by anyone but an Admin.
+
+	Inserts are exempt -- `claim_owner_on_insert` has already decided the initial owner,
+	and the two rules would otherwise contradict each other.
+
+	This fires for unowned records too. That is the requirement, and the hole in the
+	script it replaces: `protect_owner` returned early when there was no previous owner,
+	so the first person to touch an unassigned record could claim it.
+	"""
+	if doc.is_new():
+		return
+
+	field = owner_field(doc.doctype)
+	if not field or not doc.meta.has_field(field):
+		return
+
+	if not doc.has_value_changed(field):
+		return
+
+	if is_admin():
+		return
+
+	frappe.throw(
+		_("Only an Admin can change the owner. Use Request Ownership to ask for this record."),
+		frappe.PermissionError,
+		title=_("Not permitted"),
+	)

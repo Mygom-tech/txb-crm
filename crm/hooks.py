@@ -164,7 +164,7 @@ doc_events = {
 	"Contact": {
 		"before_insert": ["crm.txb.ownership.claim_owner_on_insert"],
 		"before_validate": ["crm.txb.doc_events.contact.sync_organization"],
-		"validate": ["crm.api.contact.validate"],
+		"validate": ["crm.api.contact.validate", "crm.txb.ownership.guard_owner_change"],
 	},
 	"CRM Lead": {
 		# prevent_duplicate first: it throws, so nothing else should run before it.
@@ -172,10 +172,8 @@ doc_events = {
 			"crm.txb.doc_events.lead.prevent_duplicate",
 			"crm.txb.ownership.claim_owner_on_insert",
 		],
-		"before_validate": [
-			"crm.txb.doc_events.lead.protect_owner",
-			"crm.txb.doc_events.lead.default_disqualified_reason",
-		],
+		"before_validate": ["crm.txb.doc_events.lead.default_disqualified_reason"],
+		"validate": ["crm.txb.ownership.guard_owner_change"],
 	},
 	"CRM Call Log": {
 		"before_validate": ["crm.txb.doc_events.call_log.default_phone_numbers"],
@@ -209,6 +207,9 @@ doc_events = {
 		"validate": [
 			"crm.txb.permissions.guard_status_change",
 			"crm.txb.permissions.guard_transition",
+			# Owner last: a user changing status and owner together hears about the
+			# status rule first, which is the more common mistake.
+			"crm.txb.ownership.guard_owner_change",
 		],
 		"before_insert": ["crm.txb.ownership.claim_owner_on_insert"],
 		"before_validate": [
