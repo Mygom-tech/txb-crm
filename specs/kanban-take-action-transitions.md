@@ -34,14 +34,28 @@ Two pieces of groundwork already exist and this feature is their intended consum
 2. **The graph is enforced for everyone on every path** — kanban, detail page, Take Action
    and REST. **Admins retain a free Status dropdown within the pipeline** as a documented
    recovery hatch, so an off-graph correction never requires a database edit.
+   *Revised 2026-08-04:* the hatch is narrower than first written. It covers only edges
+   the state machine does **not** describe. Where an action owns the edge, an Admin runs
+   that action like everyone else — see decision 4.
 3. **A branch drop pre-fills but does not lock.** The dropped column pre-selects the
    matching branch value, so confirming unchanged does what the drop implied. The field
    stays editable; if the user changes it, the card lands where the action actually put it
    and a toast names the real status.
-4. **The detail Status dropdown becomes a third trigger for the same flow.** (Revised 2026-08-04: this applies to Admins too whenever the edge has candidate actions; the Admin hatch covers only edges no action describes.) For
+4. **The detail Status dropdown becomes a third trigger for the same flow.** For
    non-Admins it lists only graph-allowed targets, and picking one opens the same
    picker/modal a drag would, reverting the field on cancel. A bare status write can never
    skip an action's side effects.
+
+   *Revised 2026-08-04, after testing:* **this applies to every role, Admins included,
+   whenever an action owns the target edge.** The original wording let Admins skip
+   straight to a bare write, which broke the hatch for the status that needs it most:
+   moving a deal to `Lost` bare hits `CRMDeal.validate_lost_reason` and throws, because
+   the reason is captured *by the action's form*. The rule is now:
+
+   | Target edge | Admin | Non-Admin |
+   | --- | --- | --- |
+   | Has candidate action(s) | picker (if >1) → modal → `execute_action` | same |
+   | No action describes it | bare write — the hatch | refused |
 5. **The dead ends are fixed as part of this ticket**, not documented and deferred (see
    *Recovery transitions*).
 
