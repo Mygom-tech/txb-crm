@@ -1,22 +1,84 @@
 import { createDialog } from '@/utils/dialogs'
+import { candidateActions, prefillFor } from '@/utils/dealTransitions'
+import { runAction } from '@/utils/takeAction'
+
+const DEAL_DOCTYPE = 'CRM Deal'
 
 /**
- * Extension seam for kanban transition rules.
+ * Decide — and for deals, perform — a kanban column transition.
  *
- * Future rules (per-doctype allow/block, validations, form-script hooks) go
- * INSIDE this function and must run BEFORE the confirm dialog — never
- * interrupt the user and then veto afterwards. Deliberately not a global
- * check registry: module-level registration duplicates under Vite HMR and
- * leaks state across vitest files.
+ * Deal status boards run the Take Action flow: pick the action (asking when more than
+ * one applies), open its form pre-filled from the dropped column, and let the server
+ * commit. Every other board keeps the plain confirm it has today.
  *
- * NOTE: client-side only, pure UX. Enforced transition rules belong in
- * server-side validate() (e.g. crm_deal.py), not here.
- *
- * @param {Object} ctx - { doctype, itemName, fieldname, fieldLabel, from, to }
- * @returns {Promise<boolean>} whether the transition may proceed
+ * @param {Object} ctx - { doctype, itemName, fieldname, fieldLabel, from, to,
+ *                         pipelineType, transitions, available }
+ * @returns {Promise<{proceed: boolean, alreadySaved: boolean, finalStatus: string}>}
+ *   `alreadySaved` tells the caller not to write the field itself — execute_action
+ *   already did. `finalStatus` is where the deal actually ended up, which for a
+ *   branching action may not be the column it was dropped on.
  */
 export async function requestKanbanTransition(ctx) {
-  return confirmKanbanTransition(ctx)
+  if (ctx.doctype === DEAL_DOCTYPE && ctx.fieldname === 'status') {
+    return dealStatusTransition(ctx)
+  }
+
+  const proceed = await confirmKanbanTransition(ctx)
+  return { proceed, alreadySaved: false, finalStatus: ctx.to }
+}
+
+async function dealStatusTransition(ctx) {
+  const refused = { proceed: false, alreadySaved: false, finalStatus: ctx.from }
+
+  const candidates = candidateActions(
+    ctx.transitions,
+    ctx.pipelineType,
+    ctx.from,
+    ctx.to,
+    ctx.available,
+  )
+
+  // The drag guard should have refused this drop, so reaching here means the board and
+  // the server disagree — refuse rather than guess.
+  if (!candidates.length) return refused
+
+  const action = await chooseAction(candidates, ctx.to)
+  if (!action) return refused
+
+  const result = await runAction(ctx.itemName, action, {
+    defaults: prefillFor(action, ctx.to),
+  })
+  if (!result) return refused
+
+  return { proceed: true, alreadySaved: true, finalStatus: result.status }
+}
+
+/**
+ * Which action the user meant. One candidate needs no question; more than one is asked
+ * rather than guessed — dropping a workshop on "Lost" can mean Run Workshop, Cancel
+ * Workshop or Not Interested, and picking silently would hide two of them.
+ *
+ * @returns {Promise<Object|null>} null when dismissed
+ */
+export function chooseAction(candidates, to) {
+  if (candidates.length === 1) return Promise.resolve(candidates[0])
+
+  return new Promise((resolve) => {
+    createDialog({
+      title: __('Choose an action'),
+      message: __('More than one action moves this opportunity to "{0}".', [
+        __(to),
+      ]),
+      onDismiss: () => resolve(null),
+      actions: candidates.map((action) => ({
+        label: __(action.label),
+        onClick: ({ close }) => {
+          resolve(action)
+          close()
+        },
+      })),
+    })
+  })
 }
 
 /**
