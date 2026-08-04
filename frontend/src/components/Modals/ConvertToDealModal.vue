@@ -126,6 +126,7 @@ import { sessionStore } from '@/stores/session'
 import { statusesStore } from '@/stores/statuses'
 import { viewsStore } from '@/stores/views'
 import { allowedStatusesFor } from '@/utils/pipelineStatuses'
+import { selectFieldOptions } from '@/utils/selectOptions'
 import { getMeta } from '@/stores/meta'
 import { showQuickEntryModal, quickEntryProps } from '@/composables/modals'
 import { isMobileView } from '@/composables/settings'
@@ -264,10 +265,11 @@ const pipelineTypeOptions = computed(() => {
   const field = dealMeta.value?.fields?.find(
     (f) => f.fieldname === 'pipeline_type',
   )
-  return (field?.options || '')
-    .split('\n')
-    .filter(Boolean)
-    .map((value) => ({ label: __(value), value }))
+  // Labels are translated here rather than in the helper, which stays presentation-free.
+  return selectFieldOptions(field).map(({ value }) => ({
+    label: __(value),
+    value,
+  }))
 })
 
 // Same source of truth as the deal page: the server-owned pipeline -> statuses map.
