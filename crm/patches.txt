@@ -34,3 +34,4 @@ crm.patches.v1_0.reissue_registration_tokens
 crm.patches.v1_0.disable_migrated_server_scripts
 crm.patches.v1_0.disable_pipeline_status_filter_script
 crm.patches.v1_0.disable_wizard_form_script
+crm.patches.v1_0.disable_convert_dialog_script

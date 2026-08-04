@@ -227,6 +227,49 @@ class TestActionVisibility(IntegrationTestCase):
 			"Active",
 		)
 
+	def test_every_from_state_is_selectable_in_its_pipeline(self):
+		"""An action whose from-state is not in PIPELINE_STATUSES can never be reached.
+
+		This caught a real dead end: "Training submitted" is Selling Training's entry
+		status, but both Form Script copies of the status map omitted it, so the status
+		could not be selected and "Set Discovery Meeting" was unreachable.
+		"""
+		from crm.txb.constants import PIPELINE_STATUSES
+		from crm.txb.pipelines.actions import PIPELINE_ACTIONS
+
+		unreachable = [
+			(pipeline, action["name"], state)
+			for pipeline, actions in PIPELINE_ACTIONS.items()
+			for action in actions
+			for state in (action.get("from_states") or [])
+			if state not in PIPELINE_STATUSES.get(pipeline, [])
+		]
+
+		self.assertEqual(unreachable, [])
+
+	def test_every_target_state_is_selectable_in_its_pipeline(self):
+		"""The converse: an action must not park a deal in a status the UI cannot show."""
+		from crm.txb.constants import PIPELINE_STATUSES
+		from crm.txb.pipelines.actions import PIPELINE_ACTIONS
+
+		# "Lost" is shared terminal state set with a reason rather than a pipeline status.
+		shared_terminal = {"Lost"}
+
+		stranded = []
+		for pipeline, actions in PIPELINE_ACTIONS.items():
+			allowed = set(PIPELINE_STATUSES.get(pipeline, [])) | shared_terminal
+			for action in actions:
+				targets = [action.get("to_state")] + [
+					target
+					for mapping in (action.get("to_state_map") or {}).values()
+					for target in mapping.values()
+				]
+				stranded += [
+					(pipeline, action["name"], t) for t in targets if t and t not in allowed
+				]
+
+		self.assertEqual(stranded, [])
+
 	def test_log_coaching_call_stays_unrestricted(self):
 		log_call = next(
 			a for a in get_actions(PIPELINE_DELIVERING_COACHING) if a["name"] == "log_coaching_call"
