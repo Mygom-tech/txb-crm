@@ -1706,7 +1706,7 @@ git commit -m "feat(deals): let the action's result decide where the card lands"
 **Files:**
 - Modify: `frontend/src/components/Kanban/KanbanView.vue`
 - Modify: `frontend/src/pages/Deals.vue:30` (pass the guard)
-- Modify: `crm/fcrm/doctype/crm_deal/crm_deal.py` (ensure `pipeline_type` is in kanban rows)
+- Modify: `crm/api/doc.py` (add `pipeline_type` to the fetched kanban `rows`)
 
 **Interfaces:**
 - Consumes: `canDropOn` (Task 7), `transitionsStore` (Task 8).
@@ -1882,7 +1882,7 @@ Check, on a Workshop kanban board as a non-Admin:
 
 ```bash
 cd frontend && npx prettier@3.2.5 --write src/components/Kanban/KanbanView.vue src/pages/Deals.vue
-cd .. && git add frontend/src/components/Kanban/KanbanView.vue frontend/src/pages/Deals.vue crm/fcrm/doctype/crm_deal/crm_deal.py
+cd .. && git add frontend/src/components/Kanban/KanbanView.vue frontend/src/pages/Deals.vue crm/api/doc.py
 git commit -m "feat(deals): grey out and refuse kanban columns the state machine forbids"
 ```
 
