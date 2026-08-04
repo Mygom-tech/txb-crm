@@ -1,6 +1,6 @@
 # Kanban drag-and-drop through Take Action, with enforced transition rules (TXB-110)
 
-Status: designed
+Status: implemented (2026-08-04) — browser verification outstanding, see PR
 Date: 2026-08-04
 Branch: `feature/TXB-110-kanban-transitions`
 Jira: [TXB-110](https://mygomtech.atlassian.net/browse/TXB-110)
