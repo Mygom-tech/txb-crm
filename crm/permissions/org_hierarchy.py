@@ -4,10 +4,7 @@
 import frappe
 from frappe.utils.caching import request_cache
 
-_OWNER_FIELD = {
-	"CRM Lead": "lead_owner",
-	"CRM Deal": "deal_owner",
-}
+from crm.txb.constants import OWNER_FIELDS
 
 
 def hierarchy_enabled() -> bool:
@@ -31,7 +28,8 @@ def _permission_query_conditions(user: str | None, doctype: str):
 	if "Sales Manager" in roles and not in_tree:
 		return ""
 
-	owner_field = _OWNER_FIELD[doctype]
+	# Only ever called with CRM Lead and CRM Deal; the map's Contact entry is inert here.
+	owner_field = OWNER_FIELDS[doctype]
 	DT = frappe.qb.DocType(doctype)
 	Todo = frappe.qb.DocType("ToDo").as_("_todo")
 

@@ -162,6 +162,7 @@ override_doctype_class = {
 
 doc_events = {
 	"Contact": {
+		"before_insert": ["crm.txb.ownership.claim_owner_on_insert"],
 		"before_validate": ["crm.txb.doc_events.contact.sync_organization"],
 		"validate": ["crm.api.contact.validate"],
 	},
@@ -169,7 +170,7 @@ doc_events = {
 		# prevent_duplicate first: it throws, so nothing else should run before it.
 		"before_insert": [
 			"crm.txb.doc_events.lead.prevent_duplicate",
-			"crm.txb.doc_events.lead.assign_owner",
+			"crm.txb.ownership.claim_owner_on_insert",
 		],
 		"before_validate": [
 			"crm.txb.doc_events.lead.protect_owner",
@@ -209,6 +210,7 @@ doc_events = {
 			"crm.txb.permissions.guard_status_change",
 			"crm.txb.permissions.guard_transition",
 		],
+		"before_insert": ["crm.txb.ownership.claim_owner_on_insert"],
 		"before_validate": [
 			"crm.txb.doc_events.deal.generate_registration_token",
 			"crm.txb.doc_events.deal.sync_contact_name",

@@ -15,16 +15,6 @@ ADMINISTRATOR = "Administrator"
 SYSTEM_MANAGER = "System Manager"
 
 
-def assign_owner(doc, method=None):
-	"""Own every new lead as the creating user.
-
-	NOTE: this overwrites any lead_owner supplied by the caller, so leads created through
-	an API or integration end up owned by whichever user that integration authenticates
-	as. Preserved from the original script; flagged as a follow-up.
-	"""
-	doc.lead_owner = frappe.session.user
-
-
 def protect_owner(doc, method=None):
 	"""Keep non-privileged users from reassigning an existing lead."""
 	if doc.is_new():
