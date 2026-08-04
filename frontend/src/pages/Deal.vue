@@ -598,7 +598,12 @@ async function onTakeAction(action) {
   try {
     const result = await runAction(props.dealId, action)
     if (!result) return
-    reloadResources()
+
+    // An action writes the deal, a note, and often a task. Activities watches this ref
+    // and reloads both the activity feed and the document, which is what refreshes
+    // doc.status — and that in turn re-filters the action menu through the watch below.
+    // (reloadResources takes a description of what changed; calling it bare did nothing.)
+    reload.value = true
     dealActions.reload()
   } catch (error) {
     toast.error(error.messages?.[0] || __('Could not complete the action'))
