@@ -540,9 +540,9 @@ local dev bench for development against real-shaped data with HMR.
    MariaDB — may prompt for DB root credentials):
    ```bash
    bench --site localhost set-config encryption_key '<key from site_config_backup.json>'
-   bench --site localhost --force restore ~/staging-backup/<ts>-database.sql.gz \
-     --with-public-files  ~/staging-backup/<ts>-files.tar \
-     --with-private-files ~/staging-backup/<ts>-private-files.tar
+   bench --site localhost --force restore ./apps/crm/prod-backup/20260804_073332-crm_txbconsulting_com-database.sql.gz \
+     --with-public-files  ./apps/crm/prod-backup/20260804_073332-crm_txbconsulting_com-files.tar \
+     --with-private-files ./apps/crm/prod-backup/20260804_073332-crm_txbconsulting_com-private-files.tar
    bench --site localhost migrate
    ```
 
@@ -558,6 +558,15 @@ local dev bench for development against real-shaped data with HMR.
 4. Run as usual: `bench start` + `yarn dev` → `localhost:8080/crm`.
    Logins are now prod's (restore replaced all users — Administrator
    password is prod's admin password).
+   - No `.env` files anywhere: Frappe config lives in
+     `sites/common_site_config.json` (bench-wide) and
+     `sites/localhost/site_config.json` (per-site), edited via
+     `bench set-config`. The compose stack's env vars exist only to write
+     these files inside containers.
+   - This CANNOT affect staging: the restore writes a copy into the local
+     site's database on the dev DB server; staging's database is on a
+     different host and referenced nowhere in local config. Everything run
+     as `bench --site localhost …` stays in the local sandbox.
 
 5. Hygiene: this puts real EU customer data on a dev machine — full-disk
    encryption expected, delete `~/staging-backup/` after restoring, and

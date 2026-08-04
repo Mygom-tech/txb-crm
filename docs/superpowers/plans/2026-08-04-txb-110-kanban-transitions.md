@@ -16,7 +16,7 @@
 - Never run `bench migrate` or Prisma-style migrations. Backend changes here need no schema change.
 - Tabs for indentation in Python (this app's style), 2-space in JS/Vue.
 - Run `npx prettier@3.2.5 --write` on changed frontend files. **Pinned version** — a newer prettier reformats unrelated code.
-- Frontend tests: `cd frontend && yarn test:run`. Backend: `bench --site <site> run-tests --module crm.txb.<module>`.
+- Frontend tests: `cd frontend && yarn test:run`. Backend: `bench --site localhost run-tests --module crm.txb.<module>`.
 - No `any`-style escape hatches: declare targets, never infer them (the `changes_status` lesson from PR #15).
 - Admin role means Frappe's `System Manager`; the constant is `crm.txb.constants.ADMIN_ROLE`.
 - Every new pure JS util must be added to `frontend/vitest.config.js` `coverage.include`.
@@ -65,7 +65,7 @@ Add to `class TestActionVisibility` in `crm/txb/test_permissions.py`:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `bench --site <site> run-tests --module crm.txb.test_permissions --test test_every_status_changing_action_declares_a_target`
+Run: `bench --site localhost run-tests --module crm.txb.test_permissions --test test_every_status_changing_action_declares_a_target`
 Expected: FAIL listing 4 actions — `cancel_workshop`, `workshop_not_interested`, `cancel_bap`, `not_interested`.
 
 - [ ] **Step 3: Declare the targets**
@@ -99,7 +99,7 @@ In `crm/txb/pipelines/workshop.py`, `RUN_WORKSHOP`, complete the map:
 
 - [ ] **Step 4: Run the full module to verify nothing regressed**
 
-Run: `bench --site <site> run-tests --module crm.txb.test_permissions`
+Run: `bench --site localhost run-tests --module crm.txb.test_permissions`
 Expected: PASS, including the pre-existing `test_every_target_state_is_selectable_in_its_pipeline`, which now covers these five actions.
 
 - [ ] **Step 5: Commit**
@@ -224,7 +224,7 @@ class TestTransitionGraph(IntegrationTestCase):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `bench --site <site> run-tests --module crm.txb.test_transitions`
+Run: `bench --site localhost run-tests --module crm.txb.test_transitions`
 Expected: FAIL — `ModuleNotFoundError: crm.txb.pipelines.transitions`.
 
 - [ ] **Step 3: Write the implementation**
@@ -307,7 +307,7 @@ def is_allowed(pipeline_type: str | None, from_status: str | None, to_status: st
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `bench --site <site> run-tests --module crm.txb.test_transitions`
+Run: `bench --site localhost run-tests --module crm.txb.test_transitions`
 Expected: PASS (12 tests).
 
 - [ ] **Step 5: Commit**
@@ -371,7 +371,7 @@ class TestNoDeadEnds(IntegrationTestCase):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `bench --site <site> run-tests --module crm.txb.test_transitions --test test_every_status_has_an_outgoing_transition`
+Run: `bench --site localhost run-tests --module crm.txb.test_transitions --test test_every_status_has_an_outgoing_transition`
 Expected: FAIL listing 4 dead ends.
 
 - [ ] **Step 3: Extend `book_bap` and add the reopen handler**
@@ -449,8 +449,8 @@ The handler body is repeated in all three files rather than shared: each pipelin
 
 - [ ] **Step 5: Run the tests**
 
-Run: `bench --site <site> run-tests --module crm.txb.test_transitions`
-Then: `bench --site <site> run-tests --module crm.txb.test_permissions`
+Run: `bench --site localhost run-tests --module crm.txb.test_transitions`
+Then: `bench --site localhost run-tests --module crm.txb.test_permissions`
 Expected: both PASS. `test_every_from_state_is_selectable_in_its_pipeline` and `test_every_target_state_is_selectable_in_its_pipeline` now cover the new actions.
 
 - [ ] **Step 6: Commit**
@@ -505,7 +505,7 @@ class TestTransitionApi(IntegrationTestCase):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `bench --site <site> run-tests --module crm.txb.test_transitions`
+Run: `bench --site localhost run-tests --module crm.txb.test_transitions`
 Expected: FAIL — `ModuleNotFoundError: crm.txb.api.transitions`.
 
 - [ ] **Step 3: Write the endpoint**
@@ -573,7 +573,7 @@ In `crm/txb/api/actions.py`, inside `get_available_actions`, extend the appended
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `bench --site <site> run-tests --module crm.txb.test_transitions`
+Run: `bench --site localhost run-tests --module crm.txb.test_transitions`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -701,7 +701,7 @@ class TestTransitionEnforcement(IntegrationTestCase):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `bench --site <site> run-tests --module crm.txb.test_transitions`
+Run: `bench --site localhost run-tests --module crm.txb.test_transitions`
 Expected: FAIL — the off-graph and bare-write cases save successfully because nothing guards them yet.
 
 - [ ] **Step 3: Write the guard**
@@ -816,9 +816,9 @@ In `crm/hooks.py`, the `"CRM Deal"` entry:
 
 - [ ] **Step 6: Run the tests**
 
-Run: `bench --site <site> run-tests --module crm.txb.test_transitions`
-Then: `bench --site <site> run-tests --module crm.txb.test_permissions`
-Then: `bench --site <site> run-tests --module crm.txb.test_doc_events`
+Run: `bench --site localhost run-tests --module crm.txb.test_transitions`
+Then: `bench --site localhost run-tests --module crm.txb.test_permissions`
+Then: `bench --site localhost run-tests --module crm.txb.test_doc_events`
 Expected: all PASS. If `test_permissions` fails on a coach status change, check that `guard_status_change` still runs first.
 
 - [ ] **Step 7: Commit**
@@ -859,7 +859,7 @@ class TestTransitionMatrix(IntegrationTestCase):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `bench --site <site> run-tests --module crm.txb.test_transitions --test test_the_matrix_lists_every_pipeline_and_edge`
+Run: `bench --site localhost run-tests --module crm.txb.test_transitions --test test_the_matrix_lists_every_pipeline_and_edge`
 Expected: FAIL — `ModuleNotFoundError`.
 
 - [ ] **Step 3: Write it**
@@ -871,7 +871,7 @@ Create `crm/txb/transition_matrix.py`:
 
 Generated from the registry so it cannot drift from what the code enforces. Run with:
 
-    bench --site <site> execute crm.txb.transition_matrix.write --kwargs "{'path': 'docs/transition-matrix.md'}"
+    bench --site localhost execute crm.txb.transition_matrix.write --kwargs "{'path': 'docs/transition-matrix.md'}"
 """
 
 from crm.txb.pipelines.actions import PIPELINE_ACTIONS, find_action
@@ -911,10 +911,10 @@ def write(path: str = "transition-matrix.md"):
 
 - [ ] **Step 4: Run test and generate the artifact**
 
-Run: `bench --site <site> run-tests --module crm.txb.test_transitions`
+Run: `bench --site localhost run-tests --module crm.txb.test_transitions`
 Expected: PASS.
 
-Then: `bench --site <site> execute crm.txb.transition_matrix.write --kwargs "{'path': 'apps/crm/docs/transition-matrix.md'}"`
+Then: `bench --site localhost execute crm.txb.transition_matrix.write --kwargs "{'path': 'apps/crm/docs/transition-matrix.md'}"`
 Expected: the file exists and lists all four pipelines.
 
 - [ ] **Step 5: Commit**
@@ -1921,7 +1921,7 @@ Add the covering test to `crm/txb/test_transitions.py`:
 - [ ] **Step 5: Run tests and verify manually**
 
 Run: `cd frontend && yarn test:run` — all green.
-Run: `bench --site <site> run-tests --module crm.txb.test_transitions` — all green.
+Run: `bench --site localhost run-tests --module crm.txb.test_transitions` — all green.
 
 In the browser, as a non-Admin on an Individual Session deal in `Submitted`:
 - The status dropdown offers only `Session Set` and `Lost` (plus the current status).
@@ -2076,10 +2076,10 @@ git commit -m "feat(deals): the side panel status field runs the owning action"
 
 ```bash
 cd frontend && yarn test:run && yarn build
-cd .. && bench --site <site> run-tests --module crm.txb.test_transitions
-bench --site <site> run-tests --module crm.txb.test_permissions
-bench --site <site> run-tests --module crm.txb.test_doc_events
-bench --site <site> run-tests --module crm.txb.test_registration_token
+cd .. && bench --site localhost run-tests --module crm.txb.test_transitions
+bench --site localhost run-tests --module crm.txb.test_permissions
+bench --site localhost run-tests --module crm.txb.test_doc_events
+bench --site localhost run-tests --module crm.txb.test_registration_token
 ```
 
 Expected: all green.
@@ -2107,7 +2107,7 @@ For each of the four pipelines, confirm:
 - [ ] **Step 4: Regenerate the matrix and update the spec**
 
 ```bash
-bench --site <site> execute crm.txb.transition_matrix.write --kwargs "{'path': 'apps/crm/docs/transition-matrix.md'}"
+bench --site localhost execute crm.txb.transition_matrix.write --kwargs "{'path': 'apps/crm/docs/transition-matrix.md'}"
 ```
 
 Change the spec's header to `Status: implemented (2026-08-04)`.
