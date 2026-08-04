@@ -331,3 +331,14 @@ class TestTransitionEnforcement(FrappeTestCase):
 			spec["handler"] = original
 
 		self.assertFalse(frappe.flags.get("txb_action"))
+
+
+class TestTransitionMatrix(FrappeTestCase):
+	def test_the_matrix_lists_every_pipeline_and_edge(self):
+		from crm.txb.transition_matrix import render_matrix
+
+		text = render_matrix()
+		self.assertIn("## Workshop", text)
+		self.assertIn("Workshop submitted", text)
+		self.assertIn("Set VCS Call", text)
+		self.assertIn("| Admin only |", text)
