@@ -94,6 +94,7 @@
       class="flex gap-1"
     >
       <Link
+        :key="linkKey(field)"
         class="form-control flex-1 truncate"
         :value="data[field.fieldname]"
         :doctype="
@@ -573,6 +574,18 @@ const resolvedHtml = computed(() => {
   if (injected !== undefined) return injected
   return interpolateTemplate(field.value.options || '', data.value)
 })
+
+/**
+ * Identity for a Link control, including its filters.
+ *
+ * Link's options resource is created once with `cache: [doctype, text, hideMe, filters]`.
+ * createResource keys a shared module-level instance off that, so a Link whose filters
+ * change later writes its results back under the original key and hands that stale entry
+ * to the next matching Link without reloading. Keying on filter content remounts only on
+ * a real change, keeping each cache entry consistent with the filters that produced it.
+ */
+const linkKey = (field) =>
+  `${field.fieldname}:${JSON.stringify(field.filters ?? null)}`
 
 const getPlaceholder = (field) => {
   if (field.placeholder) {

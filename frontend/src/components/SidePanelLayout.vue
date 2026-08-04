@@ -184,6 +184,7 @@
                           v-else-if="
                             ['Link', 'Dynamic Link'].includes(field.fieldtype)
                           "
+                          :key="linkKey(field)"
                           class="form-control select-text"
                           :value="doc[field.fieldname]"
                           :doctype="
@@ -518,6 +519,23 @@ const _sections = computed(() => {
     return _section
   })
 })
+
+/**
+ * Identity for a Link control, including its filters.
+ *
+ * Link builds its options resource with `cache: [doctype, text, hideMe, filters]`,
+ * evaluated once at setup. createResource keys a shared, module-level instance off that,
+ * so a Link whose filters change later refetches but writes the result back under its
+ * original key -- and returns that poisoned entry to the next Link with matching filters
+ * without reloading, since the resource is not `auto`. The list then stays frozen until a
+ * page refresh clears the cache.
+ *
+ * Keying on the filter content remounts the control only when the filters genuinely
+ * change, so every resource fetches with exactly the filters in its own cache key.
+ */
+function linkKey(field) {
+  return `${field.fieldname}:${JSON.stringify(field.filters ?? null)}`
+}
 
 function parsedField(field) {
   // Clone to avoid mutating the cached layout data
