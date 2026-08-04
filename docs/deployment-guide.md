@@ -524,6 +524,46 @@ not data; restore replaces the DB contents wholesale.
 6. Notes: staging now holds real customer data — same GDPR/access discipline
    as prod. Delete the backup artifacts from `sites/` afterwards.
 
+## Runbook — refresh local dev from staging
+
+Brings staging's data (including anything restored from prod) onto the
+local dev bench for development against real-shaped data with HMR.
+
+1. **Backup staging and fetch it:**
+   ```bash
+   docker exec <staging-backend> bench --site txb-crm.mygom-test.tech backup --with-files
+   docker cp <staging-backend>:/home/frappe/frappe-bench/sites/txb-crm.mygom-test.tech/private/backups/ ./staging-backup/
+   scp -r root@<staging-vps>:./staging-backup ~/
+   ```
+
+2. **Restore into the local site** (bench root; recreates the DB on the dev
+   MariaDB — may prompt for DB root credentials):
+   ```bash
+   bench --site localhost set-config encryption_key '<key from site_config_backup.json>'
+   bench --site localhost --force restore ~/staging-backup/<ts>-database.sql.gz \
+     --with-public-files  ~/staging-backup/<ts>-files.tar \
+     --with-private-files ~/staging-backup/<ts>-private-files.tar
+   bench --site localhost migrate
+   ```
+
+3. **MANDATORY, immediately after every restore — defuse the copied prod
+   config** (the restored data contains prod's email accounts and scheduled
+   jobs; without these flags a local `bench start` will pull and SEND REAL
+   CUSTOMER EMAILS from your laptop):
+   ```bash
+   bench --site localhost set-config mute_emails 1
+   bench --site localhost set-config pause_scheduler 1
+   ```
+
+4. Run as usual: `bench start` + `yarn dev` → `localhost:8080/crm`.
+   Logins are now prod's (restore replaced all users — Administrator
+   password is prod's admin password).
+
+5. Hygiene: this puts real EU customer data on a dev machine — full-disk
+   encryption expected, delete `~/staging-backup/` after restoring, and
+   never point the local bench directly at the staging/prod database
+   (two code versions sharing one schema corrupt each other).
+
 ## Runbook — production cutover (official frappe/crm image → this fork)
 
 Pre-conditions, in order — do not start without all three:
