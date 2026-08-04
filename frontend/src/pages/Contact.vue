@@ -13,6 +13,10 @@
         :actions="contact._actions"
       />
       <Button
+        :label="__('Create Opportunity')"
+        @click="showCreateDeal = true"
+      />
+      <Button
         v-if="!userIsAdmin()"
         :label="__('Request Ownership')"
         @click="showRequestOwnership = true"
@@ -179,6 +183,11 @@
     :docname="contact.doc.name"
     :current-owner="contact.doc?.custom_contact_owner"
   />
+  <CreateDealFromContactModal
+    v-if="showCreateDeal"
+    v-model="showCreateDeal"
+    :contact="contact.doc"
+  />
 </template>
 
 <script setup>
@@ -193,6 +202,7 @@ import DealsIcon from '@/components/Icons/DealsIcon.vue'
 import DealsListView from '@/components/ListViews/DealsListView.vue'
 import CustomActions from '@/components/CustomActions.vue'
 import RequestOwnershipModal from '@/components/Modals/RequestOwnershipModal.vue'
+import CreateDealFromContactModal from '@/components/Modals/CreateDealFromContactModal.vue'
 import { validateIsImageFile, setupCustomizations } from '@/utils'
 import { useContactFields } from '@/composables/useContactFields'
 import { timestampCell } from '@/composables/useTimelinePreferences'
@@ -300,6 +310,7 @@ usePageMeta(() => {
 })
 const showDeleteLinkedDocModal = ref(false)
 const showRequestOwnership = ref(false)
+const showCreateDeal = ref(false)
 
 async function deleteContact() {
   showDeleteLinkedDocModal.value = true
