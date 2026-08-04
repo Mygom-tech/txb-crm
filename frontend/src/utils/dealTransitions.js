@@ -85,10 +85,14 @@ export function prefillFor(action, to) {
  * A user who may not change the status at all (a coach on Delivering Coaching, per
  * TXB-105) is refused every column.
  *
- * `adminStatuses`, when given, is the pipeline's full status list and means the user
- * holds the recovery hatch: they may move the deal anywhere within its own pipeline. The
- * action modal still opens when an action owns the edge, so nothing an action records is
- * skipped — the hatch widens where they may go, not what gets captured.
+ * `adminStatuses`, when given and non-empty, is the pipeline's full status list and means
+ * the user holds the recovery hatch: they may move the deal anywhere within its own
+ * pipeline. An empty list means "not known yet" — `allowedStatusesFor` returns `[]` both
+ * before its resource loads and for an unmapped pipeline — so it falls through to the
+ * graph rules rather than refusing everything, which would grey the board for the very
+ * user the hatch exists for. The action modal still opens when an action owns the edge,
+ * so nothing an action records is skipped — the hatch widens where they may go, not what
+ * gets captured.
  */
 export function canDropOn(
   transitions,
@@ -100,7 +104,7 @@ export function canDropOn(
 ) {
   if (!canChangeStatus) return false
   if (from === to) return true
-  if (adminStatuses) return adminStatuses.includes(to)
+  if (adminStatuses?.length) return adminStatuses.includes(to)
 
   return allowedTargets(transitions, pipeline, from).includes(to)
 }

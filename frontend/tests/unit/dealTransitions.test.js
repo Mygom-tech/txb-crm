@@ -188,6 +188,24 @@ describe('canDropOn — the Admin hatch', () => {
       canDropOn(TRANSITIONS, 'Workshop', 'Workshop set', 'Workshop ran', true),
     ).toBe(true)
   })
+
+  it('falls back to the graph when the status list has not loaded', () => {
+    // allowedStatusesFor returns [] before its resource resolves; an empty array is
+    // truthy, so a naive check would refuse every column for an Admin.
+    expect(
+      canDropOn(
+        TRANSITIONS,
+        'Workshop',
+        'Workshop set',
+        'Workshop ran',
+        true,
+        [],
+      ),
+    ).toBe(true)
+    expect(
+      canDropOn(TRANSITIONS, 'Workshop', 'Workshop set', 'Sold', true, []),
+    ).toBe(false)
+  })
 })
 
 describe('off-list statuses fall back to universal actions', () => {
