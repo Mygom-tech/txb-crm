@@ -17,6 +17,12 @@ from crm.fcrm.doctype.utils import add_or_remove_lost_reason_section_in_sidepane
 
 LEAD_DEAL_FIELD_MAP = {"lead_owner": "deal_owner"}
 
+# Site-specific custom field on Contact (Link -> CRM Organization). It is the field the
+# CRM actually displays as "Organization" on a contact; the stock `company_name` is a plain
+# Data field that a Before Validate hook keeps in sync from this one. Guarded with
+# `has_field` everywhere so installs without the custom field are unaffected.
+CONTACT_ORGANIZATION_LINK_FIELD = "custom_organization_link"
+
 
 class CRMLead(Document):
 	# begin: auto-generated types
@@ -211,7 +217,14 @@ class CRMLead(Document):
 					flags={"ignore_share_permission": True, "ignore_permissions": True},
 				)
 
-	def create_contact(self, existing_contact=None, throw=True):
+	def create_contact(self, existing_contact=None, throw=True, organization=None):
+		"""Reuse or create the Contact for this Lead.
+
+		``organization`` is the resolved ``CRM Organization`` docname returned by
+		``create_organization``. It is only ever applied to a newly created Contact -- an
+		existing Contact's organization is left untouched, since it may deliberately differ
+		from the Lead's.
+		"""
 		if not self.lead_name:
 			self.set_full_name()
 			self.set_lead_name()
@@ -233,6 +246,11 @@ class CRMLead(Document):
 				"image": self.image or "",
 			}
 		)
+
+		# Only the resolved docname is safe for the Link field -- `self.organization` is free
+		# text on the Lead and may not exist as a CRM Organization.
+		if organization and frappe.get_meta("Contact").has_field(CONTACT_ORGANIZATION_LINK_FIELD):
+			contact.set(CONTACT_ORGANIZATION_LINK_FIELD, organization)
 
 		if self.email:
 			contact.append("email_ids", {"email_id": self.email, "is_primary": 1})
@@ -538,8 +556,9 @@ def convert_to_deal(
 	lead.db_set("converted", 1)
 	if lead.sla and frappe.db.exists("CRM Communication Status", "Replied"):
 		lead.db_set("communication_status", "Replied")
-	contact = lead.create_contact(existing_contact, False)
+	# Resolve the organization first so a newly created contact can be linked to it.
 	organization = lead.create_organization(existing_organization)
+	contact = lead.create_contact(existing_contact, False, organization)
 	_deal = lead.create_deal(contact, organization, deal)
 	return _deal
 
