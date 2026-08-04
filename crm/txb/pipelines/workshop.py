@@ -188,6 +188,19 @@ def workshop_not_interested(deal, data):
 		)
 
 
+def reopen(deal, data: dict):
+	"""Return a lost opportunity to the top of the pipeline.
+
+	The lost reason is cleared, otherwise the deal carries a stale explanation for a
+	state it is no longer in.
+	"""
+	deal.lost_reason = None
+	if deal.meta.has_field("lost_reason_detail"):
+		deal.lost_reason_detail = ""
+
+	add_note(deal, "Opportunity Reopened", lines(f"Reason: {data.get('reopen_reason', '')}"))
+
+
 # --------------------------------------------------------------------------------------
 # Transitions
 # --------------------------------------------------------------------------------------
@@ -347,6 +360,24 @@ WORKSHOP_NOT_INTERESTED = {
 	],
 }
 
+REOPEN = {
+	"name": "reopen",
+	"label": "Reopen",
+	"from_states": ["Lost"],
+	"to_state": "Workshop submitted",
+	"changes_status": True,
+	"admin_only": False,
+	"handler": reopen,
+	"fields": [
+		{
+			"fieldname": "reopen_reason",
+			"label": "Why is this being reopened?",
+			"fieldtype": "Small Text",
+			"reqd": 1,
+		},
+	],
+}
+
 WORKSHOP_ACTIONS = (
 	SET_VCS_CALL,
 	RUN_VCS_CALL,
@@ -356,4 +387,5 @@ WORKSHOP_ACTIONS = (
 	RESCHEDULE_WORKSHOP,
 	CANCEL_WORKSHOP,
 	WORKSHOP_NOT_INTERESTED,
+	REOPEN,
 )

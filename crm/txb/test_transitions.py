@@ -86,3 +86,34 @@ class TestTransitionGraph(FrappeTestCase):
 		for targets in graph.values():
 			for names in targets.values():
 				self.assertNotIn("log_coaching_call", names)
+
+
+class TestNoDeadEnds(FrappeTestCase):
+	"""Every status must have a way out, or enforcing the graph traps deals.
+
+	Before TXB-110 added recovery transitions there were four dead ends: Individual
+	Session "Follow-up" and "Lost", Workshop "Lost", and Selling Training "Training not
+	interested". A mis-clicked "Not Interested" was unrecoverable without a database edit.
+	"""
+
+	def test_every_status_has_an_outgoing_transition(self):
+		dead_ends = []
+		for pipeline in PIPELINE_ACTIONS:
+			graph = get_transitions(pipeline)
+			for status in PIPELINE_STATUSES.get(pipeline, []):
+				if not graph.get(status):
+					dead_ends.append((pipeline, status))
+
+		self.assertEqual(dead_ends, [])
+
+	def test_a_lost_individual_session_can_be_reopened(self):
+		self.assertTrue(is_allowed(PIPELINE_INDIVIDUAL_SESSION, "Lost", "Submitted"))
+
+	def test_a_lost_workshop_can_be_reopened(self):
+		self.assertTrue(is_allowed(PIPELINE_WORKSHOP, "Lost", "Workshop submitted"))
+
+	def test_a_follow_up_bap_can_be_rebooked(self):
+		"""Rescheduling parks a BAP in Follow-up; Book a BAP is how it comes back."""
+		self.assertTrue(
+			is_allowed(PIPELINE_INDIVIDUAL_SESSION, "Follow-up", "Session Set")
+		)
