@@ -56,6 +56,15 @@ Two pieces of groundwork already exist and this feature is their intended consum
    | --- | --- | --- |
    | Has candidate action(s) | picker (if >1) → modal → `execute_action` | same |
    | No action describes it | bare write — the hatch | refused |
+
+   **This table describes the UI, not the backend.** `guard_transition` exempts Admins
+   from both the edge check and the origin check outright, so a direct API call by an
+   Admin can still bare-write any status. That is deliberate and stays: the hatch exists
+   for recovery, and an Admin repairing data in bulk — or a script doing it — must not be
+   forced through a form dialog. Routing Admins through the modal is a UI decision made
+   because it captures the data the action records; it is not a security boundary, and
+   the backend is intentionally the looser of the two. Anything an Admin can do by API
+   they could already do in the database.
 5. **The dead ends are fixed as part of this ticket**, not documented and deferred (see
    *Recovery transitions*).
 
