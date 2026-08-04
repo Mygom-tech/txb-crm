@@ -399,6 +399,11 @@ def get_data(
 			if field not in rows:
 				rows.append(field)
 
+		# The board needs each card's pipeline to know which transitions apply to it.
+		# Fetched, not displayed -- `kanban_fields` is what the card renders.
+		if doctype == "CRM Deal" and "pipeline_type" not in rows:
+			rows.append("pipeline_type")
+
 		for kc in kanban_columns:
 			# Start with base filters
 			column_filters = []

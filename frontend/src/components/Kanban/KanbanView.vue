@@ -11,7 +11,8 @@
       <template #item="{ element: column }">
         <div
           v-if="!column.column.delete"
-          class="flex flex-col gap-2.5 min-w-72 w-72 hover:bg-surface-gray-2 rounded-lg p-2.5"
+          class="flex flex-col gap-2.5 min-w-72 w-72 hover:bg-surface-gray-2 rounded-lg p-2.5 transition-opacity"
+          :class="{ 'opacity-40 pointer-events-none': columnRefused(column) }"
         >
           <div class="flex gap-2 items-center group justify-between">
             <div class="flex items-center text-base">
@@ -72,11 +73,12 @@
           <div class="overflow-y-auto flex flex-col gap-2 h-full">
             <Draggable
               :list="column.data"
-              group="fields"
+              :group="dragGroup(column)"
               item-key="name"
               class="flex flex-col gap-3.5 flex-1"
               :delay="isTouchScreenDevice() ? 200 : 0"
               :data-column="column.column.name"
+              @start="onDragStart"
               @end="updateColumn"
             >
               <template #item="{ element: fields }">
@@ -181,9 +183,9 @@ import IndicatorIcon from '@/components/Icons/IndicatorIcon.vue'
 import { isTouchScreenDevice, colors, parseColor } from '@/utils'
 import Draggable from 'vuedraggable'
 import { Combobox, Dropdown, Popover } from 'frappe-ui'
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 
-defineProps({
+const props = defineProps({
   options: {
     type: Object,
     default: () => ({
@@ -192,6 +194,11 @@ defineProps({
       onNewClick: null,
     }),
   },
+  /**
+   * Optional drop guard: ({ from, to, card }) => boolean.
+   * Default null allows everything, so Leads and Tasks are unaffected.
+   */
+  transitionGuard: { type: Function, default: null },
 })
 
 const emit = defineEmits(['update', 'loadMore'])
@@ -225,6 +232,41 @@ const deletedColumns = computed(() => {
     })
 })
 
+// Which card is in flight, so columns can decide whether they will accept it.
+const dragging = ref(null)
+
+function onDragStart(evt) {
+  const from = evt.from?.dataset?.column
+  const itemName = evt.item?.dataset?.name
+  const card = columns.value
+    .find((col) => col.column.name === from)
+    ?.data?.find((row) => row.name === itemName)
+
+  dragging.value = { from, card }
+}
+
+function allowDrop(to) {
+  if (!props.transitionGuard || !dragging.value) return true
+  return props.transitionGuard({ ...dragging.value, to })
+}
+
+// Sortable reads `group` once per option update, so the object must be stable —
+// rebuilding it every render would thrash the option on each drag frame. The `put`
+// closure reads the reactive `dragging`, so a stable object still gives live answers.
+const groupCache = new Map()
+
+function dragGroup(column) {
+  const key = column.column.name
+  if (!groupCache.has(key)) {
+    groupCache.set(key, { name: 'fields', put: () => allowDrop(key) })
+  }
+  return groupCache.get(key)
+}
+
+function columnRefused(column) {
+  return Boolean(dragging.value) && !allowDrop(column.column.name)
+}
+
 function actions(column) {
   return [
     {
@@ -253,6 +295,8 @@ function addColumn(e) {
 }
 
 function updateColumn(d, fetchNewColumns = false) {
+  dragging.value = null
+
   let toColumn = d?.to?.dataset.column
   let fromColumn = d?.from?.dataset.column
 
