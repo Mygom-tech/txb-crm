@@ -143,13 +143,38 @@ Executed live, then rolled back: Individual Session won → coaching deal create
 → none; all three `negotiation_result` branches; `run_discovery_meeting` dual task
 assignment; both `contract_signed` branches.
 
+## Follow-up fixes
+
+**Stale UI after an action.** `onTakeAction` called `reloadResources()` with no argument,
+but that helper is parameterised by what changed, so neither branch ran and nothing
+reloaded — notes never appeared and the document was never refetched, which also meant the
+`watch` on `doc.status` could not fire and the menu stayed stale. Fixed by setting the
+`reload` ref, which `Activities` already watches to reload both the feed and the document.
+
+**Take Action was missing on mobile.** `MobileDeal.vue` still rendered the wizard's
+injected menu through `document._actions`; disabling that script would have removed Take
+Action from mobile entirely. It now has the same menu, refresh and status lock as desktop.
+
+**`Convert Dialog - Pipeline Type` retired.** Pipeline Type and Status are native fields
+in the convert dialog now. The script had replaced `window.fetch` for the whole session to
+splice them into the request, built them as raw HTML via a `MutationObserver`, hidden the
+real status field with injected CSS, and carried a fourth copy of the status map. The
+redirect looks the pipeline's kanban board up by label instead of hardcoded view ids.
+
+**`Training submitted` restored to Selling Training.** It is that pipeline's entry status
+and exists in `CRM Deal Status`, but both Form Script copies of the map omitted it — so it
+could not be selected and `Set Discovery Meeting`, which starts from it, was unreachable.
+Guarded by tests asserting every `from_state` is selectable and no action strands a deal in
+a status the UI cannot show.
+
 ## Remaining work
 
 - **Kanban**: a non-Admin dragging a Delivering Coaching card gets a server error and the
   card reverts. Correct and enforced, but the drag could be prevented up front using the
   same `can_change_status` answer.
-- Other form scripts remain in the database (`Pipeline Section Visibility`,
-  `Convert Dialog - Pipeline Type`, `Notes Tab Rename` and others). Out of scope here, but
-  the same argument applies to each.
-- `Convert Dialog - Pipeline Type` still carries its own copy of the pipeline/status map
-  and monkey-patches `window.fetch`.
+- Other form scripts remain in the database — `Pipeline Section Visibility` (overrides
+  `history.pushState`, synchronous XHR), `Notes Tab Rename` (93 lines and a body-wide
+  `MutationObserver` to relabel one tab), `Auto Refresh Call Count`, `Lead Creation
+  Redirect`, `Workshop Datetime Modal`, `Contact_Create Opportunity`, `Disqualified Reason
+  Prompt`, `Lead Owner Read-Only` (cosmetic only — the field is still writable via API),
+  and three `<style>`-injection scripts. None reach into Vue internals any more.
