@@ -253,7 +253,9 @@ RUN_WORKSHOP = {
 		"ws_outcome": {
 			"Won - proceed to coaching": "Workshop ran",
 			"Follow-up needed": "Workshop rescheduling in progress",
-			# "Lost" is set by the handler along with its reason.
+			# Declared so the graph knows this branch exists; mark_lost still writes
+			# the reason alongside it.
+			"Lost": "Lost",
 		}
 	},
 	"changes_status": True,
@@ -308,7 +310,10 @@ CANCEL_WORKSHOP = {
 	"name": "cancel_workshop",
 	"label": "Cancel Workshop",
 	"from_states": [],  # available from any status, as before
-	"to_state": None,  # handler sets Lost together with its reason
+	# Declared, not left to the handler: an invisible target cannot be enforced by the
+	# transition graph. `cancel_workshop` still sets the reason via mark_lost, and
+	# execute_action then assigns the same value -- idempotent.
+	"to_state": "Lost",
 	"changes_status": True,
 	"admin_only": False,
 	"handler": cancel_workshop,
@@ -327,7 +332,10 @@ WORKSHOP_NOT_INTERESTED = {
 	"name": "workshop_not_interested",
 	"label": 'Mark as "Not Interested"',
 	"from_states": [],
-	"to_state": None,  # handler sets Lost together with its reason
+	# Declared, not left to the handler: an invisible target cannot be enforced by the
+	# transition graph. `workshop_not_interested` still sets the reason via mark_lost, and
+	# execute_action then assigns the same value -- idempotent.
+	"to_state": "Lost",
 	"changes_status": True,
 	"admin_only": False,
 	"handler": workshop_not_interested,

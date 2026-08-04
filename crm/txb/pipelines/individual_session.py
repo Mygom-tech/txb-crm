@@ -224,7 +224,10 @@ CANCEL_BAP = {
 	"name": "cancel_bap",
 	"label": "Cancel a BAP",
 	"from_states": [],  # available from any status, as before
-	"to_state": None,  # handler sets Lost together with its reason
+	# Declared, not left to the handler: an invisible target cannot be enforced by the
+	# transition graph. `cancel_bap` still sets the reason via mark_lost, and
+	# execute_action then assigns the same value -- idempotent.
+	"to_state": "Lost",
 	"changes_status": True,
 	"admin_only": False,
 	"handler": cancel_bap,
@@ -243,7 +246,10 @@ NOT_INTERESTED = {
 	"name": "not_interested",
 	"label": 'Mark as "Not Interested"',
 	"from_states": [],
-	"to_state": None,  # handler sets Lost together with its reason
+	# Declared, not left to the handler: an invisible target cannot be enforced by the
+	# transition graph. `not_interested` still sets the reason via mark_lost, and
+	# execute_action then assigns the same value -- idempotent.
+	"to_state": "Lost",
 	"changes_status": True,
 	"admin_only": False,
 	"handler": not_interested,
