@@ -739,9 +739,14 @@ class TestTransitionEnforcement(FrappeTestCase):
 		self.assertTrue(deal.name)
 
 	def test_a_deal_with_no_state_machine_is_untouched(self):
-		"""Stock deals with no pipeline_type must keep working."""
+		"""Stock deals with no pipeline_type must keep working.
+
+		"Discovery" and "Demo/Making" are real CRM Deal Status records that belong to no
+		pipeline in PIPELINE_STATUSES, so this move has no edge in any graph. It must
+		still succeed: a deal with no state machine has no transitions to enforce.
+		"""
 		deal = frappe.get_doc(
-			{"doctype": "CRM Deal", "status": "Qualification"}
+			{"doctype": "CRM Deal", "status": "Discovery"}
 		).insert(ignore_permissions=True)
 		frappe.set_user(COACH)
 		deal.reload()
