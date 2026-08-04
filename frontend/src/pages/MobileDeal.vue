@@ -297,9 +297,16 @@ import { setupCustomizations, isTranslatable } from '@/utils'
 import { getView } from '@/utils/view'
 import { allowedStatusesFor } from '@/utils/pipelineStatuses'
 import { actionOptions, runAction } from '@/utils/takeAction'
+import {
+  allowedTargets,
+  candidateActions,
+  prefillFor,
+} from '@/utils/dealTransitions'
+import { chooseAction } from '@/utils/kanbanTransitions'
 import { getSettings } from '@/stores/settings'
 import { globalStore } from '@/stores/global'
 import { statusesStore } from '@/stores/statuses'
+import { transitionsStore } from '@/stores/transitions'
 import { getMeta } from '@/stores/meta'
 import { useDocument } from '@/data/document'
 import { isMobileView } from '@/composables/settings'
@@ -322,6 +329,8 @@ import { useRoute, useRouter } from 'vue-router'
 const { brand } = getSettings()
 const { $dialog, $socket } = globalStore()
 const { statusOptions, getDealStatus, pipelineStatuses } = statusesStore()
+const { transitionMap } = transitionsStore()
+const isAdmin = computed(() => dealActions.data?.is_admin === true)
 
 // Take Action, mirroring the desktop page. Shares a cache key with Deal.vue and the side
 // panel, so one request answers for all of them.
@@ -330,7 +339,7 @@ const dealActions = createResource({
   cache: ['deal-actions', props.dealId],
   makeParams: () => ({ deal: props.dealId }),
   auto: true,
-  initialData: { actions: [], can_change_status: true },
+  initialData: { actions: [], can_change_status: true, is_admin: false },
 })
 
 const availableActions = computed(() => dealActions.data?.actions || [])
@@ -342,9 +351,9 @@ const takeActionOptions = computed(() =>
   actionOptions(availableActions.value, onTakeAction),
 )
 
-async function onTakeAction(action) {
+async function onTakeAction(action, defaults) {
   try {
-    const result = await runAction(props.dealId, action)
+    const result = await runAction(props.dealId, action, { defaults })
     if (!result) return
 
     // Activities watches this ref and reloads both the feed and the document, which is
@@ -386,6 +395,19 @@ const statuses = computed(() => {
       doc.value?.status,
       pipelineStatuses.data,
     )
+  }
+
+  // Non-Admins are offered only what the state machine can actually reach, so a user
+  // never picks a status and then hears it was refused.
+  if (!isAdmin.value) {
+    const reachable = allowedTargets(
+      transitionMap.data?.transitions,
+      doc.value?.pipeline_type,
+      doc.value?.status,
+    )
+    if (reachable.length) {
+      customStatuses = [doc.value.status, ...reachable]
+    }
   }
 
   return statusOptions('deal', customStatuses, triggerStatusChange)
@@ -705,7 +727,39 @@ function statusLabel(status) {
   return status
 }
 
+// The action that owns a transition runs it — for everyone, Admins included. Whoever
+// changes the status, the note, the task and the deal fields that belong with the change
+// are recorded. A bare write would reach "Session Set" with no BAP details at all, and
+// would reach "Lost" with no reason, where CRMDeal.validate_lost_reason simply throws.
+//
+// The Admin hatch is for moves the state machine does NOT describe: only when no action
+// covers this edge does an Admin write directly. A non-Admin is refused there.
 async function triggerStatusChange(value) {
+  const candidates = candidateActions(
+    transitionMap.data?.transitions,
+    doc.value?.pipeline_type,
+    doc.value?.status,
+    value,
+    availableActions.value,
+  )
+
+  if (candidates.length) {
+    const action = await chooseAction(candidates, value)
+    if (!action) return
+    await onTakeAction(action, prefillFor(action, value))
+    return
+  }
+
+  if (!isAdmin.value) {
+    toast.error(
+      __('"{0}" cannot be reached from "{1}".', [
+        __(value),
+        __(doc.value?.status),
+      ]),
+    )
+    return
+  }
+
   await triggerOnChange('status', value)
   setLostReason()
 }

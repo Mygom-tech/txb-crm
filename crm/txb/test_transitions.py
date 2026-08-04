@@ -226,6 +226,16 @@ class TestTransitionEnforcement(FrappeTestCase):
 			frappe.db.get_value("CRM Deal", deal.name, "status"), "Session Run"
 		)
 
+	def test_available_actions_report_admin(self):
+		from crm.txb.api.actions import get_available_actions
+
+		# get_available_actions enforces frappe.has_permission (read), which for a
+		# Sales User is owner/assignment-scoped -- see has_deal_permission -- so COACH
+		# must own this deal or the call raises PermissionError before is_admin is reached.
+		deal = self.make_deal("Submitted", owner=COACH)
+		frappe.set_user(COACH)
+		self.assertFalse(get_available_actions(deal.name)["is_admin"])
+
 	def test_inserts_are_exempt(self):
 		frappe.set_user(COACH)
 		deal = self.make_deal("Session Set")

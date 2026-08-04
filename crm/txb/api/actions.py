@@ -11,7 +11,7 @@ import json
 import frappe
 from frappe import _
 
-from crm.txb.permissions import can_change_status
+from crm.txb.permissions import can_change_status, is_admin
 from crm.txb.pipelines.actions import find_action, get_actions, resolve_to_state
 
 DEAL_DOCTYPE = "CRM Deal"
@@ -51,7 +51,13 @@ def get_available_actions(deal: str) -> dict:
 			}
 		)
 
-	return {"actions": available, "can_change_status": may_change_status}
+	return {
+		"actions": available,
+		"can_change_status": may_change_status,
+		# The recovery hatch is a role, so the browser must be told about it rather than
+		# inferring it from can_change_status -- which is a different, per-pipeline rule.
+		"is_admin": is_admin(),
+	}
 
 
 def is_available(action: dict, status: str | None) -> bool:
