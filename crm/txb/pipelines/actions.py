@@ -7,11 +7,17 @@ form -- `stages` (the states an action may start from), a target status, and an
 
 Each entry declares:
 
-    name        stable identifier used by the API
-    label       what the user sees
-    from_states statuses the action may be taken from; empty means any
-    to_state    status the deal ends in; None means the action does not move it
-    admin_only  restricted to the CRM "Admin" role (Frappe's System Manager)
+    name           stable identifier used by the API
+    label          what the user sees
+    from_states    statuses the action may be taken from; empty means any
+    to_state       status the deal ends in; None when it does not move, or when the
+                   target depends on the answers (see to_state_map)
+    to_state_map   {fieldname: {value: status}} for actions whose outcome is chosen in
+                   the form -- e.g. a negotiation that may end agreed, pending or lost
+    changes_status declared outright, never inferred. A branching action has no
+                   to_state until the form comes back, so inferring from it would mark
+                   the action harmless and let it past the role check
+    admin_only     restricted to the CRM "Admin" role (Frappe's System Manager)
     fields      form fields, in Frappe fieldtype vocabulary so the existing
                 FieldLayout dialog can render them without a bespoke component
     handler     applies the effects, inside the caller's transaction
@@ -266,6 +272,7 @@ DELIVERING_COACHING_ACTIONS = (
 		"label": "Move to Waiting on Review",
 		"from_states": ["Submitted"],
 		"to_state": "Waiting on Review",
+		"changes_status": True,
 		"admin_only": True,
 		"handler": move_to_review,
 		"fields": [
@@ -279,6 +286,7 @@ DELIVERING_COACHING_ACTIONS = (
 		"label": "Clear Contract",
 		"from_states": ["Waiting on Review"],
 		"to_state": "Contract Cleared",
+		"changes_status": True,
 		"admin_only": True,
 		"handler": clear_contract,
 		"fields": [
@@ -295,6 +303,7 @@ DELIVERING_COACHING_ACTIONS = (
 		"label": "Set First Call Date",
 		"from_states": ["Contract Cleared"],
 		"to_state": "Active",
+		"changes_status": True,
 		"admin_only": True,
 		"handler": set_first_call_date,
 		"fields": [
@@ -307,6 +316,7 @@ DELIVERING_COACHING_ACTIONS = (
 		"label": "Log Coaching Call",
 		"from_states": ["Active"],
 		"to_state": None,
+		"changes_status": False,
 		"admin_only": False,
 		"handler": log_coaching_call,
 		"fields": [
@@ -323,6 +333,7 @@ DELIVERING_COACHING_ACTIONS = (
 		"label": "Put on Hold",
 		"from_states": ["Active"],
 		"to_state": "On Hold",
+		"changes_status": True,
 		"admin_only": True,
 		"handler": put_on_hold,
 		"fields": [
@@ -336,6 +347,7 @@ DELIVERING_COACHING_ACTIONS = (
 		"label": "Put on Payment Hold",
 		"from_states": ["Active"],
 		"to_state": "Payment Hold",
+		"changes_status": True,
 		"admin_only": True,
 		"handler": put_on_payment_hold,
 		"fields": [
@@ -349,6 +361,7 @@ DELIVERING_COACHING_ACTIONS = (
 		"label": "Mark Inactive",
 		"from_states": ["Active", "On Hold", "Payment Hold"],
 		"to_state": "Inactive",
+		"changes_status": True,
 		"admin_only": True,
 		"handler": mark_inactive,
 		"fields": [
@@ -361,6 +374,7 @@ DELIVERING_COACHING_ACTIONS = (
 		"label": "Reactivate",
 		"from_states": ["On Hold", "Payment Hold", "Inactive"],
 		"to_state": "Active",
+		"changes_status": True,
 		"admin_only": True,
 		"handler": reactivate,
 		"fields": [
@@ -376,6 +390,23 @@ PIPELINE_ACTIONS = {
 
 def get_actions(pipeline_type: str | None):
 	return PIPELINE_ACTIONS.get(pipeline_type, ())
+
+
+def resolve_to_state(action: dict, data: dict) -> str | None:
+	"""The status this action lands on, given what the user filled in.
+
+	A fixed `to_state` wins. Otherwise `to_state_map` picks the target from a field's
+	value, which is how one action can end agreed, pending or lost.
+	"""
+	if action.get("to_state"):
+		return action["to_state"]
+
+	for fieldname, targets in (action.get("to_state_map") or {}).items():
+		target = targets.get(data.get(fieldname))
+		if target:
+			return target
+
+	return None
 
 
 def find_action(pipeline_type: str | None, name: str):

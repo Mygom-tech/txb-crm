@@ -13,7 +13,7 @@ from frappe.tests import IntegrationTestCase
 
 from crm.txb.constants import ADMIN_ROLE, PIPELINE_DELIVERING_COACHING
 from crm.txb.permissions import can_change_status
-from crm.txb.pipelines.actions import get_actions
+from crm.txb.pipelines.actions import get_actions, resolve_to_state
 from crm.txb.api.actions import is_available, is_permitted
 
 COACH = "txb-coach@example.com"
@@ -174,3 +174,61 @@ class TestActionVisibility(IntegrationTestCase):
 			if action["name"] == "log_coaching_call":
 				continue
 			self.assertTrue(action["admin_only"], action["name"])
+
+	def test_every_action_declares_whether_it_changes_status(self):
+		"""Never inferred: a branching action has no to_state until the form returns."""
+		for action in get_actions(PIPELINE_DELIVERING_COACHING):
+			self.assertIn("changes_status", action, action["name"])
+
+	def test_a_branching_action_is_still_gated(self):
+		"""Regression: inferring from to_state would let this through on a coach.
+
+		A branching action carries no fixed to_state -- its target comes from the answers --
+		so the permission check must key on `changes_status`, not on to_state being set.
+		"""
+		branching = {
+			"name": "negotiation_result",
+			"label": "Negotiation Result",
+			"from_states": ["Training negotiations"],
+			"to_state": None,
+			"to_state_map": {"decision": {"Lost": "Training not interested"}},
+			"changes_status": True,
+			"admin_only": False,
+			"fields": [],
+		}
+
+		self.assertFalse(is_permitted(branching, may_change_status=False))
+		self.assertTrue(is_permitted(branching, may_change_status=True))
+
+	def test_resolve_to_state_picks_the_target_from_the_answers(self):
+		branching = {
+			"to_state": None,
+			"to_state_map": {
+				"decision": {
+					"Agreement reached": "Contract signed",
+					"Follow-up needed": "Training negotiations",
+					"Lost": "Training not interested",
+				}
+			},
+		}
+
+		self.assertEqual(
+			resolve_to_state(branching, {"decision": "Agreement reached"}), "Contract signed"
+		)
+		self.assertEqual(
+			resolve_to_state(branching, {"decision": "Lost"}), "Training not interested"
+		)
+		self.assertIsNone(resolve_to_state(branching, {"decision": "Something else"}))
+		self.assertIsNone(resolve_to_state(branching, {}))
+
+	def test_resolve_to_state_prefers_a_fixed_target(self):
+		self.assertEqual(
+			resolve_to_state({"to_state": "Active", "to_state_map": {"x": {"y": "Other"}}}, {"x": "y"}),
+			"Active",
+		)
+
+	def test_log_coaching_call_stays_unrestricted(self):
+		log_call = next(
+			a for a in get_actions(PIPELINE_DELIVERING_COACHING) if a["name"] == "log_coaching_call"
+		)
+		self.assertTrue(is_permitted(log_call, may_change_status=False))

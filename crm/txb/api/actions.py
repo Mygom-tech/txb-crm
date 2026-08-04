@@ -12,7 +12,7 @@ import frappe
 from frappe import _
 
 from crm.txb.permissions import can_change_status
-from crm.txb.pipelines.actions import find_action, get_actions
+from crm.txb.pipelines.actions import find_action, get_actions, resolve_to_state
 
 DEAL_DOCTYPE = "CRM Deal"
 
@@ -60,10 +60,12 @@ def is_available(action: dict, status: str | None) -> bool:
 def is_permitted(action: dict, may_change_status: bool) -> bool:
 	"""Admin-only actions, and anything that moves the status, need the privilege.
 
-	`admin_only` is checked as well as `to_state` so an action that is restricted for
-	business reasons stays restricted even if it stops moving the status.
+	`changes_status` is declared on every action rather than inferred from `to_state`.
+	Branching actions decide their target from the submitted data, so their `to_state` is
+	empty until the form comes back -- inferring from it would classify them as harmless
+	and let them through on a restricted pipeline.
 	"""
-	if action.get("admin_only") or action.get("to_state"):
+	if action.get("admin_only") or action.get("changes_status"):
 		return may_change_status
 	return True
 
@@ -111,8 +113,9 @@ def execute_action(deal: str, action: str, data: str | dict | None = None) -> di
 
 	spec["handler"](doc, values)
 
-	if spec["to_state"]:
-		doc.status = spec["to_state"]
+	to_state = resolve_to_state(spec, values)
+	if to_state:
+		doc.status = to_state
 
 	doc.save()
 
