@@ -27,15 +27,22 @@ Each action declares:
 Ordering matters: actions are offered in the order listed.
 """
 
-from crm.txb.constants import PIPELINE_DELIVERING_COACHING, PIPELINE_WORKSHOP
+from crm.txb.constants import (
+	PIPELINE_DELIVERING_COACHING,
+	PIPELINE_INDIVIDUAL_SESSION,
+	PIPELINE_SELLING_TRAINING,
+	PIPELINE_WORKSHOP,
+)
 from crm.txb.pipelines.delivering_coaching import DELIVERING_COACHING_ACTIONS
+from crm.txb.pipelines.individual_session import INDIVIDUAL_SESSION_ACTIONS
+from crm.txb.pipelines.selling_training import SELLING_TRAINING_ACTIONS
 from crm.txb.pipelines.workshop import WORKSHOP_ACTIONS
 
 PIPELINE_ACTIONS = {
 	PIPELINE_DELIVERING_COACHING: DELIVERING_COACHING_ACTIONS,
 	PIPELINE_WORKSHOP: WORKSHOP_ACTIONS,
-	# Individual Session and Selling Training are still served by the Form Script.
-	# It must stay enabled until they are ported.
+	PIPELINE_INDIVIDUAL_SESSION: INDIVIDUAL_SESSION_ACTIONS,
+	PIPELINE_SELLING_TRAINING: SELLING_TRAINING_ACTIONS,
 }
 
 
