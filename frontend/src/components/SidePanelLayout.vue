@@ -497,12 +497,21 @@ const _sections = computed(() => {
   if (!props.sections?.length) return []
   let editButtonAdded = false
   return props.sections.map((section) => {
+    // Build a new section rather than writing parsed fields back into props.sections.
+    // Re-parsing its own output made derived values stick: a field's link_filters kept
+    // the previous evaluation's value, so a status list computed from pipeline_type
+    // never changed once rendered.
+    let _section = { ...section }
     if (section.columns?.length) {
-      section.columns[0].fields = section.columns[0].fields.map((field) => {
-        return parsedField(field)
-      })
+      _section.columns = [
+        {
+          ...section.columns[0],
+          fields: section.columns[0].fields.map((field) => parsedField(field)),
+        },
+        ...section.columns.slice(1),
+      ]
     }
-    let _section = parsedSection(section, editButtonAdded)
+    _section = parsedSection(_section, editButtonAdded)
     if (_section.showEditButton) {
       editButtonAdded = true
     }
@@ -541,23 +550,19 @@ function parsedField(field) {
 
   // Restrict a deal's status to its own pipeline, so statuses belonging to other
   // pipelines are not offered. The current status is always kept selectable.
-  if (
+  //
+  // Derived on every evaluation and never written back to `link_filters`, so switching
+  // pipeline_type recomputes the list instead of reusing the previous one.
+  const pipelineStatusFilters =
     field.fieldtype === 'Link' &&
     field.options === 'CRM Deal Status' &&
     props.doctype === 'CRM Deal'
-  ) {
-    const pipelineFilters = statusLinkFilters(
-      doc.value?.pipeline_type,
-      doc.value?.status,
-      pipelineStatuses.data,
-    )
-    if (pipelineFilters) {
-      field.link_filters = JSON.stringify({
-        ...pipelineFilters,
-        ...(parseLinkFilters(field.link_filters) || {}),
-      })
-    }
-  }
+      ? statusLinkFilters(
+          doc.value?.pipeline_type,
+          doc.value?.status,
+          pipelineStatuses.data,
+        )
+      : null
 
   const read_only_via_depends_on = evaluateDependsOnValue(
     field.read_only_depends_on,
@@ -574,7 +579,12 @@ function parsedField(field) {
 
   let _field = {
     ...field,
-    filters: parseLinkFilters(field.link_filters),
+    filters: pipelineStatusFilters
+      ? {
+          ...(parseLinkFilters(field.link_filters) || {}),
+          ...pipelineStatusFilters,
+        }
+      : parseLinkFilters(field.link_filters),
     placeholder: field.placeholder || field.label,
     display_via_depends_on: evaluateDependsOnValue(field.depends_on, doc.value),
     mandatory_via_depends_on: evaluateDependsOnValue(
