@@ -44,6 +44,9 @@ def get_available_actions(deal: str) -> dict:
 				"name": action["name"],
 				"label": action["label"],
 				"to_state": action["to_state"],
+				# The board pre-selects a branch value from the column the card was
+				# dropped on, which it can only do if it can see the mapping.
+				"to_state_map": action.get("to_state_map") or {},
 				"fields": action["fields"],
 			}
 		)

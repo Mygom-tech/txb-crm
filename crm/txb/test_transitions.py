@@ -117,3 +117,27 @@ class TestNoDeadEnds(FrappeTestCase):
 		self.assertTrue(
 			is_allowed(PIPELINE_INDIVIDUAL_SESSION, "Follow-up", "Session Set")
 		)
+
+
+class TestTransitionApi(FrappeTestCase):
+	def test_the_endpoint_returns_labelled_edges(self):
+		from crm.txb.api.transitions import get_transition_map as api_map
+
+		payload = api_map()
+		edge = payload["transitions"][PIPELINE_WORKSHOP]["Workshop submitted"]["VCS call set"]
+
+		self.assertEqual(edge, [{"name": "set_vcs_call", "label": "Set VCS Call"}])
+
+	def test_the_endpoint_reports_the_role_rule(self):
+		from crm.txb.api.transitions import get_transition_map as api_map
+
+		payload = api_map()
+		self.assertIn(PIPELINE_DELIVERING_COACHING, payload["can_change_status"])
+		self.assertTrue(payload["can_change_status"][PIPELINE_WORKSHOP])
+
+	def test_available_actions_expose_the_branch_map(self):
+		"""The browser pre-fills a branch from the dropped column, so it needs the map."""
+		from crm.txb.pipelines.actions import find_action
+
+		spec = find_action(PIPELINE_WORKSHOP, "run_workshop")
+		self.assertIn("ws_outcome", spec["to_state_map"])
