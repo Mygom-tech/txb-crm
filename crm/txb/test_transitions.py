@@ -216,9 +216,20 @@ class TestTransitionEnforcement(FrappeTestCase):
 		self.assertTrue(deal.name)
 
 	def test_a_deal_with_no_state_machine_is_untouched(self):
-		"""Stock deals with no pipeline_type must keep working."""
+		"""A deal in a pipeline with no registered actions must keep working.
+
+		`pipeline_type` is a Select whose options carry no leading blank and whose
+		`default` is null, so Frappe's `_set_defaults` fills in the FIRST option --
+		"Individual Session" -- on any insert that omits it. The blank must therefore be
+		set explicitly, or this test silently exercises the Individual Session state
+		machine instead of the exemption it is meant to cover.
+
+		"Discovery" and "Demo/Making" are real CRM Deal Status records belonging to no
+		pipeline, so the move has no edge in any graph. It must still succeed: a deal
+		with no state machine has no transitions to enforce.
+		"""
 		deal = frappe.get_doc(
-			{"doctype": "CRM Deal", "status": "Qualification"}
+			{"doctype": "CRM Deal", "pipeline_type": "", "status": "Discovery"}
 		).insert(ignore_permissions=True)
 		frappe.set_user(COACH)
 		deal.reload()
