@@ -2577,10 +2577,14 @@ describe('canDropOn — the Admin hatch', () => {
 /**
  * Whether a card dragged from `from` may be dropped on `to`.
  *
- * `adminStatuses`, when given, is the pipeline's full status list and means the user
- * holds the recovery hatch: they may move the deal anywhere within its own pipeline. The
- * action modal still opens when an action owns the edge, so nothing an action records is
- * skipped — the hatch widens where they may go, not what gets captured.
+ * `adminStatuses`, when given and non-empty, is the pipeline's full status list and means
+ * the user holds the recovery hatch: they may move the deal anywhere within its own
+ * pipeline. The action modal still opens when an action owns the edge, so nothing an
+ * action records is skipped — the hatch widens where they may go, not what gets captured.
+ *
+ * An EMPTY list means "not known yet": `allowedStatusesFor` returns `[]` both before its
+ * resource loads and for an unmapped pipeline. It falls through to the graph rules rather
+ * than refusing everything, which would grey the board for the very user the hatch is for.
  */
 export function canDropOn(
   transitions,
@@ -2592,7 +2596,7 @@ export function canDropOn(
 ) {
   if (!canChangeStatus) return false
   if (from === to) return true
-  if (adminStatuses) return adminStatuses.includes(to)
+  if (adminStatuses?.length) return adminStatuses.includes(to)
 
   return allowedTargets(transitions, pipeline, from).includes(to)
 }
