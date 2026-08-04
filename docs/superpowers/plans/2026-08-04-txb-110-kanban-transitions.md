@@ -23,6 +23,65 @@
 
 ---
 
+# Phase 0 — Make the backend test suite runnable
+
+### Task 0: Migrate the txb tests to the v15 test base class
+
+`crm/txb/test_permissions.py`, `test_doc_events.py` and `test_registration_token.py` all import `frappe.tests.IntegrationTestCase`. That name does not exist in Frappe v15 — this bench is 15.116.0, and v15 provides `frappe.tests.utils.FrappeTestCase`. `bench run-tests` therefore fails at import for every one of them, so no backend task in this plan can be verified until this is fixed.
+
+`docs/deployment-guide.md` records that production is deliberately on v15, so the fix is to move the tests to the v15 API — **not** to upgrade the bench.
+
+**Files:**
+- Modify: `crm/txb/test_permissions.py:12`
+- Modify: `crm/txb/test_doc_events.py:13`
+- Modify: `crm/txb/test_registration_token.py:5`
+
+**Interfaces:**
+- Produces: all three modules run under `bench --site localhost run-tests`. Every later task in this plan depends on that.
+
+- [ ] **Step 1: Confirm the failure**
+
+Run from the bench root (`/home/vainius/projects/modiggo/projects/mygom/txb/txb-crm-be`):
+
+```bash
+bench --site localhost run-tests --module crm.txb.test_permissions
+```
+
+Expected: `ImportError: cannot import name 'IntegrationTestCase' from 'frappe.tests'`.
+
+- [ ] **Step 2: Swap the base class in all three modules**
+
+In each of the three files, replace the import:
+
+```python
+from frappe.tests.utils import FrappeTestCase
+```
+
+and every `class Foo(IntegrationTestCase):` with `class Foo(FrappeTestCase):`.
+
+`FrappeTestCase` rolls back at class cleanup rather than per test, so the explicit `frappe.db.rollback()` these modules already call in `tearDown` is what provides per-test isolation. Keep it.
+
+- [ ] **Step 3: Run all three modules**
+
+```bash
+bench --site localhost run-tests --module crm.txb.test_permissions
+bench --site localhost run-tests --module crm.txb.test_doc_events
+bench --site localhost run-tests --module crm.txb.test_registration_token
+```
+
+Expected: all import cleanly and run.
+
+**If any test now fails on its assertions** — as opposed to failing to import — that is a real, previously invisible failure. Do not change the assertion to make it pass. Record each failure verbatim in the report with the test name and the output, fix it only if the fix is obviously a test-side mistake (e.g. a status string that does not exist), and escalate anything that looks like a genuine product bug via `DONE_WITH_CONCERNS`.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add crm/txb/test_permissions.py crm/txb/test_doc_events.py crm/txb/test_registration_token.py
+git commit -m "test(txb): run under the v15 FrappeTestCase base class"
+```
+
+---
+
 # Phase 1 — Backend: derive and enforce the graph
 
 ### Task 1: Declare the Lost targets that handlers hide
@@ -137,7 +196,7 @@ Create `crm/txb/test_transitions.py`:
 
 """TXB-110: the transition graph derived from the action registry."""
 
-from frappe.tests import IntegrationTestCase
+from frappe.tests.utils import FrappeTestCase
 
 from crm.txb.constants import (
 	PIPELINE_DELIVERING_COACHING,
@@ -155,7 +214,7 @@ from crm.txb.pipelines.transitions import (
 )
 
 
-class TestTransitionGraph(IntegrationTestCase):
+class TestTransitionGraph(FrappeTestCase):
 	def test_a_fixed_target_appears_as_an_edge(self):
 		graph = get_transitions(PIPELINE_DELIVERING_COACHING)
 		self.assertIn("Waiting on Review", graph["Submitted"])
@@ -338,7 +397,7 @@ Enforcing the graph as it stands would trap deals. Four states have no way out.
 Add to `crm/txb/test_transitions.py`:
 
 ```python
-class TestNoDeadEnds(IntegrationTestCase):
+class TestNoDeadEnds(FrappeTestCase):
 	"""Every status must have a way out, or enforcing the graph traps deals.
 
 	Before TXB-110 added recovery transitions there were four dead ends: Individual
@@ -479,7 +538,7 @@ git commit -m "feat(txb): add reopen actions and re-book from Follow-up, removin
 Add to `crm/txb/test_transitions.py`:
 
 ```python
-class TestTransitionApi(IntegrationTestCase):
+class TestTransitionApi(FrappeTestCase):
 	def test_the_endpoint_returns_labelled_edges(self):
 		from crm.txb.api.transitions import get_transition_map as api_map
 
@@ -611,7 +670,7 @@ COACH = "txb-coach@example.com"
 ADMIN = "txb-admin@example.com"
 
 
-class TestTransitionEnforcement(IntegrationTestCase):
+class TestTransitionEnforcement(FrappeTestCase):
 	@classmethod
 	def setUpClass(cls):
 		super().setUpClass()
@@ -846,7 +905,7 @@ The ticket's Definition of Done asks QA for a source → target matrix per pipel
 Add to `crm/txb/test_transitions.py`:
 
 ```python
-class TestTransitionMatrix(IntegrationTestCase):
+class TestTransitionMatrix(FrappeTestCase):
 	def test_the_matrix_lists_every_pipeline_and_edge(self):
 		from crm.txb.transition_matrix import render_matrix
 
