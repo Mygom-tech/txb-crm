@@ -158,6 +158,23 @@ class TestTransitionApi(FrappeTestCase):
 		spec = find_action(PIPELINE_WORKSHOP, "run_workshop")
 		self.assertIn("ws_outcome", spec["to_state_map"])
 
+	def test_the_endpoint_serves_universal_edges_under_a_star_key(self):
+		"""Actions with no from_states apply from any status, including off-list ones.
+
+		A Workshop deal really does sit at "Active", which is not a Workshop status. The
+		server allows Cancel Workshop from there; the client must be told so, or it greys
+		every column and then refuses a status it just offered.
+		"""
+		from crm.txb.api.transitions import get_transition_map as api_map
+
+		universal = api_map()["transitions"][PIPELINE_WORKSHOP]["*"]
+		names = sorted(action["name"] for action in universal["Lost"])
+
+		self.assertEqual(names, ["cancel_workshop", "workshop_not_interested"])
+
+	def test_pipelines_without_universal_actions_have_no_star_key(self):
+		self.assertNotIn("*", get_transition_map()[PIPELINE_DELIVERING_COACHING])
+
 
 class TestTransitionEnforcement(FrappeTestCase):
 	@classmethod

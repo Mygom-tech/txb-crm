@@ -11,7 +11,7 @@ graph; the browser is not a security boundary.
 import frappe
 
 from crm.txb.permissions import can_change_status
-from crm.txb.pipelines.actions import PIPELINE_ACTIONS, find_action
+from crm.txb.pipelines.actions import PIPELINE_ACTIONS, find_action, get_actions
 from crm.txb.pipelines import transitions
 
 
@@ -31,6 +31,22 @@ def get_transition_map() -> dict:
 			}
 			for source, targets in graph.items()
 		}
+
+		# Actions declaring no `from_states` apply from ANY status -- including one outside
+		# this pipeline's list, which real data contains. `is_allowed` was given the same
+		# fallback server-side; without this key the browser would grey every column for
+		# such a deal and then refuse a status it had just offered.
+		universal = {}
+		for action in get_actions(pipeline):
+			if not action.get("changes_status") or action.get("from_states"):
+				continue
+			for target in transitions.action_targets(action):
+				universal.setdefault(target, []).append(
+					{"name": action["name"], "label": action["label"]}
+				)
+
+		if universal:
+			labelled[pipeline]["*"] = universal
 
 	return {
 		"transitions": labelled,

@@ -15,6 +15,9 @@ const TRANSITIONS = {
         { name: 'cancel_workshop', label: 'Cancel Workshop' },
       ],
     },
+    '*': {
+      Lost: [{ name: 'cancel_workshop', label: 'Cancel Workshop' }],
+    },
   },
 }
 
@@ -31,11 +34,15 @@ describe('allowedTargets', () => {
     ).toEqual(['Lost', 'Workshop ran'])
   })
 
-  it('returns nothing for an unknown pipeline or status', () => {
+  it('returns nothing for an unknown pipeline', () => {
     expect(allowedTargets(TRANSITIONS, 'Nope', 'Workshop set')).toEqual([])
-    expect(allowedTargets(TRANSITIONS, 'Workshop', 'Nope')).toEqual([])
     expect(allowedTargets(undefined, 'Workshop', 'Workshop set')).toEqual([])
   })
+
+  // An unknown STATUS is no longer asserted empty here: the fixture now carries a '*'
+  // row (Task 15), so 'Workshop'/'Nope' legitimately falls back to it, the same as the
+  // real off-list case covered below under "off-list statuses fall back to universal
+  // actions". A status with no row of its own is exactly what triggers the fallback.
 })
 
 describe('candidateActions', () => {
@@ -139,5 +146,44 @@ describe('canDropOn', () => {
     expect(
       canDropOn(TRANSITIONS, 'Workshop', 'Workshop set', 'Workshop set', true),
     ).toBe(true)
+  })
+})
+
+describe('off-list statuses fall back to universal actions', () => {
+  it('offers the universal targets from a status with no graph entry', () => {
+    expect(allowedTargets(TRANSITIONS, 'Workshop', 'Active')).toEqual(['Lost'])
+  })
+
+  it('resolves the universal action as a candidate', () => {
+    const found = candidateActions(
+      TRANSITIONS,
+      'Workshop',
+      'Active',
+      'Lost',
+      AVAILABLE,
+    )
+    expect(found.map((a) => a.name)).toEqual(['cancel_workshop'])
+  })
+
+  it('prefers the status-specific entry when one exists', () => {
+    // "Workshop set" has its own row; the universal row must not shadow or duplicate it.
+    expect(
+      allowedTargets(TRANSITIONS, 'Workshop', 'Workshop set').sort(),
+    ).toEqual(['Lost', 'Workshop ran'])
+    const found = candidateActions(
+      TRANSITIONS,
+      'Workshop',
+      'Workshop set',
+      'Lost',
+      AVAILABLE,
+    )
+    expect(found.map((a) => a.name)).toEqual([
+      'run_workshop',
+      'cancel_workshop',
+    ])
+  })
+
+  it('is silent when the pipeline has no universal actions', () => {
+    expect(allowedTargets({ Workshop: {} }, 'Workshop', 'Active')).toEqual([])
   })
 })

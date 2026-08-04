@@ -9,13 +9,27 @@
  */
 
 /**
+ * The edges available from `from`.
+ *
+ * A status outside its pipeline's own list has no graph row — real data contains one, a
+ * Workshop sitting at "Active". Actions declaring no `from_states` still apply from
+ * there, and the server's `is_allowed` says so, so the `"*"` row stands in. A status
+ * WITH its own row already includes those actions (the graph expands empty `from_states`
+ * across the pipeline's statuses), so the rows are alternatives, never merged.
+ */
+function edgesFrom(transitions, pipeline, from) {
+  const graph = transitions?.[pipeline] || {}
+  return graph[from] || graph['*'] || {}
+}
+
+/**
  * Statuses reachable from `from` in this pipeline.
  *
  * @param {Object} transitions  {pipeline: {from: {to: [{name,label}]}}}
  * @returns {string[]}
  */
 export function allowedTargets(transitions, pipeline, from) {
-  return Object.keys(transitions?.[pipeline]?.[from] || {})
+  return Object.keys(edgesFrom(transitions, pipeline, from))
 }
 
 /**
@@ -29,7 +43,9 @@ export function allowedTargets(transitions, pipeline, from) {
  * @returns {Array} the full action objects, in graph order
  */
 export function candidateActions(transitions, pipeline, from, to, available) {
-  const names = (transitions?.[pipeline]?.[from]?.[to] || []).map((a) => a.name)
+  const names = (edgesFrom(transitions, pipeline, from)[to] || []).map(
+    (a) => a.name,
+  )
   const byName = new Map((available || []).map((a) => [a.name, a]))
 
   return names
