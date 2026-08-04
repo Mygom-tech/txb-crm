@@ -162,7 +162,25 @@ override_doctype_class = {
 
 doc_events = {
 	"Contact": {
+		"before_validate": ["crm.txb.doc_events.contact.sync_organization"],
 		"validate": ["crm.api.contact.validate"],
+	},
+	"CRM Lead": {
+		# prevent_duplicate first: it throws, so nothing else should run before it.
+		"before_insert": [
+			"crm.txb.doc_events.lead.prevent_duplicate",
+			"crm.txb.doc_events.lead.assign_owner",
+		],
+		"before_validate": [
+			"crm.txb.doc_events.lead.protect_owner",
+			"crm.txb.doc_events.lead.default_disqualified_reason",
+		],
+	},
+	"CRM Call Log": {
+		"before_validate": ["crm.txb.doc_events.call_log.default_phone_numbers"],
+		"after_insert": ["crm.txb.doc_events.call_log.update_deal_call_count"],
+		"on_update": ["crm.txb.doc_events.call_log.update_deal_call_count"],
+		"after_delete": ["crm.txb.doc_events.call_log.update_deal_call_count"],
 	},
 	"ToDo": {
 		"after_insert": ["crm.api.todo.after_insert"],
@@ -181,7 +199,11 @@ doc_events = {
 		"on_update": ["crm.api.whatsapp.on_update"],
 	},
 	"CRM Deal": {
-		"before_validate": ["crm.txb.doc_events.deal.generate_registration_token"],
+		"before_validate": [
+			"crm.txb.doc_events.deal.generate_registration_token",
+			"crm.txb.doc_events.deal.sync_contact_name",
+			"crm.txb.doc_events.deal.sync_delivery_coach_name",
+		],
 		"on_update": [
 			"crm.fcrm.doctype.erpnext_crm_settings.erpnext_crm_settings.create_customer_in_erpnext"
 		],
@@ -236,6 +258,9 @@ scheduler_events = {
 		"*/5 * * * *": ["crm.lead_syncing.background_sync.sync_leads_from_sources_5_minutes"],
 		"*/10 * * * *": ["crm.lead_syncing.background_sync.sync_leads_from_sources_10_minutes"],
 		"*/15 * * * *": ["crm.lead_syncing.background_sync.sync_leads_from_sources_15_minutes"],
+		# Cadence preserved from the Server Scripts these replaced.
+		"0 9 * * *": ["crm.txb.tasks.reminders.stale_session_run_alert"],
+		"0 9 * * 1": ["crm.txb.tasks.reminders.weekly_vcs_reminder"],
 	},
 }
 

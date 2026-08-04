@@ -31,3 +31,5 @@ crm.patches.v1_0.set_persona_captured_for_existing_sites
 crm.patches.v1_0.add_enrichment_fields_to_layouts
 crm.patches.v1_0.reorder_address_quick_entry_layout
 crm.patches.v1_0.reissue_registration_tokens
+crm.patches.v1_0.disable_migrated_server_scripts
+crm.patches.v1_0.disable_pipeline_status_filter_script

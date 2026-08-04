@@ -2,8 +2,12 @@ import IndicatorIcon from '@/components/Icons/IndicatorIcon.vue'
 import { parseColor, isTranslatable } from '@/utils'
 import { defineStore } from 'pinia'
 import { useTelemetry } from 'frappe-ui/frappe'
-import { createListResource } from 'frappe-ui'
+import { createListResource, createResource } from 'frappe-ui'
 import { reactive, h } from 'vue'
+
+// createListResource defaults to 20 rows. There are more deal statuses than that, so the
+// store silently truncated the list and some statuses could never be selected.
+const ALL_STATUSES_PAGE_LENGTH = 500
 
 export const statusesStore = defineStore('crm-statuses', () => {
   let leadStatusesByName = reactive({})
@@ -16,6 +20,7 @@ export const statusesStore = defineStore('crm-statuses', () => {
     doctype: 'CRM Lead Status',
     fields: ['name', 'color', 'position', 'type'],
     orderBy: 'position asc',
+    pageLength: ALL_STATUSES_PAGE_LENGTH,
     cache: 'lead-statuses',
     initialData: [],
     auto: true,
@@ -32,6 +37,7 @@ export const statusesStore = defineStore('crm-statuses', () => {
     doctype: 'CRM Deal Status',
     fields: ['name', 'color', 'position', 'type'],
     orderBy: 'position asc',
+    pageLength: ALL_STATUSES_PAGE_LENGTH,
     cache: 'deal-statuses',
     initialData: [],
     auto: true,
@@ -56,6 +62,14 @@ export const statusesStore = defineStore('crm-statuses', () => {
       }
       return statuses
     },
+  })
+
+  // Which statuses each pipeline may use. Single source of truth, served by the backend.
+  const pipelineStatuses = createResource({
+    url: 'crm.txb.api.pipelines.get_pipeline_statuses',
+    cache: 'pipeline-statuses',
+    initialData: {},
+    auto: true,
   })
 
   function getLeadStatus(name) {
@@ -115,6 +129,7 @@ export const statusesStore = defineStore('crm-statuses', () => {
     leadStatuses,
     dealStatuses,
     communicationStatuses,
+    pipelineStatuses,
     getLeadStatus,
     getDealStatus,
     getCommunicationStatus,

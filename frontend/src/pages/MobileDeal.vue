@@ -9,18 +9,7 @@
         </template>
       </Breadcrumbs>
       <div class="absolute right-0">
-        <Dropdown
-          v-if="doc"
-          :options="
-            statusOptions(
-              'deal',
-              document.statuses?.length
-                ? document.statuses
-                : document._statuses,
-              triggerStatusChange,
-            )
-          "
-        >
+        <Dropdown v-if="doc" :options="statuses">
           <template #default="{ open }">
             <Button
               v-if="doc.status"
@@ -294,6 +283,7 @@ import SLASection from '@/components/SLASection.vue'
 import CustomActions from '@/components/CustomActions.vue'
 import { setupCustomizations, isTranslatable } from '@/utils'
 import { getView } from '@/utils/view'
+import { allowedStatusesFor } from '@/utils/pipelineStatuses'
 import { getSettings } from '@/stores/settings'
 import { globalStore } from '@/stores/global'
 import { statusesStore } from '@/stores/statuses'
@@ -318,7 +308,24 @@ import { useRoute, useRouter } from 'vue-router'
 
 const { brand } = getSettings()
 const { $dialog, $socket } = globalStore()
-const { statusOptions, getDealStatus } = statusesStore()
+const { statusOptions, getDealStatus, pipelineStatuses } = statusesStore()
+
+const statuses = computed(() => {
+  // A form script may pin an explicit list; otherwise restrict to the deal's pipeline.
+  let customStatuses = document.statuses?.length
+    ? document.statuses
+    : document._statuses || []
+
+  if (!customStatuses.length) {
+    customStatuses = allowedStatusesFor(
+      doc.value?.pipeline_type,
+      doc.value?.status,
+      pipelineStatuses.data,
+    )
+  }
+
+  return statusOptions('deal', customStatuses, triggerStatusChange)
+})
 const { doctypeMeta } = getMeta('CRM Deal')
 
 const route = useRoute()

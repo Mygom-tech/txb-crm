@@ -184,6 +184,7 @@
                           v-else-if="
                             ['Link', 'Dynamic Link'].includes(field.fieldtype)
                           "
+                          :key="linkKey(field)"
                           class="form-control select-text"
                           :value="doc[field.fieldname]"
                           :doctype="
@@ -436,6 +437,8 @@ import SidePanelModal from '@/components/Modals/SidePanelModal.vue'
 import { getMeta } from '@/stores/meta'
 import { parseLinkFilters } from '@/utils/fieldTransforms'
 import { usersStore } from '@/stores/users'
+import { statusesStore } from '@/stores/statuses'
+import { statusLinkFilters } from '@/utils/pipelineStatuses'
 import { isMobileView } from '@/composables/settings'
 import {
   getFormat,
@@ -474,6 +477,7 @@ const { getFormattedPercent, getFormattedFloat, getFormattedCurrency } =
   getMeta(props.doctype)
 
 const { users, isManager, getUser } = usersStore()
+const { pipelineStatuses } = statusesStore()
 
 const showSidePanelModal = ref(false)
 
@@ -494,18 +498,44 @@ const _sections = computed(() => {
   if (!props.sections?.length) return []
   let editButtonAdded = false
   return props.sections.map((section) => {
+    // Build a new section rather than writing parsed fields back into props.sections.
+    // Re-parsing its own output made derived values stick: a field's link_filters kept
+    // the previous evaluation's value, so a status list computed from pipeline_type
+    // never changed once rendered.
+    let _section = { ...section }
     if (section.columns?.length) {
-      section.columns[0].fields = section.columns[0].fields.map((field) => {
-        return parsedField(field)
-      })
+      _section.columns = [
+        {
+          ...section.columns[0],
+          fields: section.columns[0].fields.map((field) => parsedField(field)),
+        },
+        ...section.columns.slice(1),
+      ]
     }
-    let _section = parsedSection(section, editButtonAdded)
+    _section = parsedSection(_section, editButtonAdded)
     if (_section.showEditButton) {
       editButtonAdded = true
     }
     return _section
   })
 })
+
+/**
+ * Identity for a Link control, including its filters.
+ *
+ * Link builds its options resource with `cache: [doctype, text, hideMe, filters]`,
+ * evaluated once at setup. createResource keys a shared, module-level instance off that,
+ * so a Link whose filters change later refetches but writes the result back under its
+ * original key -- and returns that poisoned entry to the next Link with matching filters
+ * without reloading, since the resource is not `auto`. The list then stays frozen until a
+ * page refresh clears the cache.
+ *
+ * Keying on the filter content remounts the control only when the filters genuinely
+ * change, so every resource fetches with exactly the filters in its own cache key.
+ */
+function linkKey(field) {
+  return `${field.fieldname}:${JSON.stringify(field.filters ?? null)}`
+}
 
 function parsedField(field) {
   // Clone to avoid mutating the cached layout data
@@ -536,6 +566,22 @@ function parsedField(field) {
     })
   }
 
+  // Restrict a deal's status to its own pipeline, so statuses belonging to other
+  // pipelines are not offered. The current status is always kept selectable.
+  //
+  // Derived on every evaluation and never written back to `link_filters`, so switching
+  // pipeline_type recomputes the list instead of reusing the previous one.
+  const pipelineStatusFilters =
+    field.fieldtype === 'Link' &&
+    field.options === 'CRM Deal Status' &&
+    props.doctype === 'CRM Deal'
+      ? statusLinkFilters(
+          doc.value?.pipeline_type,
+          doc.value?.status,
+          pipelineStatuses.data,
+        )
+      : null
+
   const read_only_via_depends_on = evaluateDependsOnValue(
     field.read_only_depends_on,
     doc.value,
@@ -551,7 +597,12 @@ function parsedField(field) {
 
   let _field = {
     ...field,
-    filters: parseLinkFilters(field.link_filters),
+    filters: pipelineStatusFilters
+      ? {
+          ...(parseLinkFilters(field.link_filters) || {}),
+          ...pipelineStatusFilters,
+        }
+      : parseLinkFilters(field.link_filters),
     placeholder: field.placeholder || field.label,
     display_via_depends_on: evaluateDependsOnValue(field.depends_on, doc.value),
     mandatory_via_depends_on: evaluateDependsOnValue(
