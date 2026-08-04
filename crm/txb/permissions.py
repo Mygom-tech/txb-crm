@@ -116,9 +116,10 @@ def guard_transition(doc, method=None):
 
 	if frappe.flags.get("txb_action") != doc.name:
 		frappe.throw(
-			_('Change the status of a {0} opportunity through Take Action, so the details that go with the change are recorded.').format(
-				_(doc.pipeline_type)
-			),
+			_(
+				"Change the status of a {0} opportunity through Take Action, so the "
+				"details that go with the change are recorded."
+			).format(_(doc.pipeline_type)),
 			frappe.ValidationError,
 			title=_("Use Take Action"),
 		)

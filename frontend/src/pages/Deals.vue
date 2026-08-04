@@ -303,7 +303,6 @@ const triggerResize = ref(1)
 const updatedPageCount = ref(20)
 const viewControls = ref(null)
 
-// Only a board grouped by status has transition rules.
 const kanbanColumnField = computed(() => deals.value?.params?.column_field)
 
 // Only a status board has transition rules; a board grouped by owner or any other
