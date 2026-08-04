@@ -1288,14 +1288,13 @@ git commit -m "feat(deals): pure helpers for the deal transition graph"
 
 **Interfaces:**
 - Consumes: nothing from earlier frontend tasks.
-- Produces: `transitionsStore()` exposing `transitionMap` (a `createResource`), `transitions` (computed object) and `canChangeStatusFor(pipeline)`.
+- Produces: `transitionsStore()` exposing `transitionMap` (a `createResource`) and `canChangeStatusFor(pipeline)`. Consumers read the graph as `transitionMap.data?.transitions`.
 
 - [ ] **Step 1: Write the store**
 
 Create `frontend/src/stores/transitions.js`, mirroring `stores/statuses.js`:
 
 ```js
-import { computed } from 'vue'
 import { defineStore } from 'pinia'
 import { createResource } from 'frappe-ui'
 
@@ -1305,6 +1304,13 @@ import { createResource } from 'frappe-ui'
  * Mirrors the pipelineStatuses resource in stores/statuses.js: one source of truth,
  * served by the backend, cached by frappe-ui's module-level resource cache so every
  * board and every deal page reads the same answer.
+ *
+ * Deliberately exposes the resource itself rather than a `computed` over its data.
+ * Pinia builds a setup store with `reactive()`, which unwraps top-level refs — so
+ * `const { transitions } = transitionsStore()` would hand back a frozen plain snapshot
+ * (`{}` before the fetch resolves) and `.value` would be `undefined`. A `createResource`
+ * is a reactive *object*, so destructuring it keeps the same reference and `.data` stays
+ * live. That is exactly why `pipelineStatuses` is safe to destructure everywhere today.
  */
 export const transitionsStore = defineStore('crm-transitions', () => {
   const transitionMap = createResource({
@@ -1314,8 +1320,6 @@ export const transitionsStore = defineStore('crm-transitions', () => {
     auto: true,
   })
 
-  const transitions = computed(() => transitionMap.data?.transitions || {})
-
   /**
    * Whether this user may move statuses in a pipeline at all (TXB-105).
    * Unknown pipelines are unrestricted, matching the backend default.
@@ -1324,9 +1328,11 @@ export const transitionsStore = defineStore('crm-transitions', () => {
     return transitionMap.data?.can_change_status?.[pipeline] !== false
   }
 
-  return { transitionMap, transitions, canChangeStatusFor }
+  return { transitionMap, canChangeStatusFor }
 })
 ```
+
+**Consumers must read `transitionMap.data?.transitions`, never destructure a `transitions` computed.** Tasks 10–13 all follow that form.
 
 - [ ] **Step 2: Verify it loads**
 
@@ -1627,7 +1633,7 @@ import { transitionsStore } from '@/stores/transitions'
 and near the other store destructuring:
 
 ```js
-const { transitions } = transitionsStore()
+const { transitionMap } = transitionsStore()
 ```
 
 - [ ] **Step 2: Pass the context and honour the result**
@@ -1643,7 +1649,7 @@ Replace the `requestKanbanTransition` call and the `set_value` that follows:
       from: data.from,
       to: data.to,
       pipelineType: card?.pipeline_type,
-      transitions: transitions.value,
+      transitions: transitionMap.data?.transitions,
       available,
     })
 
@@ -1829,7 +1835,7 @@ import { transitionsStore } from '@/stores/transitions'
 and in `<script setup>`:
 
 ```js
-const { transitions, canChangeStatusFor } = transitionsStore()
+const { transitionMap, canChangeStatusFor } = transitionsStore()
 
 // Only a status board has transition rules; a board grouped by owner or any other
 // field keeps plain drag-and-drop.
@@ -1838,7 +1844,7 @@ function dealTransitionGuard({ from, to, card }) {
   if (!pipeline) return true
 
   return canDropOn(
-    transitions.value,
+    transitionMap.data?.transitions,
     pipeline,
     from,
     to,
@@ -1907,7 +1913,7 @@ import { transitionsStore } from '@/stores/transitions'
 and near the other stores:
 
 ```js
-const { transitions } = transitionsStore()
+const { transitionMap } = transitionsStore()
 const isAdmin = computed(() => dealActions.data?.is_admin === true)
 ```
 
@@ -1925,7 +1931,7 @@ Replace `triggerStatusChange`:
 // covers this edge does an Admin write directly. A non-Admin is refused there.
 async function triggerStatusChange(value) {
   const candidates = candidateActions(
-    transitions.value,
+    transitionMap.data?.transitions,
     doc.value?.pipeline_type,
     doc.value?.status,
     value,
@@ -1969,7 +1975,7 @@ In the `statuses` computed, after the existing pipeline fallback:
   // never picks a status and then hears it was refused.
   if (!isAdmin.value) {
     const reachable = allowedTargets(
-      transitions.value,
+      transitionMap.data?.transitions,
       doc.value?.pipeline_type,
       doc.value?.status,
     )
@@ -2066,7 +2072,7 @@ The side panel already narrows a `CRM Deal Status` link to the pipeline. Narrow 
       )
     } else {
       const reachable = allowedTargets(
-        transitions.value,
+        transitionMap.data?.transitions,
         doc.value?.pipeline_type,
         doc.value?.status,
       )
@@ -2096,7 +2102,7 @@ import { runAction } from '@/utils/takeAction'
 import { transitionsStore } from '@/stores/transitions'
 ```
 
-plus `const { transitions } = transitionsStore()` next to the existing store call.
+plus `const { transitionMap } = transitionsStore()` next to the existing store call.
 
 - [ ] **Step 2: Intercept the status write**
 
@@ -2114,7 +2120,7 @@ async function fieldChange(value, df) {
     value !== doc.value?.status
   ) {
     const candidates = candidateActions(
-      transitions.value,
+      transitionMap.data?.transitions,
       doc.value?.pipeline_type,
       doc.value?.status,
       value,
