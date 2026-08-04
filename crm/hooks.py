@@ -223,7 +223,9 @@ scheduler_events = {
 	"hourly": ["crm.api.event.trigger_hourly_event_notifications"],
 	"daily": [
 		"crm.api.event.trigger_daily_event_notifications",
+		"crm.fcrm.doctype.crm_invitation.crm_invitation.expire_invitations",
 		"crm.fcrm.doctype.crm_view_settings.crm_view_settings.clear_old_versions",
+		"crm.telemetry.capture_feature_state",
 	],
 	"weekly": ["crm.api.event.trigger_weekly_event_notifications"],
 	"daily_long": ["crm.lead_syncing.background_sync.sync_leads_from_sources_daily"],

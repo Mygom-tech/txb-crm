@@ -176,7 +176,6 @@ import {
   Tabs,
 } from 'frappe-ui'
 
-import { useTelemetry } from 'frappe-ui/frappe'
 import { getMeta } from '@/stores/meta'
 import Link from '@/components/Controls/Link.vue'
 import Grid from '@/components/Controls/Grid.vue'
@@ -241,7 +240,6 @@ const fieldsMap = computed(() => {
 })
 
 const sources = inject('sources')
-const { capture } = useTelemetry()
 const syncSource = ref({
   name: '',
   type: '',
@@ -274,7 +272,7 @@ function updateSource(data) {
         mappingFormDocResource.value.document.save.submit()
       },
       onError(e) {
-        toast.error(e.messages[0] || __('Error updating Lead Sync Source'))
+        toast.error(e.messages[0] || __('Error updating lead sync source'))
       },
     },
   )
@@ -288,15 +286,12 @@ function createSource() {
     },
     {
       onSuccess: (newDoc) => {
-        capture('lead_sync_source_created', {
-          source_type: syncSource.value.type,
-        })
-        toast.success(__('Lead Sync Source created successfully'))
+        toast.success(__('Lead sync source created successfully'))
         isLocal.value = false
         docResource.value = getSourceDocResource(newDoc.name)
       },
       onError(error) {
-        toast.error(error.messages[0] || __('Error creating Lead Sync Source'))
+        toast.error(error.messages[0] || __('Error creating lead sync source'))
       },
     },
   )

@@ -412,6 +412,67 @@ volume grows with file uploads); MariaDB storage/connections on the DB side.
 | Local build fails: `error getting credentials` on public images | Docker Desktop's WSL credential helper (`credsStore: desktop.exe`) broken | Remove `credsStore` from `~/.docker/config.json`, `docker login ghcr.io` again |
 | git commands resolve to a bizarre repo root (`/`, home dir) | Stray `.git` directory in an ancestor (accidental `git init`) | Find with `git rev-parse --show-toplevel` from the puzzled directory; delete the stray `.git` |
 
+## Release pipeline — staging → production
+
+Two distinct states; know which one you're in:
+
+**State A — production still runs the official `frappe/crm` image** (the
+transition period). New fork changes (UI rework, BE changes) ship to
+staging only. Production receives NOTHING until the one-time
+**production cutover runbook** below is executed — there is no partial
+promotion onto the official image: the first fork deployment to prod IS the
+cutover, and it carries every fork change accumulated on staging up to that
+tag. Practical consequence: keep the cutover close — the longer prod stays
+official while the fork accumulates changes, the bigger and riskier that
+first promotion becomes. Meanwhile, re-merge upstream `frappe/crm` develop
+into the fork regularly so prod's rolling image can't drift ahead of you.
+
+**State B — steady state after cutover** (prod runs the fork). Every
+release is the same five stages:
+
+| Stage | Action | Gate |
+|---|---|---|
+| 1. Integrate | PRs merge to `develop` (tests green per PR) | `yarn test:run` + review |
+| 2. Build | `deploy/build.sh` → unique tag pushed to GHCR | app-presence gate passes |
+| 3. Stage | staging `FRAPPE_VERSION=<tag>` → redeploy → migrate + cache clear | post-deploy checklist on staging |
+| 4. Validate | manual pass over CHANGED features + core flows (login, lead/deal list, kanban modal). For **schema-touching releases**: first refresh staging with prod data (restore runbook below) so `migrate` rehearses against reality | everything works with no console errors |
+| 5. Promote | prod `FRAPPE_VERSION=<the SAME tag>` → redeploy → migrate + cache clear | post-deploy checklist on prod |
+
+Rules that make this safe:
+- **The tag promoted to prod is the tag staging validated** — never rebuild
+  between stage 4 and 5; a rebuild is a new, unvalidated artifact.
+- UI-only releases (no DocType/patch changes) can skip the prod-data
+  refresh in stage 4 and need no maintenance window — `migrate` is a no-op.
+- Schema-touching releases get the full stage-4 rehearsal and a maintenance
+  window for stage 5, with a fresh prod backup taken first (rollback).
+- One release in flight at a time; staging mirrors either prod or
+  prod-plus-one-release, never a grab-bag of half-validated tags.
+
+## Runbook — syncing upstream frappe/crm into the fork
+
+Upstream moves fast (~dozens of commits/week on `develop`). Sync on a
+schedule — small merges have small conflicts:
+
+```bash
+git checkout develop && git pull origin develop
+git fetch upstream                       # upstream = https://github.com/frappe/crm.git
+git merge upstream/develop
+# resolve conflicts — expect them in files the fork customizes
+# (ViewControls.vue, KanbanView.vue, dialogs.jsx, vite.config.js)
+cd frontend && yarn test:run             # 142+ tests must stay green
+git push origin develop
+```
+
+- Cadence: at least before every release, ideally weekly. (GitHub's "Sync
+  fork" button does the same merge but resolves nothing — use the CLI when
+  conflicts are likely.)
+- The merge then rides the normal release pipeline (build → staging →
+  promote); upstream code never reaches prod except as a validated tag.
+- Watch upstream's frappe compatibility (README table): the image builds
+  with `FRAPPE_BRANCH=version-15`. The day upstream `develop` requires
+  frappe v16 is a coordinated framework upgrade (image + prod DB migration),
+  not a routine sync — plan it, don't stumble into it.
+
 ## Runbook — restore production data into staging (rehearsal / refresh)
 
 Used for: rehearsing a production cutover/migration on staging, and for

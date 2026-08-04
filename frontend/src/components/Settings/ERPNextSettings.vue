@@ -227,10 +227,6 @@
                   <Switch
                     v-model="erpnextCRMSettingsResource.doc.sync_products"
                     size="sm"
-                    @update:modelValue="
-                      (v) =>
-                        capture('erpnext_product_sync_toggled', { enabled: v })
-                    "
                   />
                 </div>
               </div>
@@ -442,7 +438,7 @@
               <span class="text-center text-p-base text-ink-gray-6">
                 {{
                   __(
-                    'Enable the integration to create quotations and auto create customers in ERPNext.',
+                    'Enable the integration to create quotations and more in ERPNext.',
                   )
                 }}
               </span>
@@ -633,8 +629,6 @@ const isDirty = computed(() => {
 const saveSettings = async () => {
   if (!validateData() || !validateSiteConnection()) return
 
-  const wasEnabled = !!erpnextCRMSettingsResource.originalDoc?.enabled
-
   updateFields(
     {
       enabled: erpnextCRMSettingsResource.doc.enabled,
@@ -651,9 +645,6 @@ const saveSettings = async () => {
     },
     {
       onSuccess: async () => {
-        if (erpnextCRMSettingsResource.doc.enabled && !wasEnabled) {
-          capture('erpnext_integration_enabled')
-        }
         if (!erpnextCRMSettingsResource.isERPNextInstalled.data) {
           await erpnextCRMSettingsResource.getExternalCompanies.submit()
         }
@@ -775,7 +766,7 @@ const validateSiteConnection = () => {
     try {
       new URL(erpnext_site_url)
     } catch {
-      error = __('Invalid Site URL')
+      error = __('Invalid site URL')
     }
   }
 
