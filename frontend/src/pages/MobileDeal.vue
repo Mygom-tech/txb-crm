@@ -76,6 +76,7 @@
               doctype="CRM Deal"
               :docname="dealId"
               @reload="sections.reload"
+              @action-completed="reload = true"
               @beforeFieldChange="beforeStatusChange"
               @afterFieldChange="reloadAssignees"
             >

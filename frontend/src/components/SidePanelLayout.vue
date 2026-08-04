@@ -471,6 +471,7 @@ import {
   TimePicker,
   Tooltip,
   createResource,
+  toast,
 } from 'frappe-ui'
 import { useDocument } from '@/data/document'
 import { ref, computed, getCurrentInstance } from 'vue'
@@ -483,7 +484,12 @@ const props = defineProps({
   addContact: { type: Function, default: null },
 })
 
-const emit = defineEmits(['beforeFieldChange', 'afterFieldChange', 'reload'])
+const emit = defineEmits([
+  'beforeFieldChange',
+  'afterFieldChange',
+  'reload',
+  'actionCompleted',
+])
 
 const { getFormattedPercent, getFormattedFloat, getFormattedCurrency } =
   getMeta(props.doctype)
@@ -712,12 +718,23 @@ async function fieldChange(value, df) {
       if (!result) return
 
       dealActions.reload()
-      emit('reload')
+      // Not `reload` — that one only refetches the panel's section layout. The action
+      // wrote the status, a note and usually a task, so the page must reload the
+      // document and the activity feed; the parent owns that ref.
+      emit('actionCompleted')
       return
     }
 
     // No action covers this edge. Only an Admin may write it bare.
-    if (!isDealAdmin.value) return
+    if (!isDealAdmin.value) {
+      toast.error(
+        __('"{0}" cannot be reached from "{1}".', [
+          __(value),
+          __(doc.value?.status),
+        ]),
+      )
+      return
+    }
   }
 
   await triggerOnChange(df.fieldname, value)
