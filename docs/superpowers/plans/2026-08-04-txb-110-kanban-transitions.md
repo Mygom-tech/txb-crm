@@ -431,7 +431,9 @@ class TestNoDeadEnds(FrappeTestCase):
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `bench --site localhost run-tests --module crm.txb.test_transitions --test test_every_status_has_an_outgoing_transition`
-Expected: FAIL listing 4 dead ends.
+Expected: FAIL listing exactly **three** dead ends — `('Workshop', 'Lost')`, `('Individual Session', 'Lost')`, `('Selling Training', 'Training not interested')`.
+
+Individual Session `Follow-up` is deliberately **not** in that list. Since Task 1 declared `to_state: "Lost"` on `cancel_bap` / `not_interested` (which have empty `from_states`, so they apply from every status), `Follow-up` does have one outgoing edge — to `Lost`. It is still a trap in practice: the only way out of a rescheduled BAP is to lose it. That is why this task also extends `book_bap`, and why `test_a_follow_up_bap_can_be_rebooked` exists as a separate assertion. Both tests must pass at the end; only the dead-end one fails now.
 
 - [ ] **Step 3: Extend `book_bap` and add the reopen handler**
 
