@@ -18,11 +18,14 @@ DEAL_DOCTYPE = "CRM Deal"
 
 
 @frappe.whitelist()
-def get_available_actions(deal: str) -> list:
-	"""Actions this user may take on this deal, right now.
+def get_available_actions(deal: str) -> dict:
+	"""What this user may do to this deal, right now.
 
-	Filtered by the deal's current status and by role, so the UI never offers something
-	`execute_action` would refuse.
+	Returns the actions filtered by the deal's current status and by role -- so the UI
+	never offers something `execute_action` would refuse -- along with whether the user
+	may change the status at all, which the status controls use to disable themselves.
+
+	Both come from the same rule, so what is shown and what is enforced cannot drift.
 	"""
 	frappe.has_permission(DEAL_DOCTYPE, "read", deal, throw=True)
 
@@ -45,7 +48,7 @@ def get_available_actions(deal: str) -> list:
 			}
 		)
 
-	return available
+	return {"actions": available, "can_change_status": may_change_status}
 
 
 def is_available(action: dict, status: str | None) -> bool:
