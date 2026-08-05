@@ -31,15 +31,14 @@ def owner_field(doctype: str) -> str | None:
 def claim_owner_on_insert(doc, method=None):
 	"""Own every new record as the creating user.
 
-	Covers direct creation, Lead to Contact, and Contact to Deal, where the converting
-	user is the session user and no owner reaches this hook pre-populated.
+	Covers direct creation, Lead to Contact, Contact to Deal, and Lead to Deal, where the
+	converting user is the session user and no owner reaches this hook pre-populated.
 
-	Lead to Deal is the exception until TXB-106 Task 5 lands: `CRMLead.create_deal`
-	copies `lead_owner` onto `deal_owner` through `LEAD_DEAL_FIELD_MAP` before insert,
-	so for an *Admin* converter the field is already truthy and reads here as a
-	deliberate nomination -- leaving the deal with the lead's owner rather than the
-	Admin's. A non-Admin converter is overwritten as intended. Task 5 empties that map,
-	which removes the seam for both.
+	Lead to Deal used to be the exception: `CRMLead.create_deal` copied `lead_owner` onto
+	`deal_owner` through `LEAD_DEAL_FIELD_MAP` before insert, so for an *Admin* converter
+	the field was already truthy and read here as a deliberate nomination -- leaving the
+	deal with the lead's owner rather than the Admin's. A non-Admin converter was
+	overwritten as intended. TXB-106 Task 5 emptied that map, closing the seam for both.
 	"""
 	field = owner_field(doc.doctype)
 	if not field or not doc.meta.has_field(field):
@@ -65,9 +64,10 @@ def guard_owner_change(doc, method=None):
 	Inserts are exempt -- `claim_owner_on_insert` has already decided the initial owner,
 	and the two rules would otherwise contradict each other.
 
-	This fires for unowned records too. That is the requirement, and the hole in the
-	script it replaces: `protect_owner` returned early when there was no previous owner,
-	so the first person to touch an unassigned record could claim it.
+	This fires for unowned records too. That is the requirement, and it closes the hole in
+	`protect_owner`, the CRM Lead-only rule this replaces: it returned early when there was
+	no previous owner, so the first person to touch an unassigned lead could claim it.
+	Contact and CRM Deal had no owner protection at all.
 	"""
 	if doc.is_new():
 		return
@@ -87,3 +87,29 @@ def guard_owner_change(doc, method=None):
 		frappe.PermissionError,
 		title=_("Not permitted"),
 	)
+
+
+def restrict_owner_field(field, doctype: str, parent_doctype: str | None = None):
+	"""Render the owner read-only for anyone who cannot change it.
+
+	Cosmetic only -- `guard_owner_change` is the boundary. This exists so the field does
+	not invite an edit the server will refuse, and it replaces a Form Script that injected
+	CSS to fake the same effect while enforcing nothing.
+
+	Called beside `handle_perm_level_restrictions`, which is the existing hook for exactly
+	this, so one call covers the desktop pages, the mobile pages, the all-fields modal and
+	the Quick Entry creation modals.
+
+	CRM Deal's deal_owner also carries permlevel 1 on this site, so
+	handle_perm_level_restrictions already hides it from plain Sales Users. This rule is
+	still needed: lead_owner and custom_contact_owner are permlevel 0 and unprotected,
+	and permlevel keys on whoever holds a permlevel-1 DocPerm rather than on ADMIN_ROLE,
+	which is the rule the ticket states.
+	"""
+	if field.get("fieldname") != owner_field(doctype):
+		return
+
+	if is_admin():
+		return
+
+	field.read_only = 1

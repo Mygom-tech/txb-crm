@@ -300,8 +300,11 @@ const dealTabs = createResource({
   transform: (_tabs) => excludeSelfRenderedFields(_tabs, SELF_RENDERED_FIELDS),
 })
 
-const leadDealFieldMap = { deal_owner: 'lead_owner' }
-const skipPrefillFields = ['organization', 'status']
+// Empty, mirroring LEAD_DEAL_FIELD_MAP on the server. deal_owner used to be prefilled
+// from the lead; TXB-106 gives the deal to the converting user instead, and a prefilled
+// value would read as an Admin's deliberate nomination and be honoured.
+const leadDealFieldMap = {}
+const skipPrefillFields = ['organization', 'status', 'deal_owner']
 const leadFields = computed(() => leadMeta.value?.fields || [])
 
 watch(
