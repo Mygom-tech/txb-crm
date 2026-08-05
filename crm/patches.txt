@@ -37,3 +37,4 @@ crm.patches.v1_0.disable_wizard_form_script
 crm.patches.v1_0.disable_convert_dialog_script
 crm.patches.v1_0.add_ownership_custom_fields
 crm.patches.v1_0.disable_owner_form_scripts
+crm.patches.v1_0.backfill_record_owners
