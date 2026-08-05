@@ -99,7 +99,12 @@ class TestClaimRequest(FrappeTestCase):
 			self.assertIn(expected, task.description, expected)
 
 	def test_an_unassigned_record_says_so(self):
-		deal = self.make_deal(deal_owner="")
+		deal = self.make_deal()
+		# `claim_owner_on_insert` owns every new record, so passing an empty owner to the
+		# fixture no longer produces an unowned one -- it produces one owned by whoever ran
+		# the insert. Clearing it afterwards writes past the document lifecycle, which is
+		# also how the genuinely unowned records on this site came to exist: a bulk import.
+		frappe.db.set_value("CRM Deal", deal.name, "deal_owner", "")
 
 		frappe.set_user(SALESMAN)
 		task = frappe.get_doc("CRM Task", self.claim(deal)["task"])

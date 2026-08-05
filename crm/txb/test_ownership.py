@@ -39,8 +39,15 @@ class OwnershipTestCase(FrappeTestCase):
 	@classmethod
 	def setUpClass(cls):
 		super().setUpClass()
-		ensure_user(SALESMAN, ["Sales User"])
-		ensure_user(OTHER_SALESMAN, ["Sales User"])
+		# Sales Manager, not just Sales User: `convert_to_deal` requires write permission on
+		# the source lead, and `has_lead_permission` scopes that to records the user owns or
+		# is assigned to. The ticket requires conversion *not* to depend on owning the
+		# source, so the converter has to be able to reach a lead they do not own -- which
+		# on this site means Sales Manager, the role most real users hold. It does not make
+		# them an Admin: `is_admin` checks System Manager, so every guard below still
+		# exercises its non-Admin branch.
+		ensure_user(SALESMAN, ["Sales User", "Sales Manager"])
+		ensure_user(OTHER_SALESMAN, ["Sales User", "Sales Manager"])
 		ensure_user(ADMIN, ["Sales User", ADMIN_ROLE])
 		frappe.db.commit()  # nosemgrep -- roles must outlive per-test rollback
 
