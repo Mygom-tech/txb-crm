@@ -520,6 +520,25 @@ bench since the script migration had been exercising doubled handlers.
 `crm/permissions/test_org_hierarchy.py` also imported the v16-only `IntegrationTestCase` and
 had never run here at all; migrated to `FrappeTestCase`.
 
+### The upstream test suite has never run on this bench
+
+**23 test files import `IntegrationTestCase` from `frappe.tests`**, which is Frappe v16 only.
+On this v15.116.0 bench every one dies at import — including `test_crm_deal.py`,
+`test_crm_task.py`, `test_crm_call_log.py` and the whole `lead_syncing` suite. The only
+backend tests that have ever executed here are those under `crm/txb/`, migrated in TXB-110,
+plus `crm/permissions/test_org_hierarchy.py` and `crm/fcrm/doctype/crm_lead/test_crm_lead.py`
+migrated by this ticket because it modified both.
+
+That is worth its own ticket. There is currently no automated coverage of CRM Deal, CRM
+Task, call logs or lead syncing on this deployment.
+
+`test_crm_lead.py`, now that it runs, reports **13 errors unrelated to ownership**: every
+one is `LinkValidationError` on `organization`, because a Property Setter makes
+`CRM Lead.organization` a Link here while the upstream fixtures pass free text. They would
+fail identically on `develop` if the module could load. They are not fixed here — the
+obvious fix, pre-creating those organizations, would defeat the tests that exist to assert
+conversion *creates* them.
+
 ### Deliberately not addressed
 
 - **`stores/meta.js` mutates shared doctype meta.** Worked around at one call site. Any
