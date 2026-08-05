@@ -452,3 +452,85 @@ visiting the Deals list, which is the path that reproduces Fix 1.
   real traffic from day one.
 - **`stores/meta.js` still mutates shared meta.** Fix 1 works around it at one call site.
   Any other code reading `options` off raw meta has the same latent bug.
+
+---
+
+## Implementation status
+
+Delivered on `feature/TXB-106-owner-lock`. All thirteen planned tasks complete, plus one
+task added mid-flight.
+
+### The hole the plan missed
+
+`crm/api/todo.py` wrote the owner field on **every assignment**:
+
+```python
+# Mirror assign_to: the latest assignment owns the record, overriding any prior owner.
+frappe.db.set_value(doc.reference_type, doc.reference_name, fieldname, doc.allocated_to, ...)
+```
+
+and `clear_owner_on_unassign` nulled it when an assignment was cancelled. Both use
+`frappe.db.set_value`, which writes past the document lifecycle and therefore past
+`guard_owner_change`. **Any user could take any lead or deal by assigning themselves to
+it.** §3 of this spec severed the client half in `AssignTo.vue` and assumed that was the
+whole coupling; it was not, and without the server half the feature was bypassable in one
+click. Removed as Task 14, with the `test_crm_lead` test that pinned the old behaviour
+inverted rather than deleted.
+
+It surfaced as a *failing test*, not a review finding: Task 5's Admin-conversion case went
+red because `create_deal` re-assigns the lead's assignees to the new deal, firing the hook
+and stamping `deal_owner` back to the lead's owner. A true positive pointing straight at it.
+
+### Corrections to this spec's assumptions
+
+Four assumptions here were wrong about **this site**, and each cost a debugging cycle. The
+pattern is consistent: the doctype JSON and the live site disagree, and only the live site
+is authoritative.
+
+| Assumed | Actually |
+| --- | --- |
+| `CRM Lead.organization` is free text | A Property Setter overrides it to a **Link**. `DocField` still reports `Data`. |
+| `CRM Lead` needs no mandatory fixture fields | Property Setters make `email` **and** `last_name` `reqd`. |
+| A contact's email is on the parent | It lives in the `Contact Email` child table; `Contact.email_id` matches nothing. |
+| `deal_owner` is an ordinary field | It carries `permlevel = 1`, so plain Sales Users already saw it read-only. `lead_owner` and `custom_contact_owner` are permlevel 0 and were fully exposed. |
+
+The permlevel finding means §8's read-only work was already half-done for CRM Deal by an
+undocumented Property Setter. `restrict_owner_field` ships anyway: it keys on `ADMIN_ROLE`,
+which is the rule the ticket states, where permlevel keys on whoever holds a permlevel-1
+DocPerm — a wider set. A `Sales Manager` who is not a `System Manager` could edit
+`deal_owner` before this change and cannot now.
+
+Also, §5 assumed the conversion rule fell out of `claim_owner_on_insert` alone. It did not
+for Admins: `LEAD_DEAL_FIELD_MAP` populated `deal_owner` from the lead, and the hook reads a
+populated owner as a deliberate nomination. The map was emptied, along with its client-side
+mirror in `ConvertToDealModal.vue`.
+
+### The bench was running doubled handlers
+
+Fifteen Server Scripts that this fork had already migrated to Python were still **enabled**
+on `localhost`, because `disable_migrated_server_scripts` had never run there. Frappe runs
+`hooks.py` doc_events *and* enabled Server Scripts for the same event, so both fired.
+
+`Auto Assign Lead Owner` — `doc.lead_owner = frappe.session.user`, the pre-TXB-106 rule with
+no Admin carve-out — ran *after* `claim_owner_on_insert` and silently overwrote nominated
+owners. It broke `test_org_hierarchy` and made `test_ownership`'s CRM Lead cases pass for
+the wrong reason. Resolved by running the existing merged patch. Every test run on this
+bench since the script migration had been exercising doubled handlers.
+
+`crm/permissions/test_org_hierarchy.py` also imported the v16-only `IntegrationTestCase` and
+had never run here at all; migrated to `FrappeTestCase`.
+
+### Deliberately not addressed
+
+- **`stores/meta.js` mutates shared doctype meta.** Worked around at one call site. Any
+  other code reading `options` off raw meta has the same latent bug. Own ticket.
+- **`guard_owner_change` remains bypassable by `frappe.db.set_value` and `db_set`**, as
+  every guard in this codebase is. No application code now writes an owner that way — the
+  one that did is fixed above, and the only remaining caller is the backfill patch, which
+  does it deliberately. A CI grep would make this airtight.
+- **556 contacts stay unowned** — 548 created by `Administrator` in a bulk import, 8 by
+  `Guest`. The backfill fills only records with a real human creator, because inventing
+  ownership would invent commission.
+- **Server Scripts are disabled, not deleted.** A System Manager can re-enable one from the
+  UI and silently reintroduce double-running. Deleting them belongs in a change that alters
+  the merged patch for all environments, not a localhost-only divergence.
