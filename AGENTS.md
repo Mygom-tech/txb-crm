@@ -10,52 +10,57 @@ they run as evaluated strings in the browser.
 
 ## Where to read before working
 
-| Task | Read first |
-|---|---|
-| What are we building next | [PLAN.md](./.pi/PLAN.md) |
-| Stable API contracts (setFieldProperty, formDialog, helpers) | [SPEC.md](./.pi/SPEC.md) |
-| Why code is the way it is (decisions, bugs fixed, history) | [ARCHIVE.md](./.pi/ARCHIVE.md) |
-| Form scripting user guide | [feats/form-scripting/guide.md](./.pi/feats/form-scripting/guide.md) |
-| formDialog() API reference | [feats/form-scripting/form-dialog.md](./.pi/feats/form-scripting/form-dialog.md) |
+| Task                                                         | Read first                                                                       |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| What are we building next                                    | [PLAN.md](./.pi/PLAN.md)                                                         |
+| Stable API contracts (setFieldProperty, formDialog, helpers) | [SPEC.md](./.pi/SPEC.md)                                                         |
+| Why code is the way it is (decisions, bugs fixed, history)   | [ARCHIVE.md](./.pi/ARCHIVE.md)                                                   |
+| Form scripting user guide                                    | [feats/form-scripting/guide.md](./.pi/feats/form-scripting/guide.md)             |
+| formDialog() API reference                                   | [feats/form-scripting/form-dialog.md](./.pi/feats/form-scripting/form-dialog.md) |
 
 ---
 
 ## Key files
 
 ### Scripting engine
-| File | Role |
-|---|---|
-| `frontend/src/data/document.js` | `useDocument` — loads doc, wires script, patches `save.submit`, exposes triggers |
-| `frontend/src/data/script.js` | `getScript` — fetches Form Script records, evaluates class via `new Function`, injects helpers, `setupHelperMethods` |
-| `frontend/src/utils/scriptHelpers.js` | `createDocProxy`, `getClassNames` — extracted pure helpers |
+
+| File                                  | Role                                                                                                                 |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `frontend/src/data/document.js`       | `useDocument` — loads doc, wires script, patches `save.submit`, exposes triggers                                     |
+| `frontend/src/data/script.js`         | `getScript` — fetches Form Script records, evaluates class via `new Function`, injects helpers, `setupHelperMethods` |
+| `frontend/src/utils/scriptHelpers.js` | `createDocProxy`, `getClassNames` — extracted pure helpers                                                           |
 
 ### Field rendering
-| File | Role |
-|---|---|
+
+| File                                                  | Role                                                                                   |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------- |
 | `frontend/src/components/FieldLayout/FieldLayout.vue` | Tab/section/column layout. Accepts `context` prop for standalone mode (no useDocument) |
-| `frontend/src/components/FieldLayout/Field.vue` | Renders a single field. Calls `useDocument` unless `fieldLayoutContext` is injected |
-| `frontend/src/components/FieldLayout/Section.vue` | Section with CollapsibleSection |
-| `frontend/src/components/FieldLayout/Column.vue` | Column wrapper |
+| `frontend/src/components/FieldLayout/Field.vue`       | Renders a single field. Calls `useDocument` unless `fieldLayoutContext` is injected    |
+| `frontend/src/components/FieldLayout/Section.vue`     | Section with CollapsibleSection                                                        |
+| `frontend/src/components/FieldLayout/Column.vue`      | Column wrapper                                                                         |
 
 ### Form dialog system
-| File | Role |
-|---|---|
-| `frontend/src/components/Modals/FieldLayoutDialog.vue` | Dialog shell + standalone FieldLayout + local reactive doc |
-| `frontend/src/components/Modals/FieldLayoutDialogContainer.vue` | Renders dialog entries from reactive array |
-| `frontend/src/utils/renderFieldLayoutDialog.js` | `formDialog()` — pushes to array, returns Promise |
-| `frontend/src/components/Modals/GlobalModals.vue` | Mounts FieldLayoutDialogContainer + other app-wide modals |
+
+| File                                                            | Role                                                       |
+| --------------------------------------------------------------- | ---------------------------------------------------------- |
+| `frontend/src/components/Modals/FieldLayoutDialog.vue`          | Dialog shell + standalone FieldLayout + local reactive doc |
+| `frontend/src/components/Modals/FieldLayoutDialogContainer.vue` | Renders dialog entries from reactive array                 |
+| `frontend/src/utils/renderFieldLayoutDialog.js`                 | `formDialog()` — pushes to array, returns Promise          |
+| `frontend/src/components/Modals/GlobalModals.vue`               | Mounts FieldLayoutDialogContainer + other app-wide modals  |
 
 ### Field transforms & validation
-| File | Role |
-|---|---|
+
+| File                                    | Role                                                                            |
+| --------------------------------------- | ------------------------------------------------------------------------------- |
 | `frontend/src/utils/fieldTransforms.js` | `processField()`, `findMissingMandatory()`, `parseLinkFilters()` — pure, tested |
-| `frontend/src/utils/expressions.js` | `evaluateDependsOnValue()`, `evaluateExpression()` |
+| `frontend/src/utils/expressions.js`     | `evaluateDependsOnValue()`, `evaluateExpression()`                              |
 
 ### Meta & stores
-| File | Role |
-|---|---|
-| `frontend/src/stores/meta.js` | `getMeta(doctype)` — fetches DocType meta, exposes `getFields()`, formatters |
-| `frontend/src/stores/global.js` | `$dialog`, `$socket`, `makeCall` |
+
+| File                            | Role                                                                         |
+| ------------------------------- | ---------------------------------------------------------------------------- |
+| `frontend/src/stores/meta.js`   | `getMeta(doctype)` — fetches DocType meta, exposes `getFields()`, formatters |
+| `frontend/src/stores/global.js` | `$dialog`, `$socket`, `makeCall`                                             |
 
 ---
 
