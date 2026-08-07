@@ -1,0 +1,360 @@
+/*
+  TEN TIMES BETTER — parked-domain landing screen
+
+  Roobert font hookup. Put your licensed font files in assets/fonts/.
+  WOFF2 is preferred by modern browsers; OTF/TTF are kept as fallbacks.
+*/
+
+@font-face {
+  font-family: "Roobert";
+  src:
+    url("./assets/fonts/Roobert-Light.woff2") format("woff2"),
+    url("./assets/fonts/Roobert-Light.otf") format("opentype"),
+    url("./assets/fonts/Roobert-Light.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Roobert";
+  src:
+    url("./assets/fonts/Roobert-Regular.woff2") format("woff2"),
+    url("./assets/fonts/Roobert-Regular.otf") format("opentype"),
+    url("./assets/fonts/Roobert-Regular.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+:root {
+  --ink: #000;
+  --bg-left: #666;
+  --bg-right: #333;
+
+  /* Desktop proportions are anchored to the supplied 1287 × 722 reference.
+     Keeping the typography tied to viewport height prevents ultrawide screens
+     from making the wordmark disproportionately wide. */
+  --page-x: clamp(42px, 5.28vw, 104px);
+  --page-top: clamp(28px, 4.55vh, 44px);
+  --page-bottom: clamp(28px, 4.85vh, 48px);
+
+  --display-font: "Roobert", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --text-font: "Roobert", "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  min-width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+html {
+  background: var(--bg-right);
+}
+
+body {
+  overflow: hidden;
+  color: var(--ink);
+  background: var(--bg-right);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: geometricPrecision;
+}
+
+.landing {
+  position: relative;
+  isolation: isolate;
+  width: 100%;
+  height: 100vh;
+  height: 100svh;
+  height: 100dvh;
+  min-height: 420px;
+  overflow: hidden;
+  background: linear-gradient(90deg, var(--bg-left) 0%, var(--bg-right) 100%);
+}
+
+/*
+  A very soft cursor halo. It intentionally sits below the stripe layer so the
+  black bars remain black while the surrounding gradient picks up the light.
+  Hidden by default and enabled only on devices with a real hover cursor.
+*/
+.cursor-halo {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  left: 0;
+  display: none;
+  width: clamp(230px, 24vw, 360px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(
+    circle,
+    rgba(255, 255, 255, 0.075) 0%,
+    rgba(255, 255, 255, 0.052) 25%,
+    rgba(255, 255, 255, 0.022) 52%,
+    rgba(255, 255, 255, 0) 74%
+  );
+  filter: blur(1px);
+  will-change: transform, opacity;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .cursor-halo {
+    display: block;
+  }
+}
+
+.brand {
+  position: absolute;
+  z-index: 3;
+  top: var(--page-top);
+  left: var(--page-x);
+  width: min-content;
+  white-space: nowrap;
+}
+
+.brand__row,
+.brand__descriptor,
+.contact__line {
+  overflow: hidden;
+}
+
+.brand__row {
+  /* 61px row rhythm at the 722px-high reference viewport. */
+  height: clamp(54px, 8.45vh, 78px);
+}
+
+.brand__row-inner {
+  display: block;
+  font-family: var(--display-font);
+  /* ~67px at 722h and ~86px at 920h: this preserves the reference ratio
+     without allowing an ultrawide viewport to stretch the mark. */
+  font-size: clamp(60px, 9.30vh, 86px);
+  font-weight: 300;
+  line-height: 0.92;
+  letter-spacing: -0.073em;
+  transform-origin: left center;
+}
+
+.brand__descriptor {
+  margin-top: clamp(3px, .55vh, 5px);
+}
+
+.brand__descriptor-inner {
+  display: block;
+  font-family: var(--text-font);
+  font-size: clamp(22px, 3.50vh, 32px);
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: -0.038em;
+}
+
+.contact {
+  position: absolute;
+  z-index: 3;
+  left: var(--page-x);
+  bottom: var(--page-bottom);
+  margin: 0;
+  font-style: normal;
+  font-family: var(--text-font);
+  /* Kept a touch larger than the XD reference for legibility, but tied to
+     height so it stays visually subordinate to the mark. */
+  font-size: clamp(11px, 1.45vh, 14px);
+  font-weight: 400;
+  line-height: 1.28;
+  letter-spacing: -0.012em;
+}
+
+.contact a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.contact a:focus-visible {
+  outline: 1px solid currentColor;
+  outline-offset: 3px;
+}
+
+.stripes {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  pointer-events: none;
+}
+
+.stripe {
+  --index: 0;
+  --w: 2px;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(60.4vw + (var(--index) * 4.24vw));
+  width: var(--w);
+  background: var(--ink);
+  transform-origin: 50% 100%;
+  will-change: transform;
+}
+
+.stripe--1  { --index: 0; --w: clamp(2px, .15vw, 2px); }
+.stripe--2  { --index: 1; --w: clamp(3px, .30vw, 4px); }
+.stripe--3  { --index: 2; --w: clamp(4px, .38vw, 5px); }
+.stripe--4  { --index: 3; --w: clamp(6px, .60vw, 8px); }
+.stripe--5  { --index: 4; --w: clamp(8px, .76vw, 10px); }
+.stripe--6  { --index: 5; --w: clamp(9px, .91vw, 12px); }
+.stripe--7  { --index: 6; --w: clamp(10px, 1.06vw, 14px); }
+.stripe--8  { --index: 7; --w: clamp(12px, 1.21vw, 16px); }
+.stripe--9  { --index: 8; --w: clamp(14px, 1.36vw, 18px); }
+.stripe--10 { --index: 9; --w: clamp(16px, 1.52vw, 20px); }
+
+/*
+  Tablet / narrow landscape:
+  Keep the visual rhythm but move the stripe field farther right so it never
+  crowds the mark.
+*/
+@media (max-width: 900px) {
+  :root {
+    --page-x: clamp(30px, 5.3vw, 48px);
+  }
+
+  .brand__row {
+    height: clamp(54px, 8.2vh, 70px);
+  }
+
+  .brand__row-inner {
+    font-size: clamp(60px, 8.9vh, 76px);
+  }
+
+  .brand__descriptor-inner {
+    font-size: clamp(22px, 3.25vh, 28px);
+  }
+
+  .contact {
+    font-size: clamp(11px, 1.35vh, 13px);
+  }
+
+  .stripe {
+    left: calc(61vw + (var(--index) * 5.15vw));
+  }
+}
+
+/*
+  Mobile portrait:
+  This is a distinct composition from desktop, matching the XD mobile artboard:
+  - the gradient runs vertically
+  - the contact block sits around the middle of the screen
+  - the stripe field starts just below halfway and spans the full width
+*/
+@media (max-width: 600px) {
+  :root {
+    --page-x: clamp(28px, 9.06vw, 38px);
+    --page-top: 5.85dvh;
+  }
+
+  .landing {
+    min-height: 520px;
+    background: linear-gradient(180deg, var(--bg-left) 0%, var(--bg-right) 100%);
+  }
+
+  .brand__row {
+    height: clamp(48px, 7.1dvh, 60px);
+  }
+
+  .brand__row-inner {
+    font-size: clamp(54px, 16.5vw, 68px);
+    letter-spacing: -0.075em;
+  }
+
+  .brand__descriptor {
+    margin-top: 4px;
+  }
+
+  .brand__descriptor-inner {
+    font-size: clamp(23px, 6.9vw, 28px);
+  }
+
+  .contact {
+    top: 43.18dvh;
+    bottom: auto;
+    font-size: clamp(14px, 4vw, 17px);
+  }
+
+  .stripes {
+    top: 52.5dvh;
+    bottom: 0;
+  }
+
+  .stripe {
+    top: 0;
+    bottom: 0;
+    left: calc(var(--index) * 10.72vw);
+  }
+
+  .stripe--1  { --w: 1px; }
+  .stripe--2  { --w: 3px; }
+  .stripe--3  { --w: 3px; }
+  .stripe--4  { --w: 5px; }
+  .stripe--5  { --w: 7px; }
+  .stripe--6  { --w: 8px; }
+  .stripe--7  { --w: 9px; }
+  .stripe--8  { --w: 10px; }
+  .stripe--9  { --w: 12px; }
+  .stripe--10 { --w: 12px; }
+}
+
+@media (max-width: 390px) {
+  .brand__row {
+    height: clamp(46px, 7dvh, 56px);
+  }
+
+  .brand__row-inner {
+    font-size: clamp(52px, 16vw, 62px);
+  }
+
+  .brand__descriptor-inner {
+    font-size: clamp(22px, 6.7vw, 26px);
+  }
+
+  .contact {
+    font-size: clamp(14px, 4vw, 16px);
+  }
+}
+
+/* Make short landscape phone screens remain intentional. */
+@media (max-height: 520px) and (orientation: landscape) {
+  :root {
+    --page-top: 20px;
+    --page-bottom: 18px;
+  }
+
+  .brand__row {
+    height: 48px;
+  }
+
+  .brand__row-inner {
+    font-size: 58px;
+  }
+
+  .brand__descriptor-inner {
+    font-size: 24px;
+  }
+}
+
+/* GSAP progressively enhances the page; without JS the final design is visible. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}
