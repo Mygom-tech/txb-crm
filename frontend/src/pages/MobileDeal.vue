@@ -38,6 +38,11 @@
     v-if="doc.name"
     class="flex h-12 items-center justify-between gap-2 border-b px-3 py-2.5"
   >
+    <Button
+      v-if="!userIsAdmin()"
+      :label="__('Request Ownership')"
+      @click="showRequestOwnership = true"
+    />
     <AssignTo v-model="assignees.data" doctype="CRM Deal" :docname="dealId" />
     <div class="flex items-center gap-2">
       <Dropdown v-if="availableActions.length" :options="takeActionOptions">
@@ -264,6 +269,13 @@
     doctype="CRM Deal"
     :document="document"
   />
+  <RequestOwnershipModal
+    v-if="showRequestOwnership"
+    v-model="showRequestOwnership"
+    doctype="CRM Deal"
+    :docname="dealId"
+    :current-owner="doc?.deal_owner"
+  />
 </template>
 <script setup>
 import DeleteLinkedDocModal from '@/components/DeleteLinkedDocModal.vue'
@@ -294,6 +306,7 @@ import Link from '@/components/Controls/Link.vue'
 import SidePanelLayout from '@/components/SidePanelLayout.vue'
 import SLASection from '@/components/SLASection.vue'
 import CustomActions from '@/components/CustomActions.vue'
+import RequestOwnershipModal from '@/components/Modals/RequestOwnershipModal.vue'
 import { setupCustomizations, isTranslatable } from '@/utils'
 import { getView } from '@/utils/view'
 import { allowedStatusesFor } from '@/utils/pipelineStatuses'
@@ -330,7 +343,7 @@ import { useRoute, useRouter } from 'vue-router'
 const { brand } = getSettings()
 const { $dialog, $socket } = globalStore()
 const { statusOptions, getDealStatus, pipelineStatuses } = statusesStore()
-const { transitionMap } = transitionsStore()
+const { transitionMap, isAdmin: userIsAdmin } = transitionsStore()
 const isAdmin = computed(() => dealActions.data?.is_admin === true)
 
 // Take Action, mirroring the desktop page. Shares a cache key with Deal.vue and the side
@@ -425,6 +438,7 @@ const props = defineProps({
 const errorTitle = ref('')
 const errorMessage = ref('')
 const showDeleteLinkedDocModal = ref(false)
+const showRequestOwnership = ref(false)
 
 const {
   triggerOnChange,

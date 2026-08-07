@@ -95,3 +95,14 @@ REGISTRATION_BASE_URL = "https://crm.txbconsulting.com"
 # Delivery coach fields on CRM Deal.
 FIELD_DELIVERY_COACH = "custom_delivery_coach"
 FIELD_DELIVERY_COACH_NAME = "custom_delivery_coach_name"
+
+# The field carrying commission-bearing ownership, per doctype.
+#
+# Single source of truth: `crm.permissions.org_hierarchy` scopes record visibility by the
+# same fields, and `crm.txb.ownership` guards them. Contact's is a site Custom Field, so
+# every consumer checks `meta.has_field` before using it.
+OWNER_FIELDS = {
+	"CRM Lead": "lead_owner",
+	"CRM Deal": "deal_owner",
+	"Contact": "custom_contact_owner",
+}

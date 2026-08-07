@@ -1,7 +1,6 @@
 """CRM Lead document events.
 
-Ported from the `Auto Assign Lead Owner`, `Protect Lead Owner`,
-`Require Disqualified Reason` and `Prevent Duplicate Lead` Server Scripts.
+Ported from the `Require Disqualified Reason` and `Prevent Duplicate Lead` Server Scripts.
 Behaviour is preserved exactly; see specs/server-script-migration.md for known issues
 that were deliberately carried over rather than fixed here.
 """
@@ -11,42 +10,6 @@ from frappe import _
 
 STATUS_DISQUALIFIED = "Disqualified"
 DEFAULT_DISQUALIFIED_REASON = "Pending Review"
-ADMINISTRATOR = "Administrator"
-SYSTEM_MANAGER = "System Manager"
-
-
-def assign_owner(doc, method=None):
-	"""Own every new lead as the creating user.
-
-	NOTE: this overwrites any lead_owner supplied by the caller, so leads created through
-	an API or integration end up owned by whichever user that integration authenticates
-	as. Preserved from the original script; flagged as a follow-up.
-	"""
-	doc.lead_owner = frappe.session.user
-
-
-def protect_owner(doc, method=None):
-	"""Keep non-privileged users from reassigning an existing lead."""
-	if doc.is_new():
-		return
-
-	previous_owner = frappe.db.get_value("CRM Lead", doc.name, "lead_owner")
-	if not previous_owner or previous_owner == doc.lead_owner:
-		return
-
-	if is_privileged():
-		return
-
-	doc.lead_owner = previous_owner
-	frappe.msgprint(_("Only Administrators can change the Lead Owner."), alert=True)
-
-
-def is_privileged(user: str | None = None) -> bool:
-	user = user or frappe.session.user
-	if user == ADMINISTRATOR:
-		return True
-
-	return bool(frappe.db.exists("Has Role", {"parent": user, "role": SYSTEM_MANAGER}))
 
 
 def default_disqualified_reason(doc, method=None):

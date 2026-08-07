@@ -12,6 +12,15 @@
         v-if="contact._actions?.length"
         :actions="contact._actions"
       />
+      <Button
+        :label="__('Create Opportunity')"
+        @click="showCreateDeal = true"
+      />
+      <Button
+        v-if="!userIsAdmin()"
+        :label="__('Request Ownership')"
+        @click="showRequestOwnership = true"
+      />
     </template>
   </LayoutHeader>
   <div v-if="contact.doc" ref="parentRef" class="flex h-full">
@@ -167,6 +176,18 @@
     :docname="contact.doc.name"
     name="Contacts"
   />
+  <RequestOwnershipModal
+    v-if="showRequestOwnership"
+    v-model="showRequestOwnership"
+    doctype="Contact"
+    :docname="contact.doc.name"
+    :current-owner="contact.doc?.custom_contact_owner"
+  />
+  <CreateDealFromContactModal
+    v-if="showCreateDeal"
+    v-model="showCreateDeal"
+    :contact="contact.doc"
+  />
 </template>
 
 <script setup>
@@ -180,6 +201,8 @@ import CameraIcon from '@/components/Icons/CameraIcon.vue'
 import DealsIcon from '@/components/Icons/DealsIcon.vue'
 import DealsListView from '@/components/ListViews/DealsListView.vue'
 import CustomActions from '@/components/CustomActions.vue'
+import RequestOwnershipModal from '@/components/Modals/RequestOwnershipModal.vue'
+import CreateDealFromContactModal from '@/components/Modals/CreateDealFromContactModal.vue'
 import { validateIsImageFile, setupCustomizations } from '@/utils'
 import { useContactFields } from '@/composables/useContactFields'
 import { timestampCell } from '@/composables/useTimelinePreferences'
@@ -191,6 +214,7 @@ import { globalStore } from '@/stores/global.js'
 import { usersStore } from '@/stores/users.js'
 import { organizationsStore } from '@/stores/organizations.js'
 import { statusesStore } from '@/stores/statuses'
+import { transitionsStore } from '@/stores/transitions'
 import { callEnabled } from '@/composables/telephony'
 import {
   Breadcrumbs,
@@ -215,6 +239,7 @@ const { makeCall, $dialog, $socket } = globalStore()
 const { getUser } = usersStore()
 const { getOrganization } = organizationsStore()
 const { getDealStatus } = statusesStore()
+const { isAdmin: userIsAdmin } = transitionsStore()
 const { doctypeMeta } = getMeta('Contact')
 const { capture } = useTelemetry()
 
@@ -284,6 +309,8 @@ usePageMeta(() => {
   }
 })
 const showDeleteLinkedDocModal = ref(false)
+const showRequestOwnership = ref(false)
+const showCreateDeal = ref(false)
 
 async function deleteContact() {
   showDeleteLinkedDocModal.value = true

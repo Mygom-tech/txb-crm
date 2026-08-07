@@ -5,12 +5,12 @@ import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 from frappe.desk.form.assign_to import add as assign_add
 from frappe.desk.form.assign_to import remove as assign_remove
-from frappe.tests import IntegrationTestCase
+from frappe.tests.utils import FrappeTestCase
 
 from crm.fcrm.doctype.crm_lead.crm_lead import CONTACT_ORGANIZATION_LINK_FIELD, convert_to_deal
 
 
-class TestCRMLead(IntegrationTestCase):
+class TestCRMLead(FrappeTestCase):
 	@classmethod
 	def setUpClass(cls):
 		"""Set up test records once for all tests"""
@@ -129,13 +129,18 @@ class TestCRMLead(IntegrationTestCase):
 	def test_update_lead_owner(self):
 		"""Test that updating lead owner assigns and shares with the new owner"""
 		# Create a lead without owner
+		# TXB-106: the creator owns every new record, so a lead is never ownerless. The
+		# fixture therefore starts owned by someone else -- otherwise this test would set
+		# lead_owner to the value it already had, has_value_changed would be false, and the
+		# assign-and-share this test exists to verify would never fire.
 		lead = create_lead(
 			first_name="Owner",
 			last_name="Test",
 			email="ownertest@example.com",
+			lead_owner="crm.user1@example.com",
 		)
 
-		self.assertFalse(lead.lead_owner)
+		self.assertEqual(lead.lead_owner, "crm.user1@example.com")
 
 		# Update lead owner
 		lead.lead_owner = "Administrator"
@@ -613,26 +618,36 @@ class TestCRMLead(IntegrationTestCase):
 		self.assertIn("Administrator", deal_assignees)
 		self.assertIn("crm.user1@example.com", deal_assignees)
 
-	def test_owner_cleared_on_unassign(self):
-		"""Unassigning the current owner clears lead_owner"""
+	def test_unassigning_the_owner_leaves_lead_owner_unchanged(self):
+		"""TXB-106: assignment grants access, not ownership. Cancelling an assignment must
+		not touch lead_owner -- only an Admin editing the field, or a Claim Request, may."""
 		lead = create_lead(first_name="Owner", lead_owner="crm.user1@example.com")
 		self.assertEqual(lead.lead_owner, "crm.user1@example.com")
 
 		assign_remove("CRM Lead", lead.name, "crm.user1@example.com")
 
-		self.assertIsNone(frappe.db.get_value("CRM Lead", lead.name, "lead_owner"))
+		self.assertEqual(frappe.db.get_value("CRM Lead", lead.name, "lead_owner"), "crm.user1@example.com")
 
-	def test_assignment_overrides_owner(self):
-		"""A new assignment takes ownership even when an owner already exists (newest owns)."""
+	def test_assignment_does_not_override_owner(self):
+		"""TXB-106: a new assignment must not take ownership away from the existing owner."""
 		lead = create_lead(first_name="Override", lead_owner="crm.user1@example.com")
 		assign_add({"assign_to": ["crm.user2@example.com"], "doctype": "CRM Lead", "name": lead.name})
-		self.assertEqual(frappe.db.get_value("CRM Lead", lead.name, "lead_owner"), "crm.user2@example.com")
+		self.assertEqual(frappe.db.get_value("CRM Lead", lead.name, "lead_owner"), "crm.user1@example.com")
 
 
 def create_lead(**kwargs):
-	"""Helper function to create a CRM Lead for testing"""
+	"""Helper function to create a CRM Lead for testing.
+
+	`last_name` and `email` are both reqd on this site through Property Setters, which are
+	invisible in crm_lead.json -- without defaults every caller fails in
+	`_validate_mandatory` before reaching the behaviour under test. The email carries a hash
+	so `prevent_duplicate`, which rejects a lead matching an existing first name, last name
+	and email, never fires between fixtures.
+	"""
 	data = {"doctype": "CRM Lead"}
 	data.update(kwargs)
+	data.setdefault("last_name", "Test")
+	data.setdefault("email", f"lead-{frappe.generate_hash(length=8)}@example.com")
 	return frappe.get_doc(data).insert()
 
 

@@ -15,7 +15,11 @@ from crm.fcrm.doctype.crm_status_change_log.crm_status_change_log import (
 )
 from crm.fcrm.doctype.utils import add_or_remove_lost_reason_section_in_sidepanel
 
-LEAD_DEAL_FIELD_MAP = {"lead_owner": "deal_owner"}
+# Deliberately empty. It used to carry lead_owner onto deal_owner, but TXB-106 gives the
+# new opportunity to whoever converted the lead -- a second salesman may legitimately open
+# an opportunity on someone else's lead, and the commission follows the converter. The
+# mapping is kept as a hook for future lead/deal field pairs rather than deleted.
+LEAD_DEAL_FIELD_MAP = {}
 
 # Site-specific custom field on Contact (Link -> CRM Organization). It is the field the
 # CRM actually displays as "Organization" on a contact; the stock `company_name` is a plain
