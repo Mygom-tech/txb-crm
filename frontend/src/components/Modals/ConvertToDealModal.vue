@@ -126,6 +126,11 @@ import { sessionStore } from '@/stores/session'
 import { statusesStore } from '@/stores/statuses'
 import { viewsStore } from '@/stores/views'
 import { allowedStatusesFor } from '@/utils/pipelineStatuses'
+import { selectFieldOptions } from '@/utils/selectOptions'
+import {
+  excludeSelfRenderedFields,
+  SELF_RENDERED_FIELDS,
+} from '@/utils/convertLayout'
 import { getMeta } from '@/stores/meta'
 import { showQuickEntryModal, quickEntryProps } from '@/composables/modals'
 import { isMobileView } from '@/composables/settings'
@@ -142,7 +147,7 @@ const show = defineModel({ type: Boolean })
 
 const router = useRouter()
 
-const { statusOptions, getDealStatus, pipelineStatuses } = statusesStore()
+const { pipelineStatuses } = statusesStore()
 const { views } = viewsStore()
 const { isManager } = usersStore()
 const { user } = sessionStore()
@@ -264,10 +269,11 @@ const pipelineTypeOptions = computed(() => {
   const field = dealMeta.value?.fields?.find(
     (f) => f.fieldname === 'pipeline_type',
   )
-  return (field?.options || '')
-    .split('\n')
-    .filter(Boolean)
-    .map((value) => ({ label: __(value), value }))
+  // Labels are translated here rather than in the helper, which stays presentation-free.
+  return selectFieldOptions(field).map(({ value }) => ({
+    label: __(value),
+    value,
+  }))
 })
 
 // Same source of truth as the deal page: the server-owned pipeline -> statuses map.
@@ -286,35 +292,19 @@ watch(pipelineType, () => {
   }
 })
 
-const dealStatuses = computed(() => statusOptions('deal'))
-
 const dealTabs = createResource({
   url: 'crm.fcrm.doctype.crm_fields_layout.crm_fields_layout.get_fields_layout',
   cache: ['RequiredFields', 'CRM Deal'],
   params: { doctype: 'CRM Deal', type: 'Required Fields' },
   auto: true,
-  transform: (_tabs) => {
-    let hasFields = false
-    _tabs?.forEach((tab) => {
-      tab.sections?.forEach((section) => {
-        section.columns?.forEach((column) => {
-          column.fields?.forEach((field) => {
-            hasFields = true
-            if (field.fieldname == 'status') {
-              field.fieldtype = 'Select'
-              field.options = dealStatuses.value
-              field.prefix = getDealStatus(deal.doc.status).color
-            }
-          })
-        })
-      })
-    })
-    return hasFields ? _tabs : []
-  },
+  transform: (_tabs) => excludeSelfRenderedFields(_tabs, SELF_RENDERED_FIELDS),
 })
 
-const leadDealFieldMap = { deal_owner: 'lead_owner' }
-const skipPrefillFields = ['organization', 'status']
+// Empty, mirroring LEAD_DEAL_FIELD_MAP on the server. deal_owner used to be prefilled
+// from the lead; TXB-106 gives the deal to the converting user instead, and a prefilled
+// value would read as an Admin's deliberate nomination and be honoured.
+const leadDealFieldMap = {}
+const skipPrefillFields = ['organization', 'status', 'deal_owner']
 const leadFields = computed(() => leadMeta.value?.fields || [])
 
 watch(

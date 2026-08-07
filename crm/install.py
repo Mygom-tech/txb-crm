@@ -612,3 +612,60 @@ def create_assignment_rule_custom_fields():
 		)
 
 		frappe.clear_cache(doctype="Assignment Rule")
+
+
+def add_ownership_custom_fields():
+	"""Fields backing the TXB-106 Claim Request flow.
+
+	The two CRM Task fields are indexed because the duplicate check filters on them
+	together with the reference -- one open request per requester per record.
+	"""
+	if not frappe.get_meta("CRM Task").has_field("custom_claim_requested_by"):
+		click.secho("* Installing Claim Request Custom Fields in CRM Task")
+
+		create_custom_fields(
+			{
+				"CRM Task": [
+					{
+						"fieldname": "custom_claim_requested_by",
+						"fieldtype": "Link",
+						"options": "User",
+						"label": "Claim Requested By",
+						"read_only": 1,
+						"search_index": 1,
+						"insert_after": "assigned_to",
+					},
+					{
+						"fieldname": "custom_claim_requested_owner",
+						"fieldtype": "Link",
+						"options": "User",
+						"label": "Claim Requested Owner",
+						"read_only": 1,
+						"search_index": 1,
+						"insert_after": "custom_claim_requested_by",
+					},
+				]
+			}
+		)
+
+		frappe.clear_cache(doctype="CRM Task")
+
+	if not frappe.get_meta("FCRM Settings").has_field("custom_claim_approver"):
+		click.secho("* Installing Claim Approver Custom Field in FCRM Settings")
+
+		create_custom_fields(
+			{
+				"FCRM Settings": [
+					{
+						"fieldname": "custom_claim_approver",
+						"fieldtype": "Link",
+						"options": "User",
+						"label": "Claim Request Approver",
+						"description": "Who receives Claim Request tasks. Leave blank to fall back to the longest-standing Admin.",
+						"insert_after": "enable_sales_hierarchy",
+					}
+				]
+			}
+		)
+
+		frappe.clear_cache(doctype="FCRM Settings")
