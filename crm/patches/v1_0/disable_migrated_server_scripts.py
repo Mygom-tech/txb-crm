@@ -11,33 +11,14 @@ The two API scripts also change address. `/api/method/process_registration` only
 because a Server Script claimed that name; the whitelisted functions answer on their
 dotted paths instead. The published registration page calls those URLs, so it is rewritten
 here rather than left pointing at endpoints that no longer exist.
+
+The script list moved to `crm.txb.retired_scripts`, which re-asserts it on every migrate
+rather than once per site. The page rewrite stays here: it is a genuine one-off.
 """
 
 import frappe
 
-MIGRATED_SCRIPTS = (
-	# CRM Lead
-	"Auto Assign Lead Owner",
-	"Protect Lead Owner",
-	"Require Disqualified Reason",
-	"Prevent Duplicate Lead",
-	# Contact
-	"Sync Contact Organization",
-	# CRM Deal
-	"Sync Deal Contact Name",
-	"Sync Delivery Coach Name",
-	# CRM Call Log
-	"Default Call Log Phone Numbers",
-	"Update Deal Call Count",
-	"Update Deal Call Count On Save",
-	"Update Deal Call Count On Delete",
-	# Scheduler
-	"Weekly VCS Reminder",
-	"Stale Session Run Alert",
-	# API
-	"Process Registration",
-	"Validate Registration Token",
-)
+from crm.txb.retired_scripts import retire_scripts
 
 # `Generate Registration Token` is retired by reissue_registration_tokens, which runs first.
 
@@ -56,26 +37,8 @@ ENDPOINT_REWRITES = (
 
 
 def execute():
-	disable_migrated_scripts()
+	retire_scripts()
 	repoint_registration_page()
-
-
-def disable_migrated_scripts():
-	touched = False
-
-	for name in MIGRATED_SCRIPTS:
-		if not frappe.db.exists("Server Script", name):
-			continue
-
-		if frappe.db.get_value("Server Script", name, "disabled"):
-			continue
-
-		frappe.db.set_value("Server Script", name, "disabled", 1)
-		touched = True
-		frappe.logger().info(f"[disable_migrated_server_scripts] Disabled {name}")
-
-	if touched:
-		frappe.clear_cache()
 
 
 def repoint_registration_page():

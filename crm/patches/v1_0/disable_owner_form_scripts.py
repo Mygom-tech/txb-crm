@@ -12,29 +12,13 @@ replaces it with a single insert.
 
 Must ship in the same deploy as the Vue changes, or both the native controls and the
 injected ones appear.
+
+Kept for the record; the retirement itself now re-runs on every migrate via
+`crm.txb.retired_scripts`, which owns the list this file used to hold.
 """
 
-import frappe
-
-RETIRED_SCRIPTS = (
-	"Lead Owner Read-Only",
-	"Contact_Create Opportunity",
-)
+from crm.txb.retired_scripts import retire_scripts
 
 
 def execute():
-	touched = False
-
-	for name in RETIRED_SCRIPTS:
-		if not frappe.db.exists("CRM Form Script", name):
-			continue
-
-		if not frappe.db.get_value("CRM Form Script", name, "enabled"):
-			continue
-
-		frappe.db.set_value("CRM Form Script", name, "enabled", 0)
-		touched = True
-		frappe.logger().info(f"[disable_owner_form_scripts] Disabled {name}")
-
-	if touched:
-		frappe.clear_cache()
+	retire_scripts()

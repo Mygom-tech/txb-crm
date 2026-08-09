@@ -17,20 +17,13 @@ matching their text, then injected replacement list items which PUT straight to
 
 Filtering now lives in the app: `crm.txb.api.pipelines.get_pipeline_statuses` serves one
 mapping, consumed by the deal pages and the side panel status field.
+
+Kept for the record; the retirement itself now re-runs on every migrate via
+`crm.txb.retired_scripts`, which owns the list this file used to hold.
 """
 
-import frappe
-
-SCRIPT = "Pipeline Status Filter"
+from crm.txb.retired_scripts import retire_scripts
 
 
 def execute():
-	if not frappe.db.exists("CRM Form Script", SCRIPT):
-		return
-
-	if frappe.db.get_value("CRM Form Script", SCRIPT, "enabled") == 0:
-		return
-
-	frappe.db.set_value("CRM Form Script", SCRIPT, "enabled", 0)
-	frappe.clear_cache()
-	frappe.logger().info(f"[disable_pipeline_status_filter_script] Disabled {SCRIPT}")
+	retire_scripts()

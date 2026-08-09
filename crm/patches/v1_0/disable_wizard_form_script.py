@@ -17,20 +17,14 @@ What the script did, and why none of it is missed:
 
 `Add an Attendee (TBD)` is not ported: it carried `config: null` and rendered as a dead
 menu entry.
+
+Kept for the record. A patch runs once per site and could not stop the row coming back,
+which it did — the retirement now re-runs on every migrate via
+`crm.txb.retired_scripts`, which owns the list this file used to hold.
 """
 
-import frappe
-
-SCRIPT = "CRM Wizard Framework"
+from crm.txb.retired_scripts import retire_scripts
 
 
 def execute():
-	if not frappe.db.exists("CRM Form Script", SCRIPT):
-		return
-
-	if frappe.db.get_value("CRM Form Script", SCRIPT, "enabled") == 0:
-		return
-
-	frappe.db.set_value("CRM Form Script", SCRIPT, "enabled", 0)
-	frappe.clear_cache()
-	frappe.logger().info(f"[disable_wizard_form_script] Disabled {SCRIPT}")
+	retire_scripts()

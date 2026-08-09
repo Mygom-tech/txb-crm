@@ -352,6 +352,9 @@ after_migrate = [
 	"crm.domain_enrichment.install.seed_default_rules_and_mappings",
 	"crm.install.add_default_scripts",
 	"crm.install.add_web_form_custom_fields",
+	# Re-asserted on every migrate, not once via a patch: a Patch Log entry cannot undo a
+	# script someone re-enabled afterwards. See crm/txb/retired_scripts.py.
+	"crm.txb.retired_scripts.retire_scripts",
 ]
 
 standard_dropdown_items = [

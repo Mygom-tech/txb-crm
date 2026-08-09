@@ -22,20 +22,13 @@ post-convert redirect looks the board up by label instead of by id.
 This must ship in the same deploy as the frontend change. Until the row is disabled the
 script keeps injecting its own fields, so the dialog would show two Pipeline Type selects
 and the patched `fetch` would overwrite what the native fields sent.
+
+Kept for the record; the retirement itself now re-runs on every migrate via
+`crm.txb.retired_scripts`, which owns the list this file used to hold.
 """
 
-import frappe
-
-SCRIPT = "Convert Dialog - Pipeline Type"
+from crm.txb.retired_scripts import retire_scripts
 
 
 def execute():
-	if not frappe.db.exists("CRM Form Script", SCRIPT):
-		return
-
-	if frappe.db.get_value("CRM Form Script", SCRIPT, "enabled") == 0:
-		return
-
-	frappe.db.set_value("CRM Form Script", SCRIPT, "enabled", 0)
-	frappe.clear_cache()
-	frappe.logger().info(f"[disable_convert_dialog_script] Disabled {SCRIPT}")
+	retire_scripts()
