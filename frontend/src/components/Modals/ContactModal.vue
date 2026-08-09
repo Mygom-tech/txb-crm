@@ -25,6 +25,14 @@
             />
           </div>
         </div>
+        <DuplicatePersonHint
+          v-model:blocked="duplicateBlocked"
+          :firstName="_contact.doc.first_name"
+          :lastName="_contact.doc.last_name"
+          :email="_contact.doc.email_id"
+          :phone="_contact.doc.mobile_no"
+          @open="show = false"
+        />
         <FieldLayout
           v-if="tabs.data?.length"
           :tabs="tabs.data"
@@ -40,6 +48,12 @@
             variant="solid"
             :label="__('Create')"
             :loading="insertContact.loading"
+            :disabled="duplicateBlocked"
+            :tooltip="
+              duplicateBlocked
+                ? __('An existing Lead or Contact has this email or phone')
+                : null
+            "
             @click="createContact"
           />
         </div>
@@ -51,6 +65,7 @@
 <script setup>
 import FieldLayout from '@/components/FieldLayout/FieldLayout.vue'
 import EditIcon from '@/components/Icons/EditIcon.vue'
+import DuplicatePersonHint from '@/components/DuplicatePersonHint.vue'
 import { usersStore } from '@/stores/users'
 import { isMobileView } from '@/composables/settings'
 import { showQuickEntryModal, quickEntryProps } from '@/composables/modals'
@@ -77,6 +92,8 @@ const router = useRouter()
 const show = defineModel({ type: Boolean })
 
 const error = ref(null)
+// Set by DuplicatePersonHint when an exact email/phone match is on screen.
+const duplicateBlocked = ref(false)
 
 const { document: _contact, triggerOnBeforeCreate } = useDocument('Contact')
 
@@ -133,6 +150,10 @@ const insertContact = createResource({
 })
 
 async function createContact() {
+  // The disabled button is the visible half of this; the guard covers any other
+  // way the handler gets invoked.
+  if (duplicateBlocked.value) return
+
   error.value = null
 
   const validationError = validateRequiredFields()

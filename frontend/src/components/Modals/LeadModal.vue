@@ -26,6 +26,14 @@
           </div>
         </div>
         <div>
+          <DuplicatePersonHint
+            v-model:blocked="duplicateBlocked"
+            :firstName="lead.doc.first_name"
+            :lastName="lead.doc.last_name"
+            :email="lead.doc.email"
+            :phone="lead.doc.mobile_no"
+            @open="show = false"
+          />
           <FieldLayout v-if="tabs.data" :tabs="tabs.data" :data="lead.doc" />
           <ErrorMessage v-if="error" class="mt-4" :message="__(error)" />
         </div>
@@ -36,6 +44,12 @@
             variant="solid"
             :label="__('Create')"
             :loading="isLeadCreating"
+            :disabled="duplicateBlocked"
+            :tooltip="
+              duplicateBlocked
+                ? __('An existing Lead or Contact has this email or phone')
+                : null
+            "
             @click="createNewLead"
           />
           <Button
@@ -55,6 +69,7 @@
 <script setup>
 import EditIcon from '@/components/Icons/EditIcon.vue'
 import FieldLayout from '@/components/FieldLayout/FieldLayout.vue'
+import DuplicatePersonHint from '@/components/DuplicatePersonHint.vue'
 import { usersStore } from '@/stores/users'
 import { statusesStore } from '@/stores/statuses'
 import { sessionStore } from '@/stores/session'
@@ -79,6 +94,8 @@ const show = defineModel({ type: Boolean })
 const router = useRouter()
 const error = ref(null)
 const isLeadCreating = ref(false)
+// Set by DuplicatePersonHint when an exact email/phone match is on screen.
+const duplicateBlocked = ref(false)
 
 const { document: lead, triggerOnBeforeCreate } = useDocument('CRM Lead')
 
@@ -163,6 +180,10 @@ const createLead = createResource({
 })
 
 async function createNewLead() {
+  // The disabled button is the visible half of this; the guard covers any other
+  // way the handler gets invoked.
+  if (duplicateBlocked.value) return
+
   if (lead.doc.website && !lead.doc.website.startsWith('http')) {
     lead.doc.website = 'https://' + lead.doc.website
   }

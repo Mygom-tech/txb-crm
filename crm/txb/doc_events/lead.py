@@ -8,6 +8,8 @@ that were deliberately carried over rather than fixed here.
 import frappe
 from frappe import _
 
+from crm.txb.people import find_exact_duplicate
+
 STATUS_DISQUALIFIED = "Disqualified"
 DEFAULT_DISQUALIFIED_REASON = "Pending Review"
 
@@ -23,27 +25,15 @@ def prevent_duplicate(doc, method=None):
 
 	All three of first name, last name and email must match. Leads without a first name
 	or without an email are not checked, matching the original script.
+
+	The rule itself lives in `crm.txb.people.find_exact_duplicate` so the pre-Create
+	search (TXB-112) blocks on exactly what this blocks on -- see that module.
 	"""
 	first_name = (doc.first_name or "").strip()
 	last_name = (doc.last_name or "").strip()
 	email = (doc.email or "").strip()
 
-	if not first_name or not email:
-		return
-
-	# `("is", "not set")` is how the original expressed "last name is empty".
-	last_name_filter = last_name if last_name else ("is", "not set")
-
-	duplicate_in = None
-	if frappe.db.count(
-		"Contact", filters={"first_name": first_name, "last_name": last_name_filter, "email_id": email}
-	):
-		duplicate_in = "Contact"
-	elif frappe.db.count(
-		"CRM Lead", filters={"first_name": first_name, "last_name": last_name_filter, "email": email}
-	):
-		duplicate_in = "Lead"
-
+	duplicate_in = find_exact_duplicate(first_name, last_name, email)
 	if not duplicate_in:
 		return
 
