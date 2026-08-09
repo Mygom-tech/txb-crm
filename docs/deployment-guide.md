@@ -168,7 +168,7 @@ Notes:
   `:latest` is pushed for humans browsing GHCR — it must never appear in
   `FRAPPE_VERSION`.
 - Pin `FRAPPE_BRANCH` (default `version-15` via the script) to whatever prod
-  actually runs — see "Adapting the existing Coolify stack" step 1.
+  actually runs — see the production-cutover runbook's pre-conditions.
 - frappe_docker moves occasionally — if `images/layered/Containerfile` is
   renamed upstream, check their `docs/custom-apps.md` for the current path.
 - If manual builds ever become a bottleneck or get forgotten, the same build
@@ -542,12 +542,20 @@ not data; restore replaces the DB contents wholesale.
 
    ```bash
    bench --site txb-crm.mygom-test.tech migrate
+   bench --site txb-crm.mygom-test.tech clear-cache
    bench --site txb-crm.mygom-test.tech clear-website-cache
    ```
 
    A clean migrate + working app (log in with a **prod** account — staging's
    users were just replaced) = the cutover is proven. A migrate failure here
    is a production outage caught early: fix, rebuild, re-run this runbook.
+
+   `migrate` also runs `after_migrate`, which disables the 20 Server/Form
+   Scripts prod currently runs on (`crm/txb/retired_scripts.py`). That swap —
+   database scripts out, forked Python in — is the cutover's real behavioural
+   moment, so exercise the flows they owned: lead owner assignment, duplicate
+   lead block, deal call counts, contact/org sync, Take Action on a deal
+   (exactly **one** menu), and the registration page.
 
 6. Notes: staging now holds real customer data — same GDPR/access discipline
    as prod. Delete the backup artifacts from `sites/` afterwards.
@@ -615,22 +623,111 @@ Pre-conditions, in order — do not start without all three:
 - **Rehearsal passed**: the restore-to-staging runbook above ran clean on
   the exact image tag being promoted.
 - **Fresh prod backup** taken and copied off-VPS (this is the rollback).
+- **Pre-cutover script snapshot** — capture what is live _before_ migrate
+  disables anything, and paste it into the window notes. Variant A of the
+  rollback needs this list, and by then the fork's module is gone with the
+  image:
+
+  ```bash
+  docker exec <prod-backend> bench --site crm.txbconsulting.com console
+  >>> frappe.db.get_all("CRM Form Script", {"enabled": 1}, pluck="name")
+  >>> frappe.db.get_all("Server Script", {"disabled": 0}, pluck="name")
+  ```
+
+- **GHCR login on the prod VPS host**: `docker login ghcr.io -u <user> -p <PAT
+with read:packages>`. The image is private and Coolify has no per-resource
+  registry credential UI — it uses the host daemon's. Changing the image env
+  var without this fails the pull, and the stack stays down on a tag it cannot
+  fetch. Do this **before** the window, and prove it: `docker pull
+ghcr.io/mygom-tech/txb-crm:<tag>` on the VPS.
 
 Cutover (~15 min window):
 
 1. Maintenance window announced; final `bench backup --with-files` on prod.
-2. Prod Coolify stack env: `FRAPPE_IMAGE=ghcr.io/mygom-tech/txb-crm`,
-   `FRAPPE_VERSION=<the staging-validated tag>` → Redeploy. (`create-site`
-   skips the existing site; prod data untouched.)
-3. `bench --site all migrate && bench --site all clear-website-cache`.
+2. **Edit the existing Coolify resource in place** — never create a new one.
+   The domain, its Traefik/Let's Encrypt labels and the `sites` volume all
+   belong to that resource; a new one starts with an empty volume and no
+   certificate, which is how you would lose both the data and the domain.
+   Set `FRAPPE_IMAGE=ghcr.io/mygom-tech/txb-crm`,
+   `FRAPPE_VERSION=<the staging-validated tag>` → Redeploy. (`create-site`,
+   if the live stack has one, skips the existing site; prod data untouched.)
+3. `bench --site all migrate && bench --site all clear-cache && bench --site all clear-website-cache`.
 4. Run the post-deploy verification checklist (Phase 6) + smoke real flows
    (login, lead list, deal kanban + confirm modal, email if configured).
-5. **Rollback path**: repoint the old image tag + restore the step-1 backup
-   (restore is required if migrate ran — schema is forward-only).
+5. **Rollback path**: see the rollback runbook below. Decide _before_ the
+   window which of the two variants you are willing to run.
 6. Same-pass compose fixes if not already applied: migrate+cache-clear as
    post-deployment command, `redis-queue` data volume,
    `FRAPPE_SITE_NAME_HEADER: ${SITE_NAME}` on frontend, and confirm prod
    site config has no dev flags (`developer_mode`, `ignore_csrf`).
+
+## Runbook — rollback
+
+### What reverting the image does NOT undo
+
+Migrations are forward-only; there is no `bench migrate --down`. Everything
+`migrate` wrote to the database survives an image revert:
+
+| Left behind                                                                   | Consequence on the official image                                                                |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| **20 Server/Form Scripts disabled** (`crm/txb/retired_scripts.py`)            | **The dangerous one.** The fork's Python left with the image, so _neither_ implementation runs   |
+| Registration tokens reissued (`reissue_registration_tokens`)                  | Old links stay dead. The revert also re-enables the script that mints predictable ones           |
+| Custom fields (`add_ownership_custom_fields`, enrichment, product sync)       | Harmless — additive, and the official image ignores fields it does not reference                 |
+| Backfilled record owners, `FCRM Settings` values, quick-entry layout reorders | Data edits. Harmless to the official code, but not reverted                                      |
+| `tabPatch Log` rows                                                           | Re-cutting over later will **skip** those patches. `after_migrate` is what makes that survivable |
+
+The fork adds **no new DocTypes** — verified against `upstream/develop`. That
+is what makes the fast variant below viable: there are no orphan doctype rows
+whose controllers vanished with the image.
+
+### Variant A — fast revert, keep the data (app broken, data fine)
+
+Use when the fork misbehaves but nothing has corrupted data. Minutes, no data
+loss. Takes back the code, then repairs the one thing that does not repair
+itself:
+
+```bash
+# 1. Coolify: FRAPPE_IMAGE/FRAPPE_VERSION back to the official image → Redeploy
+# 2. Re-enable what after_migrate switched off, or the CRM silently loses
+#    lead-owner assignment, duplicate blocking, call counts and contact sync
+docker exec <backend> bench --site crm.txbconsulting.com console
+>>> from crm.txb.retired_scripts import RETIRED_FORM_SCRIPTS, RETIRED_SERVER_SCRIPTS
+```
+
+The fork's module is gone with the image, so paste the two name lists in by
+hand (keep a copy from `crm/txb/retired_scripts.py` in the window notes) and:
+
+```python
+for n in FORM_SCRIPTS:   frappe.db.set_value("CRM Form Script", n, "enabled", 1)
+for n in SERVER_SCRIPTS: frappe.db.set_value("Server Script",  n, "disabled", 0)
+frappe.db.commit(); frappe.clear_cache()
+```
+
+Then `bench --site all clear-cache && clear-website-cache` and smoke every
+flow those scripts own. **Do not skip the re-enable** — the failure is silent:
+no error, records just stop being processed.
+
+### Variant B — full restore (data damaged, or Variant A does not settle it)
+
+The sanctioned path, and the only one that undoes schema:
+
+```bash
+bench --site crm.txbconsulting.com set-config encryption_key '<from the config backup json>'
+bench --site crm.txbconsulting.com --force restore <ts>-database.sql.gz \
+  --with-public-files <ts>-files.tar --with-private-files <ts>-private-files.tar
+```
+
+Then repoint the image and redeploy. **Cost: every write since the step-1
+backup is gone** — leads, deals, notes, calls. That is the real argument for a
+short window and an announced freeze, not for a clever backup schedule.
+
+### Choosing, under pressure
+
+- Login broken, assets 404, an endpoint 500s → Variant A.
+- A migration wrote wrong values, or you cannot explain what the data looks
+  like → Variant B. Do not debug prod data on a hunch.
+- Either way, take a **second** backup before rolling back. The broken state is
+  evidence, and Variant B destroys it.
 
 ## Making changes — UI and backend, dev → prod
 
