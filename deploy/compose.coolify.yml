@@ -1,0 +1,120 @@
+# Coolify Docker Compose stack for txb-crm.
+#
+# ⚠ NOT AUTHORITATIVE YET. The live stack was created directly in Coolify's UI;
+#   this file is transcribed from docs/deployment-guide.md (Phase 4) so the
+#   topology and the post-deploy command are version-controlled. Diff it against
+#   what Coolify actually runs and fix THIS file before treating it as the source
+#   of truth. Known gap: Phase 5 of the guide refers to a `create-site` service
+#   that the documented block never defined — if the live stack has one, add it
+#   here verbatim.
+#
+# frappe_docker's standard topology minus MariaDB (external) and minus their
+# proxy (Coolify's Traefik terminates TLS; the `frontend` nginx already
+# reverse-proxies gunicorn and socketio internally, so only `frontend` gets a
+# domain — attach it on port 8080).
+#
+# Required Coolify env vars: DB_HOST, DB_PORT, SITE_NAME, FRAPPE_VERSION.
+#
+# POST-DEPLOYMENT COMMAND (set this in Coolify, it is not expressible here):
+#
+#   docker exec <backend> bench --site all migrate
+#   docker exec <backend> bench --site all clear-cache
+#   docker exec <backend> bench --site all clear-website-cache
+#
+# `clear-cache` is not optional. redis-cache has no image change on a redeploy,
+# so Coolify keeps the container and its shared `assets_json` key alive; without
+# the clear, Frappe renders the previous build's bundle hashes on every page and
+# every CSS/JS request 404s. See the Troubleshooting table in the guide.
+
+x-app: &app
+  # Always a unique <sha>-<timestamp> tag from deploy/build.sh — never `latest`,
+  # or the VPS serves a locally-cached image and the deploy silently no-ops.
+  image: ghcr.io/mygom-tech/txb-crm:${FRAPPE_VERSION}
+  restart: unless-stopped
+  volumes:
+    - sites:/home/frappe/frappe-bench/sites
+
+services:
+  configurator:
+    <<: *app
+    restart: "no"
+    entrypoint: ["bash", "-c"]
+    command:
+      - >
+        bench set-config -g db_host $$DB_HOST;
+        bench set-config -gp db_port $$DB_PORT;
+        bench set-config -g redis_cache "redis://redis-cache:6379";
+        bench set-config -g redis_queue "redis://redis-queue:6379";
+        bench set-config -g redis_socketio "redis://redis-queue:6379";
+        bench set-config -gp socketio_port 9000;
+    environment:
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+
+  backend:
+    <<: *app
+    depends_on:
+      configurator:
+        condition: service_completed_successfully
+
+  frontend:
+    <<: *app
+    command: ["nginx-entrypoint.sh"]
+    environment:
+      BACKEND: backend:8000
+      SOCKETIO: websocket:9000
+      FRAPPE_SITE_NAME_HEADER: ${SITE_NAME}
+      UPSTREAM_REAL_IP_ADDRESS: 127.0.0.1
+      UPSTREAM_REAL_IP_HEADER: X-Forwarded-For
+      UPSTREAM_REAL_IP_RECURSIVE: "off"
+      PROXY_READ_TIMEOUT: 120
+      CLIENT_MAX_BODY_SIZE: 50m
+    ports:
+      - "8080"
+    depends_on:
+      - backend
+      - websocket
+
+  websocket:
+    <<: *app
+    command: ["node", "/home/frappe/frappe-bench/apps/frappe/socketio.js"]
+    depends_on:
+      configurator:
+        condition: service_completed_successfully
+
+  queue-short:
+    <<: *app
+    command: ["bench", "worker", "--queue", "short,default"]
+    depends_on:
+      configurator:
+        condition: service_completed_successfully
+
+  queue-long:
+    <<: *app
+    command: ["bench", "worker", "--queue", "long,default,short"]
+    depends_on:
+      configurator:
+        condition: service_completed_successfully
+
+  scheduler:
+    <<: *app
+    command: ["bench", "schedule"]
+    depends_on:
+      configurator:
+        condition: service_completed_successfully
+
+  # Cache only — safe to FLUSHALL when an asset manifest goes stale.
+  redis-cache:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+  # Holds queued jobs — has a volume, do NOT flush.
+  redis-queue:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis-queue-data:/data
+
+volumes:
+  sites:
+  redis-queue-data:

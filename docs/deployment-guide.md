@@ -18,6 +18,7 @@ GitHub (Mygom-tech/txb-crm) ── push ──▶ GH Actions ── build ──
 ```
 
 > **Conventions in this guide**
+>
 > - `<PLACEHOLDER>` values are yours to fill in.
 > - Every phase ends with a verification step — do not continue past a failed one.
 > - Commands prefixed `local$` run on your dev machine, `vps$` on the server.
@@ -42,6 +43,7 @@ local$ yarn build              # vite production build + copy-html-entry
 Expected: build completes, `crm/public/frontend/` gets populated.
 
 Known risks (fix in the repo if either bites, then re-test):
+
 - `frontend/package.json` declares `"@framework/ui": "link:../../frappe/ui"` — a
   dangling link in any clone without that path. If `yarn install --check-files`
   or the build fails on it, **delete the dead dependency** (nothing in
@@ -54,13 +56,13 @@ Known risks (fix in the repo if either bites, then re-test):
 
 **0.2 Decide names** (used throughout; write them down):
 
-| Item | Example |
-|---|---|
-| Production domain | `crm.example.com` |
-| Site name (bench site = domain) | `crm.example.com` |
-| Image | `ghcr.io/mygom-tech/txb-crm:latest` |
-| Frappe branch | `version-15` (bench currently runs 15.116) |
-| CRM branch to deploy | `develop` |
+| Item                            | Example                                    |
+| ------------------------------- | ------------------------------------------ |
+| Production domain               | `crm.example.com`                          |
+| Site name (bench site = domain) | `crm.example.com`                          |
+| Image                           | `ghcr.io/mygom-tech/txb-crm:latest`        |
+| Frappe branch                   | `version-15` (bench currently runs 15.116) |
+| CRM branch to deploy            | `develop`                                  |
 
 ---
 
@@ -85,7 +87,7 @@ DB (`195.201.127.51:3307` with plaintext creds in `site_config.json`) is the
 cautionary tale here.
 
 **1.3 Credentials** — you need a **root-level user** reachable from the VPS
-*once*, at site-creation time (Frappe creates the site's database and its own
+_once_, at site-creation time (Frappe creates the site's database and its own
 scoped DB user itself). After site creation the root user can be locked back
 down.
 
@@ -149,6 +151,7 @@ GH_TOKEN=<PAT-1> ./deploy/build.sh          # prints the sha tag when done
 ```
 
 Notes:
+
 - apps.json is passed as a **BuildKit secret** (`--secret id=apps_json`) —
   frappe_docker's current Containerfiles do NOT read the old
   `APPS_JSON_BASE64` build arg (an unconsumed arg silently builds a
@@ -178,7 +181,7 @@ page shows **Private** visibility (see 3.3).
 
 **3.3 Registry visibility:** the first push creates the GHCR package. Under a
 GitHub **org**, its default visibility follows the org's package settings —
-check *github.com/orgs/Mygom-tech/packages → txb-crm → Package settings* and
+check _github.com/orgs/Mygom-tech/packages → txb-crm → Package settings_ and
 confirm **Private** explicitly rather than trusting the default. Package
 visibility is independent of the repo's; making the repo private does not
 retroactively protect a public package.
@@ -195,7 +198,7 @@ socketio internally, so **only `frontend` needs a domain**).
 
 ```yaml
 x-app: &app
-  image: ghcr.io/mygom-tech/txb-crm:latest
+  image: ghcr.io/mygom-tech/txb-crm:${FRAPPE_VERSION}
   restart: unless-stopped
   volumes:
     - sites:/home/frappe/frappe-bench/sites
@@ -285,6 +288,7 @@ volumes:
 ```
 
 Coolify setup for this resource:
+
 - **Env vars** (Coolify secrets): `DB_HOST`, `DB_PORT`, `SITE_NAME=crm.example.com`.
 - **Domain**: attach `crm.example.com` to the `frontend` service, port `8080`.
 - Frappe's own nginx proxies `/socket.io` to the websocket container — no
@@ -338,7 +342,7 @@ and `bench --site ${SITE_NAME} doctor` reports scheduler enabled + workers
 online.
 
 **Beware the create-site guard:** the compose's `create-site` service skips
-whenever the site *directory* exists — including after a provision that
+whenever the site _directory_ exists — including after a provision that
 failed halfway (site created, app install failed). It will then skip
 forever, silently. After any first deploy, prove the site is whole:
 `bench --site ${SITE_NAME} list-apps` must list **both** `frappe` and
@@ -349,18 +353,27 @@ forever, silently. After any first deploy, prove the site is whole:
 ## Phase 6 — Deploy & operate
 
 **Deploy flow** (every release): merge to `develop` → `deploy/build.sh` →
-pin the printed tag as `FRAPPE_VERSION` in Coolify → *Redeploy* → then:
+pin the printed tag as `FRAPPE_VERSION` in Coolify → _Redeploy_ → then:
 
 ```bash
 docker exec <backend> bench --site all migrate
+docker exec <backend> bench --site all clear-cache
 docker exec <backend> bench --site all clear-website-cache
 ```
 
-Wire both as Coolify's **post-deployment command** so they're never
-forgotten. The cache clear matters because asset bundle hashes change per
-build, and the redis-backed website page cache survives redeploys — stale
-cached HTML then references bundles that no longer exist (symptom: CSS 404s
-with `text/html` MIME errors after an upgrade).
+Wire all three as Coolify's **post-deployment command** so they're never
+forgotten. Both cache clears matter, and they clear _different_ things:
+
+- `clear-cache` drops the shared `assets_json` key — Frappe's in-Redis copy of
+  `sites/assets/assets.json`, read by `frappe.get_assets_json()` and used to
+  render every `<link>`/`<script>` tag on every page.
+- `clear-website-cache` drops the rendered-page/route cache.
+
+Asset bundle hashes change per build, but `redis-cache` has no image change on
+a redeploy, so Coolify does not recreate that container and its keys survive.
+Skip `clear-cache` and Frappe keeps emitting the _previous_ build's hashes
+site-wide — including on `/login` — while nginx correctly 404s them (symptom:
+CSS/JS 404s with `text/html` MIME errors on every page after an upgrade).
 
 **Post-deploy verification checklist** — run after EVERY deploy; a deploy
 is not done until all four pass:
@@ -370,13 +383,19 @@ is not done until all four pass:
 docker ps --format '{{.Names}}  {{.Image}}' | grep txb-crm
 # 2. The running backend contains the app
 docker exec <backend> ls apps                       # → crm frappe
-# 3. The site responds and serves fresh assets
-curl -s https://<site>/api/method/ping              # → {"message":"pong"}
-curl -sI "https://<site>$(curl -s https://<site>/login \
-  | grep -o 'assets/frappe/dist/css/login\.bundle\.[A-Z0-9]*\.css' | head -1)" \
-  | head -1                                          # → HTTP 200 (not 404)
+# 3. The site responds and serves fresh assets.
+#    Check EVERY bundle, not one: a stale manifest breaks all of them at once,
+#    and a single passing bundle proves nothing.
+SITE=https://<site>
+curl -s "$SITE/api/method/ping"                     # → {"message":"pong"}
+curl -s "$SITE/login" | grep -oE '/assets/[^"]+\.(css|js)' | sort -u \
+  | while read -r u; do
+      code=$(curl -s -o /dev/null -w '%{http_code}' "$SITE$u")
+      [ "$code" = 200 ] || echo "STALE MANIFEST: $code $u"
+    done                                             # → prints nothing
 # 4. The app works: log in, open kanban, drag a card → confirm modal
 ```
+
 Rollback = point the compose image tag at the previous `:sha` and redeploy
 (migrations are forward-only — restore a DB backup if a migration must be
 undone).
@@ -400,17 +419,18 @@ volume grows with file uploads); MariaDB storage/connections on the DB side.
 
 ## Troubleshooting — field-tested (every entry below actually happened)
 
-| Symptom | Cause | Fix |
-|---|---|---|
-| Image builds fine but contains only `frappe`, no `crm` | apps.json not reaching the build: wrong build-arg name, or BuildKit cache reusing the app-install layer | `deploy/build.sh` handles both (secret mount + CACHE_BUST); its app-presence gate blocks the push. If it fires: check `deploy/apps.json` renders valid JSON with the token |
-| Redeployed but behavior unchanged; asset hashes in HTML don't match the new image | VPS kept a locally-cached image for a reused tag (`:latest` or a re-pushed sha) | Deploy only unique `<sha>-<timestamp>` tags; verify with checklist step 1 |
-| `bench new-site`/`install-app` "failed", later runs say "already exists, skipping" | The create-site guard is directory-based: a half-failed provision leaves the site dir and is skipped forever after | `bench --site <site> list-apps`; if `crm` missing → `install-app crm` + `migrate`. If the DB is empty garbage → `bench drop-site` and let create-site re-run |
-| Lead/Deal create modal blank; console: `Cannot read properties of undefined (reading 'name')` in statuses.js | App installed but seed data missing (statuses etc.) — another half-provision artifact; the frontend assumes ≥1 status exists | `bench --site <site> execute crm.install.after_install` (idempotent, `db.exists` guards) + `clear-cache` |
-| CSS/JS 404 with `text/html` MIME errors after an upgrade | Redis-backed website page cache serving pre-upgrade HTML with old bundle hashes | `bench --site all clear-website-cache` (now in the post-deploy command); hard-refresh the browser |
-| Traefik `404 page not found` (plain text) on the domain | No router matches the Host — domain changed but Coolify/Traefik labels didn't | Update the frontend service's domain in Coolify; keep https + letsencrypt |
-| Frappe stack traces `AppNotInstalledError` / `'ErrorPage' object has no attribute 'app_path'` on random paths like `/config/.env` | Request Host resolves to no (or a half-provisioned) bench site; scanners trigger it constantly | Set `FRAPPE_SITE_NAME_HEADER: <site>` on frontend; fix the site itself if it's every request |
-| Local build fails: `error getting credentials` on public images | Docker Desktop's WSL credential helper (`credsStore: desktop.exe`) broken | Remove `credsStore` from `~/.docker/config.json`, `docker login ghcr.io` again |
-| git commands resolve to a bizarre repo root (`/`, home dir) | Stray `.git` directory in an ancestor (accidental `git init`) | Find with `git rev-parse --show-toplevel` from the puzzled directory; delete the stray `.git` |
+| Symptom                                                                                                                           | Cause                                                                                                                                                                                                                                                                    | Fix                                                                                                                                                                                                                            |
+| --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Image builds fine but contains only `frappe`, no `crm`                                                                            | apps.json not reaching the build: wrong build-arg name, or BuildKit cache reusing the app-install layer                                                                                                                                                                  | `deploy/build.sh` handles both (secret mount + CACHE_BUST); its app-presence gate blocks the push. If it fires: check `deploy/apps.json` renders valid JSON with the token                                                     |
+| Redeployed but behavior unchanged; asset hashes in HTML don't match the new image                                                 | VPS kept a locally-cached image for a reused tag (`:latest` or a re-pushed sha)                                                                                                                                                                                          | Deploy only unique `<sha>-<timestamp>` tags; verify with checklist step 1                                                                                                                                                      |
+| `bench new-site`/`install-app` "failed", later runs say "already exists, skipping"                                                | The create-site guard is directory-based: a half-failed provision leaves the site dir and is skipped forever after                                                                                                                                                       | `bench --site <site> list-apps`; if `crm` missing → `install-app crm` + `migrate`. If the DB is empty garbage → `bench drop-site` and let create-site re-run                                                                   |
+| Lead/Deal create modal blank; console: `Cannot read properties of undefined (reading 'name')` in statuses.js                      | App installed but seed data missing (statuses etc.) — another half-provision artifact; the frontend assumes ≥1 status exists                                                                                                                                             | `bench --site <site> execute crm.install.after_install` (idempotent, `db.exists` guards) + `clear-cache`                                                                                                                       |
+| CSS/JS 404 with `text/html` MIME errors, on **every** page including `/login`                                                     | Stale shared `assets_json` key in `redis-cache` (that container isn't recreated on redeploy), so Frappe renders the previous build's bundle hashes. Confirm: `curl -s https://<site>/assets/assets.json` names different hashes than the page's `<link>`/`<script>` tags | `bench --site all clear-cache` (now in the post-deploy command), then re-run checklist step 3. Do **not** run `bench build` in a running container — that mints fresh hashes into the sites volume and re-creates the mismatch |
+| Hashes still mismatch after `clear-cache`                                                                                         | The shared key outlived the site-level clear                                                                                                                                                                                                                             | `docker exec <redis-cache> redis-cli FLUSHALL` (cache-only Redis, holds nothing durable — `redis-queue` is the one with a volume, leave it alone), then restart `backend` and `frontend`                                       |
+| Traefik `404 page not found` (plain text) on the domain                                                                           | No router matches the Host — domain changed but Coolify/Traefik labels didn't                                                                                                                                                                                            | Update the frontend service's domain in Coolify; keep https + letsencrypt                                                                                                                                                      |
+| Frappe stack traces `AppNotInstalledError` / `'ErrorPage' object has no attribute 'app_path'` on random paths like `/config/.env` | Request Host resolves to no (or a half-provisioned) bench site; scanners trigger it constantly                                                                                                                                                                           | Set `FRAPPE_SITE_NAME_HEADER: <site>` on frontend; fix the site itself if it's every request                                                                                                                                   |
+| Local build fails: `error getting credentials` on public images                                                                   | Docker Desktop's WSL credential helper (`credsStore: desktop.exe`) broken                                                                                                                                                                                                | Remove `credsStore` from `~/.docker/config.json`, `docker login ghcr.io` again                                                                                                                                                 |
+| git commands resolve to a bizarre repo root (`/`, home dir)                                                                       | Stray `.git` directory in an ancestor (accidental `git init`)                                                                                                                                                                                                            | Find with `git rev-parse --show-toplevel` from the puzzled directory; delete the stray `.git`                                                                                                                                  |
 
 ## Release pipeline — staging → production
 
@@ -430,15 +450,16 @@ into the fork regularly so prod's rolling image can't drift ahead of you.
 **State B — steady state after cutover** (prod runs the fork). Every
 release is the same five stages:
 
-| Stage | Action | Gate |
-|---|---|---|
-| 1. Integrate | PRs merge to `develop` (tests green per PR) | `yarn test:run` + review |
-| 2. Build | `deploy/build.sh` → unique tag pushed to GHCR | app-presence gate passes |
-| 3. Stage | staging `FRAPPE_VERSION=<tag>` → redeploy → migrate + cache clear | post-deploy checklist on staging |
-| 4. Validate | manual pass over CHANGED features + core flows (login, lead/deal list, kanban modal). For **schema-touching releases**: first refresh staging with prod data (restore runbook below) so `migrate` rehearses against reality | everything works with no console errors |
-| 5. Promote | prod `FRAPPE_VERSION=<the SAME tag>` → redeploy → migrate + cache clear | post-deploy checklist on prod |
+| Stage        | Action                                                                                                                                                                                                                      | Gate                                    |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| 1. Integrate | PRs merge to `develop` (tests green per PR)                                                                                                                                                                                 | `yarn test:run` + review                |
+| 2. Build     | `deploy/build.sh` → unique tag pushed to GHCR                                                                                                                                                                               | app-presence gate passes                |
+| 3. Stage     | staging `FRAPPE_VERSION=<tag>` → redeploy → migrate + cache clear                                                                                                                                                           | post-deploy checklist on staging        |
+| 4. Validate  | manual pass over CHANGED features + core flows (login, lead/deal list, kanban modal). For **schema-touching releases**: first refresh staging with prod data (restore runbook below) so `migrate` rehearses against reality | everything works with no console errors |
+| 5. Promote   | prod `FRAPPE_VERSION=<the SAME tag>` → redeploy → migrate + cache clear                                                                                                                                                     | post-deploy checklist on prod           |
 
 Rules that make this safe:
+
 - **The tag promoted to prod is the tag staging validated** — never rebuild
   between stage 4 and 5; a rebuild is a new, unvalidated artifact.
 - UI-only releases (no DocType/patch changes) can skip the prod-data
@@ -482,14 +503,17 @@ Differing site names are irrelevant — a site name is a directory + config,
 not data; restore replaces the DB contents wholesale.
 
 1. **Backup prod** (inside prod backend container):
+
    ```bash
    bench --site crm.txbconsulting.com backup --with-files
    ```
+
    Produces 4 artifacts in `sites/<site>/private/backups/`:
    `*-site_config_backup.json` (contains the **encryption_key**),
    `*-database.sql.gz`, `*-files.tar`, `*-private-files.tar`.
 
 2. **Copy them to the staging stack:**
+
    ```bash
    docker cp <prod-backend>:/home/frappe/frappe-bench/sites/<site>/private/backups/ ./prod-backup/
    # scp/rsync to the staging VPS if separate, then:
@@ -499,12 +523,14 @@ not data; restore replaces the DB contents wholesale.
 3. **Set prod's encryption_key on staging FIRST** (from the config backup
    json) — without it, every encrypted credential in the restored DB is
    unreadable:
+
    ```bash
    bench --site txb-crm.mygom-test.tech set-config encryption_key '<value>'
    ```
 
 4. **Restore** (overwrites staging's DB — intended; may prompt for MariaDB
    root credentials since the database is recreated):
+
    ```bash
    bench --site txb-crm.mygom-test.tech --force restore \
      /home/frappe/frappe-bench/sites/<ts>-database.sql.gz \
@@ -513,10 +539,12 @@ not data; restore replaces the DB contents wholesale.
    ```
 
 5. **The rehearsal itself** — run prod's future migration on the fork image:
+
    ```bash
    bench --site txb-crm.mygom-test.tech migrate
    bench --site txb-crm.mygom-test.tech clear-website-cache
    ```
+
    A clean migrate + working app (log in with a **prod** account — staging's
    users were just replaced) = the cutover is proven. A migrate failure here
    is a production outage caught early: fix, rebuild, re-run this runbook.
@@ -530,6 +558,7 @@ Brings staging's data (including anything restored from prod) onto the
 local dev bench for development against real-shaped data with HMR.
 
 1. **Backup staging and fetch it:**
+
    ```bash
    docker exec <staging-backend> bench --site txb-crm.mygom-test.tech backup --with-files
    docker cp <staging-backend>:/home/frappe/frappe-bench/sites/txb-crm.mygom-test.tech/private/backups/ ./staging-backup/
@@ -538,6 +567,7 @@ local dev bench for development against real-shaped data with HMR.
 
 2. **Restore into the local site** (bench root; recreates the DB on the dev
    MariaDB — may prompt for DB root credentials):
+
    ```bash
    bench --site localhost set-config encryption_key '<key from site_config_backup.json>'
    bench --site localhost --force restore ./apps/crm/prod-backup/20260804_073332-crm_txbconsulting_com-database.sql.gz \
@@ -550,6 +580,7 @@ local dev bench for development against real-shaped data with HMR.
    config** (the restored data contains prod's email accounts and scheduled
    jobs; without these flags a local `bench start` will pull and SEND REAL
    CUSTOMER EMAILS from your laptop):
+
    ```bash
    bench --site localhost set-config mute_emails 1
    bench --site localhost set-config pause_scheduler 1
@@ -606,13 +637,13 @@ Cutover (~15 min window):
 Every process runs from the same image, so backend/frontend/workers/scheduler
 update atomically on redeploy. Quick reference:
 
-| Change | Workflow |
-|---|---|
-| Frontend (`frontend/src/...`) | commit → `deploy/build.sh` → Coolify redeploy |
-| Python code (API, hooks) | same |
-| Schema (DocType JSON, `patches.txt`) | same **+ `bench --site all migrate`** (the post-deploy command) |
-| New Python dep (`pyproject.toml`) / JS dep (`frontend/package.json`) | image rebuild covers it |
-| Server Scripts | DB-stored — no deploy at all |
+| Change                                                               | Workflow                                                        |
+| -------------------------------------------------------------------- | --------------------------------------------------------------- |
+| Frontend (`frontend/src/...`)                                        | commit → `deploy/build.sh` → Coolify redeploy                   |
+| Python code (API, hooks)                                             | same                                                            |
+| Schema (DocType JSON, `patches.txt`)                                 | same **+ `bench --site all migrate`** (the post-deploy command) |
+| New Python dep (`pyproject.toml`) / JS dep (`frontend/package.json`) | image rebuild covers it                                         |
+| Server Scripts                                                       | DB-stored — no deploy at all                                    |
 
 ### UI change, step by step
 
@@ -635,16 +666,16 @@ update atomically on redeploy. Quick reference:
 
 All backend code lives in `crm/` (Python package in this repo). Where to edit:
 
-| Goal | Location |
-|---|---|
-| API endpoint (`call('crm.api.x.y')`) | `crm/api/x.py`, function `y`, `@frappe.whitelist()` — dotted path == file path |
-| Record business logic / validation | `crm/fcrm/doctype/<name>/<name>.py` (e.g. `crm_deal.py` validate) |
-| DocType fields/schema | Desk UI on dev bench (developer_mode) → writes `crm/fcrm/doctype/<name>/<name>.json` — commit that |
-| Doc events, scheduled jobs, overrides | `crm/hooks.py` |
-| One-off data migration | module in `crm/patches/` + line in `crm/patches.txt` |
-| Integrations | `crm/integrations/` |
-| Boot payload | `crm/www/crm.py` |
-| Server tests | `crm/tests/` |
+| Goal                                  | Location                                                                                           |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| API endpoint (`call('crm.api.x.y')`)  | `crm/api/x.py`, function `y`, `@frappe.whitelist()` — dotted path == file path                     |
+| Record business logic / validation    | `crm/fcrm/doctype/<name>/<name>.py` (e.g. `crm_deal.py` validate)                                  |
+| DocType fields/schema                 | Desk UI on dev bench (developer_mode) → writes `crm/fcrm/doctype/<name>/<name>.json` — commit that |
+| Doc events, scheduled jobs, overrides | `crm/hooks.py`                                                                                     |
+| One-off data migration                | module in `crm/patches/` + line in `crm/patches.txt`                                               |
+| Integrations                          | `crm/integrations/`                                                                                |
+| Boot payload                          | `crm/www/crm.py`                                                                                   |
+| Server tests                          | `crm/tests/`                                                                                       |
 
 (`apps/frappe` is the framework — read it, never edit it; override via
 `crm/overrides/` + `hooks.py`.)
