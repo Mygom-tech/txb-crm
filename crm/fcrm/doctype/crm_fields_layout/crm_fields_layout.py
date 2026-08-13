@@ -9,6 +9,7 @@ from frappe.model.document import Document
 from frappe.utils import random_string
 
 from crm.txb.ownership import restrict_owner_field
+from crm.txb.permissions import restrict_admin_only_field
 
 
 class CRMFieldsLayout(Document):
@@ -81,6 +82,7 @@ def get_fields_layout(doctype: str, type: str, parent_doctype: str | None = None
 						field = field.as_dict()
 						handle_perm_level_restrictions(field, doctype, parent_doctype)
 						restrict_owner_field(field, doctype, parent_doctype)
+						restrict_admin_only_field(field, doctype, parent_doctype)
 						column["fields"][column.get("fields").index(field["fieldname"])] = field
 
 						# remove field from required_fields if it is already present
@@ -141,6 +143,7 @@ def get_sidepanel_sections(doctype: str):
 					field_obj = field_obj.as_dict()
 					handle_perm_level_restrictions(field_obj, doctype)
 					restrict_owner_field(field_obj, doctype)
+					restrict_admin_only_field(field_obj, doctype)
 					column["fields"][column.get("fields").index(field)] = get_field_obj(field_obj)
 
 	fields_meta = {}

@@ -11,8 +11,8 @@ rule directly rather than through any one of those paths, since that is the poin
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
-from crm.txb.constants import ADMIN_ROLE, PIPELINE_DELIVERING_COACHING
-from crm.txb.permissions import can_change_status
+from crm.txb.constants import ADMIN_ROLE, FIELD_DELIVERY_COACH, PIPELINE_DELIVERING_COACHING
+from crm.txb.permissions import can_change_status, restrict_admin_only_field
 from crm.txb.pipelines.actions import get_actions, resolve_to_state
 from crm.txb.api.actions import is_available, is_permitted
 
@@ -129,6 +129,151 @@ class TestStatusPermission(FrappeTestCase):
 				"doctype": "CRM Deal",
 				"pipeline_type": PIPELINE_DELIVERING_COACHING,
 				"status": status,
+			}
+		).insert(ignore_permissions=True)
+
+
+class TestAdminOnlyFields(FrappeTestCase):
+	"""Only an Admin may set the Delivery Coach.
+
+	Guarded in `validate()` for the same reason as the status rule: the side panel, the
+	all-fields modal, list bulk edit and a raw REST call all reach it, and rendering the
+	field read-only enforces nothing on its own.
+	"""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		ensure_user(COACH, ["Sales User"])
+		ensure_user(ADMIN, ["Sales User", ADMIN_ROLE])
+		frappe.db.commit()  # nosemgrep -- roles must outlive per-test rollback
+
+	def setUp(self):
+		if not frappe.get_meta("CRM Deal").has_field(FIELD_DELIVERY_COACH):
+			self.skipTest(f"{FIELD_DELIVERY_COACH} is not installed on this site")
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+		frappe.db.rollback()
+
+	def test_coach_may_not_change_the_delivery_coach(self):
+		deal = self.make_deal()
+
+		frappe.set_user(COACH)
+		deal.reload()
+		deal.set(FIELD_DELIVERY_COACH, COACH)
+
+		with self.assertRaises(frappe.PermissionError):
+			deal.save(ignore_permissions=True)
+
+	def test_admin_may_change_the_delivery_coach(self):
+		deal = self.make_deal()
+
+		frappe.set_user(ADMIN)
+		deal.reload()
+		deal.set(FIELD_DELIVERY_COACH, COACH)
+		deal.save(ignore_permissions=True)
+
+		self.assertEqual(
+			frappe.db.get_value("CRM Deal", deal.name, FIELD_DELIVERY_COACH), COACH
+		)
+
+	def test_coach_may_not_clear_the_delivery_coach(self):
+		"""Removing an assignment is as much a change as making one."""
+		deal = self.make_deal()
+		deal.set(FIELD_DELIVERY_COACH, ADMIN)
+		deal.save(ignore_permissions=True)
+
+		frappe.set_user(COACH)
+		deal.reload()
+		deal.set(FIELD_DELIVERY_COACH, None)
+
+		with self.assertRaises(frappe.PermissionError):
+			deal.save(ignore_permissions=True)
+
+	def test_coach_may_not_set_the_delivery_coach_at_creation(self):
+		"""Supplying it on insert is the same act as changing it."""
+		frappe.set_user(COACH)
+
+		deal = frappe.get_doc(
+			{
+				"doctype": "CRM Deal",
+				"pipeline_type": PIPELINE_DELIVERING_COACHING,
+				"status": "Submitted",
+				FIELD_DELIVERY_COACH: COACH,
+			}
+		)
+
+		with self.assertRaises(frappe.PermissionError):
+			deal.insert(ignore_permissions=True)
+
+	def test_coach_may_still_create_a_deal_without_one(self):
+		"""The won-session handover must keep working; it sets no coach."""
+		frappe.set_user(COACH)
+
+		deal = frappe.get_doc(
+			{
+				"doctype": "CRM Deal",
+				"pipeline_type": PIPELINE_DELIVERING_COACHING,
+				"status": "Submitted",
+			}
+		).insert(ignore_permissions=True)
+
+		self.assertTrue(deal.name)
+
+	def test_coach_may_still_edit_other_fields_on_a_coached_deal(self):
+		"""An untouched Admin-only field must not block unrelated edits."""
+		deal = self.make_deal()
+		deal.set(FIELD_DELIVERY_COACH, ADMIN)
+		deal.save(ignore_permissions=True)
+
+		frappe.set_user(COACH)
+		deal.reload()
+		deal.custom_coaching_call_notes = "Session went well"
+		deal.save(ignore_permissions=True)
+
+		self.assertEqual(
+			frappe.db.get_value("CRM Deal", deal.name, "custom_coaching_call_notes"),
+			"Session went well",
+		)
+
+	def test_other_pipelines_are_guarded_too(self):
+		"""Unlike the status rule, this one is not scoped to Delivering Coaching."""
+		deal = frappe.get_doc(
+			{"doctype": "CRM Deal", "pipeline_type": "Workshop", "status": "Training submitted"}
+		).insert(ignore_permissions=True)
+
+		frappe.set_user(COACH)
+		deal.reload()
+		deal.set(FIELD_DELIVERY_COACH, COACH)
+
+		with self.assertRaises(frappe.PermissionError):
+			deal.save(ignore_permissions=True)
+
+	def test_field_renders_read_only_for_a_coach(self):
+		frappe.set_user(COACH)
+		field = frappe._dict({"fieldname": FIELD_DELIVERY_COACH})
+		restrict_admin_only_field(field, "CRM Deal")
+		self.assertEqual(field.read_only, 1)
+
+	def test_field_stays_editable_for_an_admin(self):
+		frappe.set_user(ADMIN)
+		field = frappe._dict({"fieldname": FIELD_DELIVERY_COACH})
+		restrict_admin_only_field(field, "CRM Deal")
+		self.assertIsNone(field.get("read_only"))
+
+	def test_unrelated_fields_are_untouched(self):
+		frappe.set_user(COACH)
+		field = frappe._dict({"fieldname": "custom_coaching_call_notes"})
+		restrict_admin_only_field(field, "CRM Deal")
+		self.assertIsNone(field.get("read_only"))
+
+	def make_deal(self):
+		return frappe.get_doc(
+			{
+				"doctype": "CRM Deal",
+				"pipeline_type": PIPELINE_DELIVERING_COACHING,
+				"status": "Active",
 			}
 		).insert(ignore_permissions=True)
 

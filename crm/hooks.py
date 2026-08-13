@@ -210,6 +210,8 @@ doc_events = {
 			# Owner last: a user changing status and owner together hears about the
 			# status rule first, which is the more common mistake.
 			"crm.txb.ownership.guard_owner_change",
+			# Delivery Coach and any future Admin-only field.
+			"crm.txb.permissions.guard_admin_only_fields",
 		],
 		"before_insert": ["crm.txb.ownership.claim_owner_on_insert"],
 		"before_validate": [
