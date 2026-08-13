@@ -23,6 +23,11 @@ GitHub (Mygom-tech/txb-crm) ── push ──▶ GH Actions ── build ──
 > - Every phase ends with a verification step — do not continue past a failed one.
 > - Commands prefixed `local$` run on your dev machine, `vps$` on the server.
 
+> **Setting up a local dev bench instead?** See
+> [`local-dev-setup.md`](./local-dev-setup.md) — it covers standing up
+> `txb-crm-be` from zero on a new machine, and what in that directory is
+> reproducible versus what must come from the password manager.
+
 ---
 
 ## Phase 0 — Pre-flight (dev machine, ~30 min)
