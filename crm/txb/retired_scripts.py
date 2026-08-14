@@ -46,6 +46,10 @@ SERVER_SCRIPT = "Server Script"
 #   to "Selling Training"; empty sections collapse through the standard fields-layout rule;
 # forecasting -> probability is derived server-side (CRM Deal update_default_probability)
 #   and Deal.vue reloads the document after a status save so the value shows with no reload.
+# fix time picker (deal) / fix time picker - lead -> committed popover stacking and
+#   scroll-containment rules in frontend/src/index.css (`.crm-datetime-picker` teleported
+#   popover), so the DateTimePicker renders above dialogs/side panels and its minute list
+#   scrolls without clipping — no MutationObserver and no injected <style> element (TXB-151).
 RETIRED_FORM_SCRIPTS = (
 	"CRM Wizard Framework",
 	"Convert Dialog - Pipeline Type",
@@ -60,6 +64,8 @@ RETIRED_FORM_SCRIPTS = (
 	"Workshop Datetime Modal",
 	"Pipeline Section Visibility",
 	"Forecasting Script",
+	"Fix Time Picker",
+	"Fix Time Picker - Lead",
 )
 
 # Server Scripts, keyed off `disabled`. All now live in `crm/txb/doc_events`,

@@ -202,6 +202,7 @@
                           class="form-control"
                         >
                           <TimePicker
+                            v-bind="timePickerAttrs()"
                             :value="doc[field.fieldname]"
                             :format="getFormat('', '', false, true, false)"
                             :placeholder="field.placeholder"
@@ -213,6 +214,7 @@
                           class="form-control"
                         >
                           <DateTimePicker
+                            v-bind="timePickerAttrs()"
                             :value="doc[field.fieldname]"
                             :format="getFormat('', '', true, true, false)"
                             :placeholder="field.placeholder"
@@ -458,6 +460,7 @@ import {
   interpolateTemplate,
 } from '@/utils'
 import { flt } from '@/utils/numberFormat.js'
+import { timePickerAttrs } from '@/utils/timePicker'
 import {
   Checkbox,
   DatePicker,

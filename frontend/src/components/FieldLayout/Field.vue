@@ -160,6 +160,7 @@
     />
     <TimePicker
       v-else-if="field.fieldtype === 'Time'"
+      v-bind="timePickerAttrs()"
       :value="data[field.fieldname]"
       :format="getFormat('', '', false, true, false)"
       :placeholder="getPlaceholder(field)"
@@ -168,6 +169,7 @@
     />
     <DateTimePicker
       v-else-if="field.fieldtype === 'Datetime'"
+      v-bind="timePickerAttrs()"
       :value="data[field.fieldname]"
       :format="getFormat('', '', true, true, false)"
       :placeholder="getPlaceholder(field)"
@@ -336,6 +338,7 @@ import {
 } from '@/utils/fieldTransforms'
 import { usersStore } from '@/stores/users'
 import { useDocument } from '@/data/document'
+import { timePickerAttrs } from '@/utils/timePicker'
 
 import {
   Combobox,

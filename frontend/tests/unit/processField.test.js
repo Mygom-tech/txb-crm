@@ -1,4 +1,8 @@
 import { processField } from '@/utils/fieldTransforms'
+import {
+  TIME_PICKER_POPOVER_CLASS,
+  timePickerAttrs,
+} from '@/utils/timePicker'
 
 describe('processField', () => {
   // ─── Cloning ──────────────────────────────────────────────────
@@ -248,5 +252,33 @@ describe('processField', () => {
     expect(result.label).toBe('Y')
     expect(result.description).toBe('Help text')
     expect(result.placeholder).toBe('Enter X')
+  })
+})
+
+// Focused coverage for the shared source-level replacement of the retired
+// `Fix Time Picker` / `Fix Time Picker - Lead` Form Scripts (TXB-151). Lead and
+// Deal render their Time/Datetime controls from one definition, so the shared
+// class hook and the attrs both render sites bind stay a single, stable
+// contract that the `.crm-datetime-picker` stylesheet rules key on.
+describe('shared time-picker fix (TXB-151)', () => {
+  it('exposes one stable popover class the stylesheet keys on', () => {
+    expect(TIME_PICKER_POPOVER_CLASS).toBe('crm-datetime-picker')
+  })
+
+  it('binds only the shared class by default', () => {
+    expect(timePickerAttrs()).toEqual({ class: 'crm-datetime-picker' })
+  })
+
+  it('keeps caller classes alongside the shared hook', () => {
+    expect(timePickerAttrs('w-36')).toEqual({
+      class: 'crm-datetime-picker w-36',
+    })
+  })
+
+  it('ignores empty extras rather than emitting a trailing space', () => {
+    expect(timePickerAttrs('')).toEqual({ class: 'crm-datetime-picker' })
+    expect(timePickerAttrs(undefined)).toEqual({
+      class: 'crm-datetime-picker',
+    })
   })
 })
