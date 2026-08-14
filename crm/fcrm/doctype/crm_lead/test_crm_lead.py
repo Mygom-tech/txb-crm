@@ -634,6 +634,90 @@ class TestCRMLead(FrappeTestCase):
 		assign_add({"assign_to": ["crm.user2@example.com"], "doctype": "CRM Lead", "name": lead.name})
 		self.assertEqual(frappe.db.get_value("CRM Lead", lead.name, "lead_owner"), "crm.user1@example.com")
 
+	# --- TXB-125: conversion is restricted to approved pipelines with a server-derived state.
+
+	def test_bulk_conversion_defaults_to_individual_session_submitted(self):
+		"""Bulk conversion sends only the lead (no deal payload); the server must land the
+		deal on the primary Individual Session pipeline in its Submitted entry state."""
+		ensure_deal_statuses()
+		lead = create_lead(first_name="Bulk", organization="Bulk Corp")
+
+		deal = frappe.get_doc("CRM Deal", convert_to_deal(lead=lead.name))
+
+		self.assertEqual(deal.pipeline_type, "Individual Session")
+		self.assertEqual(deal.status, "Submitted")
+
+	def test_conversion_derives_initial_state_from_pipeline(self):
+		"""Each approved pipeline creates a deal in exactly its required initial state."""
+		ensure_deal_statuses()
+		expected = {
+			"Individual Session": "Submitted",
+			"Workshop": "Workshop submitted",
+			"Selling Training": "Training submitted",
+		}
+		for pipeline, status in expected.items():
+			lead = create_lead(first_name="Pipe", organization=f"{pipeline} Corp")
+			deal = frappe.get_doc(
+				"CRM Deal",
+				convert_to_deal(lead=lead.name, deal={"pipeline_type": pipeline}),
+			)
+			self.assertEqual(deal.pipeline_type, pipeline)
+			self.assertEqual(deal.status, status)
+
+	def test_conversion_ignores_client_supplied_status(self):
+		"""A payload cannot override the server-derived initial state, even for an approved
+		pipeline -- the direct-API bypass this restriction exists to close."""
+		ensure_deal_statuses()
+		lead = create_lead(first_name="Override", organization="Override Corp")
+
+		deal = frappe.get_doc(
+			"CRM Deal",
+			convert_to_deal(
+				lead=lead.name,
+				deal={"pipeline_type": "Individual Session", "status": "Won"},
+			),
+		)
+
+		self.assertEqual(deal.status, "Submitted")
+
+	def test_conversion_accepts_json_string_deal_payload(self):
+		"""Whitelisted calls may arrive with the deal payload as a JSON string; the same
+		derivation must apply so a stringified body is not a way around it."""
+		ensure_deal_statuses()
+		lead = create_lead(first_name="Json", organization="Json Corp")
+
+		deal = frappe.get_doc(
+			"CRM Deal",
+			convert_to_deal(
+				lead=lead.name,
+				deal='{"pipeline_type": "Workshop", "status": "Sold"}',
+			),
+		)
+
+		self.assertEqual(deal.pipeline_type, "Workshop")
+		self.assertEqual(deal.status, "Workshop submitted")
+
+	def test_conversion_rejects_unapproved_pipeline(self):
+		"""Selecting a pipeline outside the approved set is refused outright."""
+		lead = create_lead(first_name="Blocked", organization="Blocked Corp")
+
+		with self.assertRaises(frappe.exceptions.ValidationError) as ctx:
+			convert_to_deal(lead=lead.name, deal={"pipeline_type": "Delivering Coaching"})
+		self.assertIn("not an approved pipeline", str(ctx.exception))
+
+		lead.reload()
+		self.assertEqual(lead.converted, 0)
+
+
+def ensure_deal_statuses():
+	"""Guarantee the entry statuses the conversion mapping requires exist as CRM Deal Status
+	records, so the deal's status Link validation passes regardless of seed state."""
+	for status in ("Submitted", "Workshop submitted", "Training submitted"):
+		if not frappe.db.exists("CRM Deal Status", status):
+			frappe.get_doc({"doctype": "CRM Deal Status", "deal_status": status}).insert(
+				ignore_permissions=True
+			)
+
 
 def create_lead(**kwargs):
 	"""Helper function to create a CRM Lead for testing.

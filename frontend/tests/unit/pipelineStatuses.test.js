@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { allowedStatusesFor, statusLinkFilters } from '@/utils/pipelineStatuses'
+import {
+  allowedStatusesFor,
+  statusLinkFilters,
+  conversionPipelineTypes,
+  conversionInitialStatus,
+} from '@/utils/pipelineStatuses'
 
 const MAP = {
   'Individual Session': [
@@ -89,6 +94,34 @@ describe('allowedStatusesFor', () => {
     const before = [...MAP.Workshop]
     allowedStatusesFor('Workshop', 'Active', MAP)
     expect(MAP.Workshop).toEqual(before)
+  })
+})
+
+describe('conversion pipeline restriction (TXB-125)', () => {
+  it('offers only the three approved pipelines, in order', () => {
+    expect(conversionPipelineTypes()).toEqual([
+      'Individual Session',
+      'Workshop',
+      'Selling Training',
+    ])
+  })
+
+  it('does not offer any other pipeline for conversion', () => {
+    expect(conversionPipelineTypes()).not.toContain('Delivering Coaching')
+  })
+
+  it('maps each approved pipeline to its required initial state', () => {
+    expect(conversionInitialStatus('Individual Session')).toBe('Submitted')
+    expect(conversionInitialStatus('Workshop')).toBe('Workshop submitted')
+    expect(conversionInitialStatus('Selling Training')).toBe(
+      'Training submitted',
+    )
+  })
+
+  it('returns no initial state for a non-convertible pipeline', () => {
+    expect(conversionInitialStatus('Delivering Coaching')).toBe('')
+    expect(conversionInitialStatus(undefined)).toBe('')
+    expect(conversionInitialStatus('')).toBe('')
   })
 })
 

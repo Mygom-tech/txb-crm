@@ -14,6 +14,11 @@ from crm.fcrm.doctype.crm_status_change_log.crm_status_change_log import (
 	add_status_change_log,
 )
 from crm.fcrm.doctype.utils import add_or_remove_lost_reason_section_in_sidepanel
+from crm.txb.constants import (
+	CONVERSION_PIPELINE_INITIAL_STATUS,
+	PIPELINE_INDIVIDUAL_SESSION,
+	STATUS_FIELDS,
+)
 
 # Deliberately empty. It used to carry lead_owner onto deal_owner, but TXB-106 gives the
 # new opportunity to whoever converted the lead -- a second salesman may legitimately open
@@ -554,6 +559,8 @@ def convert_to_deal(
 	):
 		frappe.throw(_("Not allowed to convert Lead to Deal"), frappe.PermissionError)
 
+	deal = _enforce_conversion_pipeline(deal)
+
 	lead = frappe.get_cached_doc("CRM Lead", lead)
 	if frappe.db.exists("CRM Lead Status", "Qualified"):
 		lead.db_set("status", "Qualified")
@@ -565,6 +572,43 @@ def convert_to_deal(
 	contact = lead.create_contact(existing_contact, False, organization)
 	_deal = lead.create_deal(contact, organization, deal)
 	return _deal
+
+
+def _enforce_conversion_pipeline(deal):
+	"""Restrict conversion to approved pipelines and pin the deal's initial state (TXB-125).
+
+	Every conversion surface -- the interactive modal, bulk conversion, and direct calls to
+	this whitelisted endpoint -- funnels through here, so none of them can select an
+	unapproved pipeline or override the server-derived entry status:
+
+	* An explicit pipeline outside the approved set (Individual Session, Workshop, Selling
+	  Training) is rejected, so neither a crafted API payload nor a tampered UI can slip a
+	  deal onto a pipeline conversion is not meant to reach.
+	* The status is always derived from the pipeline here rather than trusted from the
+	  payload, so a caller cannot start a converted deal anywhere but its required entry
+	  state. `custom_delivery_status` is cleared for the same reason -- it mirrors `status`
+	  for one pipeline and would otherwise be a side door around the restriction.
+	* When no pipeline is supplied (bulk conversion sends only the lead), the deal defaults
+	  to the primary Individual Session pipeline in its Submitted entry state.
+	"""
+	if isinstance(deal, str):
+		deal = json.loads(deal)
+	if deal is None:
+		deal = {}
+	if not isinstance(deal, dict):
+		frappe.throw(_("Invalid deal payload for lead conversion."))
+
+	pipeline_type = deal.get("pipeline_type") or PIPELINE_INDIVIDUAL_SESSION
+	initial_status = CONVERSION_PIPELINE_INITIAL_STATUS.get(pipeline_type)
+	if not initial_status:
+		frappe.throw(_("{0} is not an approved pipeline for lead conversion.").format(pipeline_type))
+
+	deal["pipeline_type"] = pipeline_type
+	deal["status"] = initial_status
+	for field in STATUS_FIELDS:
+		if field != "status":
+			deal.pop(field, None)
+	return deal
 
 
 def get_deal_fieldname(field, deal_meta):
