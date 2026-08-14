@@ -29,3 +29,29 @@
 .menu-content {
   z-index: 101;
 }
+
+/* TXB-151: shared source-level replacement for the retired `Fix Time Picker`
+   (Deal) and `Fix Time Picker - Lead` Form Scripts. Those scripts used a
+   MutationObserver plus an injected <style> tag to keep the Lead/Deal time
+   picker above overlays and to stop its minute list from clipping. Both
+   corrections now live here, keyed on the `.crm-datetime-picker` class that
+   `Field.vue` and `SidePanelLayout.vue` put on every Lead/Deal Time and
+   Datetime picker (see `@/utils/timePicker`).
+
+   Stacking: the frappe-ui picker popover renders inline with `z-[100]` and can
+   fall behind dialogs and side panels. Give the picker its own stacking
+   context and lift its popover above those overlays. */
+.crm-datetime-picker {
+  position: relative;
+}
+.crm-datetime-picker .z-\[100\] {
+  z-index: 1000;
+}
+
+/* Clipping: a long minute list must scroll inside the popover instead of
+   overflowing and being clipped by the panel or the surrounding scroll box. */
+.crm-datetime-picker [role='listbox'],
+.crm-datetime-picker [role='menu'] {
+  max-height: 15rem;
+  overflow-y: auto;
+}

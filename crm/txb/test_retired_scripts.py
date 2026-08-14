@@ -52,6 +52,13 @@ class TestRetiredScripts(FrappeTestCase):
 		self.assertIn("Pipeline Section Visibility", RETIRED_FORM_SCRIPTS)
 		self.assertIn("Forecasting Script", RETIRED_FORM_SCRIPTS)
 
+	def test_time_picker_scripts_are_retired(self):
+		"""TXB-151: the two DOM-hack time-picker scripts replaced by the shared
+		`.crm-datetime-picker` source-level fix (frontend/src/utils/timePicker.js +
+		index.css) must be listed, so every migrate re-asserts their retirement."""
+		self.assertIn("Fix Time Picker", RETIRED_FORM_SCRIPTS)
+		self.assertIn("Fix Time Picker - Lead", RETIRED_FORM_SCRIPTS)
+
 	def test_it_tolerates_names_that_do_not_exist(self):
 		"""Fresh sites have none of these rows; migrate must not fail there."""
 		from crm.txb.retired_scripts import _disable

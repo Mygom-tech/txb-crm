@@ -50,6 +50,8 @@ of holding their own copies of the list. `disable_migrated_server_scripts` keeps
 | `Hide Call Duration`             | `CallArea.vue` `hideDuration` option (`hideCallDuration`), set by `Deal.vue` |
 | `Pipeline Section Visibility`    | committed pipeline `depends_on` (`pipelineLayout.js`) evaluated reactively by `SidePanelLayout.vue` |
 | `Forecasting Script`             | server-derived probability (`CRM Deal.update_default_probability`), refreshed by `Deal.vue` after save |
+| `Fix Time Picker`                | `.crm-datetime-picker` popover stacking + scroll-containment rules in `frontend/src/index.css` (`frontend/src/utils/timePicker.js`) |
+| `Fix Time Picker - Lead`         | same shared `.crm-datetime-picker` fix, applied by `Field.vue` and `SidePanelLayout.vue` |
 | `Organization Reload After Create` | `Organization.vue` reconciles its document resource to the canonical saved Organization on mount (`organizationLifecycle.js`), a scoped reload — no timer, no full-page reload |
 
 The 15 Server Scripts are listed in `RETIRED_SERVER_SCRIPTS`; their logic is in
@@ -84,6 +86,15 @@ Selling Training deals ungated. Empty sections collapse through the standard
 fields-layout rule already in `parsedSection`. The forecast probability is derived
 server-side (`CRM Deal.update_default_probability`); `Deal.vue` reloads the document after a
 status save so the server-derived value appears with no browser reload.
+
+`Fix Time Picker` and `Fix Time Picker - Lead` moved to **Retired** above (TXB-151). Both
+scripts patched the Lead/Deal time picker from the database — a `MutationObserver` waited for
+the popover and an injected `<style>` tag raised its z-index and constrained its minute list.
+The same two corrections now ship as one shared source-level fix: `Field.vue` and
+`SidePanelLayout.vue` tag every Lead/Deal Time and Datetime picker with the
+`.crm-datetime-picker` class from `frontend/src/utils/timePicker.js`, and the matching rules
+in `frontend/src/index.css` lift the popover above dialogs/side panels and bound the time
+option list so a long minute list scrolls without clipping — no observer, no injected style.
 
 `Organization Reload After Create` moved to **Retired** above (TXB-150). A newly inserted
 Organization previously depended on that Form Script's delayed full-page reload to show its
