@@ -42,6 +42,7 @@
         <div><ErrorMessage :message="error" /></div>
         <div class="flex gap-2">
           <Button :label="__('Cancel')" @click="cancel" />
+          <Button v-if="skippable" :label="__('Skip')" @click="skip" />
           <Button variant="solid" :label="__('Save')" @click="save" />
         </div>
       </div>
@@ -51,12 +52,18 @@
 <script setup>
 import Link from '@/components/Controls/Link.vue'
 import { createDocument } from '@/composables/document'
+import { reasonAfterSkip } from '@/utils/leadReasonPrompt'
 import { Dialog } from 'frappe-ui'
 import { ref } from 'vue'
 
 const props = defineProps({
   doctype: { type: String, default: 'CRM Lead' },
   document: { type: Object, required: true },
+  // When set, the auto-open Disqualified prompt may be skipped without picking a real
+  // reason. Skipping persists `skipReason` (Pending Review) so the lead stays flagged as
+  // unresolved and the prompt re-opens on the next visit.
+  skippable: { type: Boolean, default: false },
+  skipReason: { type: String, default: '' },
 })
 
 const show = defineModel({ type: Boolean })
@@ -73,6 +80,16 @@ function cancel() {
   lostReason.value = ''
   lostNotes.value = ''
   doc.status = props.document.originalDoc.status
+}
+
+function skip() {
+  show.value = false
+  error.value = ''
+
+  // Preserve Pending Review: keep an existing real reason, otherwise fall back to the
+  // Pending Review placeholder so the lead stays unresolved and re-prompts next open.
+  doc.lost_reason = reasonAfterSkip(doc.lost_reason || props.skipReason)
+  props.document.save.submit()
 }
 
 function save() {
