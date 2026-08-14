@@ -65,6 +65,7 @@ import { isMobileView } from '@/composables/settings'
 import { showQuickEntryModal, quickEntryProps } from '@/composables/modals'
 import { useDocument } from '@/data/document'
 import { useDoctypeModal } from '@/composables/doctypeModal'
+import { CREATED_QUERY_KEY } from '@/utils/organizationLifecycle'
 import { useTelemetry } from 'frappe-ui/frappe'
 import { call, createResource, toast } from 'frappe-ui'
 import { ref, nextTick, onMounted } from 'vue'
@@ -167,9 +168,13 @@ async function createOrganization() {
 
 function handleOrganizationUpdate(doc) {
   if (doc.name && props.options.redirect) {
+    // The one-shot `created` flag tells Organization.vue to reconcile its document
+    // resource with the canonical saved Organization on mount (see organizationLifecycle),
+    // replacing the retired `Organization Reload After Create` Form Script's full reload.
     router.push({
       name: 'Organization',
       params: { organizationId: doc.name },
+      query: { [CREATED_QUERY_KEY]: '1' },
     })
   }
   show.value = false

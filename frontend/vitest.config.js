@@ -23,6 +23,7 @@ export default defineConfig({
         'src/utils/takeAction.js',
         'src/utils/dealTransitions.js',
         'src/utils/leadReasonPrompt.js',
+        'src/utils/organizationLifecycle.js',
       ],
     },
   },

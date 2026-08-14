@@ -42,7 +42,12 @@ SERVER_SCRIPT = "Server Script"
 #   SidePanelLayout.vue, with the stale `pipeline_type == "Training"` condition corrected
 #   to "Selling Training"; empty sections collapse through the standard fields-layout rule;
 # forecasting -> probability is derived server-side (CRM Deal update_default_probability)
-#   and Deal.vue reloads the document after a status save so the value shows with no reload.
+#   and Deal.vue reloads the document after a status save so the value shows with no reload;
+# organization reload after create -> Organization.vue reconciles its document resource with
+#   the canonical saved Organization on mount via the one-shot `created` route flag set by
+#   OrganizationModal (frontend/src/utils/organizationLifecycle.js) — a scoped resource
+#   reload that renders the server-committed identity/header/fields with no timer or
+#   full-page reload.
 RETIRED_FORM_SCRIPTS = (
 	"CRM Wizard Framework",
 	"Convert Dialog - Pipeline Type",
@@ -56,6 +61,7 @@ RETIRED_FORM_SCRIPTS = (
 	"Hide Call Duration",
 	"Pipeline Section Visibility",
 	"Forecasting Script",
+	"Organization Reload After Create",
 )
 
 # Server Scripts, keyed off `disabled`. All now live in `crm/txb/doc_events`,

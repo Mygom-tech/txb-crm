@@ -27,6 +27,11 @@ import {
   correctPipelineTypeCondition,
   applyPipelineDependencies,
 } from '@/utils/pipelineLayout'
+import {
+  CREATED_QUERY_KEY,
+  isFreshlyCreatedRoute,
+  queryWithoutCreatedFlag,
+} from '@/utils/organizationLifecycle'
 
 const MAP = {
   'Individual Session': [
@@ -426,5 +431,60 @@ describe('applyPipelineDependencies', () => {
     expect(applyPipelineDependencies(undefined)).toBeUndefined()
     expect(applyPipelineDependencies([])).toEqual([])
     expect(applyPipelineDependencies([{ name: 'x' }])).toEqual([{ name: 'x' }])
+  })
+})
+
+// Native replacement for the `Organization Reload After Create` Form Script (TXB-150).
+// OrganizationModal routes a freshly inserted Organization to its page with a one-shot
+// `created` route flag; Organization.vue reads it on mount to reconcile the document
+// resource with the canonical saved Organization (a scoped reload, no timer / full-page
+// reload) and then drops the flag from the router's reactive query. The decision logic
+// lives in @/utils/organizationLifecycle and is exercised here as pure functions.
+describe('isFreshlyCreatedRoute (Organization Reload After Create port)', () => {
+  it('is true only when the one-shot created flag is present', () => {
+    expect(isFreshlyCreatedRoute({ [CREATED_QUERY_KEY]: '1' })).toBe(true)
+  })
+
+  it('is false for a plain organization route with no flag', () => {
+    expect(isFreshlyCreatedRoute({})).toBe(false)
+    expect(isFreshlyCreatedRoute(undefined)).toBe(false)
+    expect(isFreshlyCreatedRoute(null)).toBe(false)
+  })
+
+  it('ignores unrelated query params such as the list view context', () => {
+    expect(isFreshlyCreatedRoute({ view: 'all', viewType: 'list' })).toBe(false)
+  })
+
+  it('is false when the flag is explicitly empty, so a stripped route never reconciles again', () => {
+    expect(isFreshlyCreatedRoute({ [CREATED_QUERY_KEY]: '' })).toBe(false)
+  })
+})
+
+describe('queryWithoutCreatedFlag (one-shot flag strip)', () => {
+  it('drops the created flag, leaving an empty query when nothing else remains', () => {
+    expect(queryWithoutCreatedFlag({ [CREATED_QUERY_KEY]: '1' })).toEqual({})
+  })
+
+  it('handles an already-clean or missing query object', () => {
+    expect(queryWithoutCreatedFlag({})).toEqual({})
+    expect(queryWithoutCreatedFlag(undefined)).toEqual({})
+    expect(queryWithoutCreatedFlag(null)).toEqual({})
+  })
+
+  it('preserves breadcrumb view/viewType params while removing the flag', () => {
+    expect(
+      queryWithoutCreatedFlag({
+        view: 'all',
+        [CREATED_QUERY_KEY]: '1',
+        viewType: 'list',
+      }),
+    ).toEqual({ view: 'all', viewType: 'list' })
+  })
+
+  it('returns a new object without mutating the source query', () => {
+    const source = { [CREATED_QUERY_KEY]: '1', view: 'all' }
+    const result = queryWithoutCreatedFlag(source)
+    expect(result).not.toBe(source)
+    expect(source[CREATED_QUERY_KEY]).toBe('1')
   })
 })
