@@ -48,6 +48,8 @@ of holding their own copies of the list. `disable_migrated_server_scripts` keeps
 | `Auto Refresh Call Count`        | `Deal.vue` reloads the deal after coaching actions / call-log changes        |
 | `Notes Tab Rename`               | `notesTabLabel` in `dealPresentation.js`, wired into `Deal.vue` tabs         |
 | `Hide Call Duration`             | `CallArea.vue` `hideDuration` option (`hideCallDuration`), set by `Deal.vue` |
+| `Pipeline Section Visibility`    | committed pipeline `depends_on` (`pipelineLayout.js`) evaluated reactively by `SidePanelLayout.vue` |
+| `Forecasting Script`             | server-derived probability (`CRM Deal.update_default_probability`), refreshed by `Deal.vue` after save |
 
 The 15 Server Scripts are listed in `RETIRED_SERVER_SCRIPTS`; their logic is in
 `crm/txb/doc_events`, `crm/txb/tasks` and `crm/txb/api`, wired through `hooks.py`.
@@ -57,10 +59,9 @@ owns it.
 
 ## Still live, deliberately
 
-`Pipeline Section Visibility`, `Workshop Datetime Modal`,
-`Organization Reload After Create`, the `Product Details` / `Forecasting` scripts and the
-remaining `<style>` injectors. Nothing native replaces them yet. They remain a standing
-risk: undiffable behaviour that can change between environments without a deploy.
+`Workshop Datetime Modal`, `Organization Reload After Create`, the `Product Details` script
+and the remaining `<style>` injectors. Nothing native replaces them yet. They remain a
+standing risk: undiffable behaviour that can change between environments without a deploy.
 
 `Disqualified Reason Prompt` and `Lead Creation Redirect` moved to **Retired** above
 (TXB-146): an unresolved Disqualified lead now re-opens `LostReasonModal` natively through
@@ -72,6 +73,16 @@ above (TXB-147): the deal's completed-call total now refreshes through the canon
 document reload after coaching actions and call-log changes, the Notes tab label is
 computed for coaching deals, and call duration is hidden through an explicit Deal-scoped
 `CallArea` option instead of a `<style>`/DOM strip.
+
+`Pipeline Section Visibility` and `Forecasting Script` moved to **Retired** above (TXB-148).
+Pipeline-specific field/section visibility is now committed `depends_on` in
+`frontend/src/utils/pipelineLayout.js`, applied in `Deal.vue`'s `getParsedSections` and
+evaluated reactively by `SidePanelLayout.vue` — including the correction of the script's
+stale `pipeline_type == "Training"` condition to `"Selling Training"`, which had left
+Selling Training deals ungated. Empty sections collapse through the standard
+fields-layout rule already in `parsedSection`. The forecast probability is derived
+server-side (`CRM Deal.update_default_probability`); `Deal.vue` reloads the document after a
+status save so the server-derived value appears with no browser reload.
 
 ## Verifying
 

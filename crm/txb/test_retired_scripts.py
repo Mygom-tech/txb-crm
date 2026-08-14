@@ -45,6 +45,13 @@ class TestRetiredScripts(FrappeTestCase):
 			if frappe.db.exists("Server Script", name):
 				self.assertEqual(frappe.db.get_value("Server Script", name, "disabled"), 1)
 
+	def test_pipeline_and_forecasting_scripts_are_retired(self):
+		"""TXB-148: the two scripts replaced by committed pipeline depends_on (pipelineLayout.js,
+		evaluated reactively by SidePanelLayout) and server-derived probability must be listed,
+		so every migrate re-asserts their retirement."""
+		self.assertIn("Pipeline Section Visibility", RETIRED_FORM_SCRIPTS)
+		self.assertIn("Forecasting Script", RETIRED_FORM_SCRIPTS)
+
 	def test_it_tolerates_names_that_do_not_exist(self):
 		"""Fresh sites have none of these rows; migrate must not fail there."""
 		from crm.txb.retired_scripts import _disable
