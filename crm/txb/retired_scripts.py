@@ -30,13 +30,20 @@ SERVER_SCRIPT = "Server Script"
 # the wizard -> crm/txb/pipelines/ + crm.txb.api.actions (the duplicate Take Action menu);
 # the convert dialog -> ConvertToDealModal.vue; the status filter -> crm.txb.api.pipelines;
 # owner read-only -> restrict_owner_field/guard_owner_change;
-# create opportunity -> CreateDealFromContactModal.vue.
+# create opportunity -> CreateDealFromContactModal.vue;
+# auto refresh call count -> Deal.vue reloads the canonical deal after coaching actions and
+#   completed call-log changes (native reactivity, no DOM polling);
+# notes tab rename -> Deal.vue computes the "Coaching Notes" tab label for coaching deals;
+# hide call duration -> CallArea.vue `hideDuration` option, set from Deal.vue.
 RETIRED_FORM_SCRIPTS = (
 	"CRM Wizard Framework",
 	"Convert Dialog - Pipeline Type",
 	"Pipeline Status Filter",
 	"Lead Owner Read-Only",
 	"Contact_Create Opportunity",
+	"Auto Refresh Call Count",
+	"Notes Tab Rename",
+	"Hide Call Duration",
 )
 
 # Server Scripts, keyed off `disabled`. All now live in `crm/txb/doc_events`,
