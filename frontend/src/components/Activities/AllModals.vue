@@ -22,6 +22,12 @@ const props = defineProps({
 
 const activities = defineModel({ type: Object })
 
+// A completed call log recomputes the deal's total_completed_calls server-side
+// (crm/txb/doc_events/call_log.py). Ask the host to reload the canonical document so the
+// visible count stays fresh without reopening the deal -- the native replacement for the
+// `Auto Refresh Call Count` Form Script.
+const emit = defineEmits(['refreshDocument'])
+
 const { showModal } = useDoctypeModal()
 const { updateOnboardingStep } = useOnboarding('frappecrm')
 const { capture } = useTelemetry()
@@ -87,6 +93,10 @@ function showNote(note) {
 
 function afterDoctype(d, isInsert = false) {
   activities.value.reload()
+
+  if (d.doctype == 'CRM Call Log') {
+    emit('refreshDocument')
+  }
 
   let name =
     d.doctype == 'FCRM Note'

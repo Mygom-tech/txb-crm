@@ -5,6 +5,13 @@ import {
   conversionPipelineTypes,
   conversionInitialStatus,
 } from '@/utils/pipelineStatuses'
+import {
+  COACHING_PIPELINE_TYPE,
+  DEAL_DOCTYPE,
+  isCoachingPipeline,
+  notesTabLabel,
+  hideCallDuration,
+} from '@/utils/dealPresentation'
 
 const MAP = {
   'Individual Session': [
@@ -144,5 +151,53 @@ describe('statusLinkFilters', () => {
   it('returns null when there is nothing to restrict', () => {
     expect(statusLinkFilters('Nonexistent', 'Won', MAP)).toBeNull()
     expect(statusLinkFilters('Workshop', 'Sold', {})).toBeNull()
+  })
+})
+
+// Regression coverage for the code-owned replacements of the `Notes Tab Rename` and
+// `Hide Call Duration` Form Scripts. Both used to mutate the DOM after render; these pure
+// helpers now drive the same behaviour and must keep it scoped exactly as before.
+describe('isCoachingPipeline', () => {
+  it('is true only for the Delivering Coaching pipeline', () => {
+    expect(isCoachingPipeline(COACHING_PIPELINE_TYPE)).toBe(true)
+    expect(isCoachingPipeline('Delivering Coaching')).toBe(true)
+  })
+
+  it('is false for every other pipeline and for missing values', () => {
+    expect(isCoachingPipeline('Individual Session')).toBe(false)
+    expect(isCoachingPipeline('Workshop')).toBe(false)
+    expect(isCoachingPipeline('')).toBe(false)
+    expect(isCoachingPipeline(undefined)).toBe(false)
+  })
+})
+
+describe('notesTabLabel', () => {
+  it('labels the Notes tab "Coaching Notes" for coaching deals', () => {
+    expect(notesTabLabel('Delivering Coaching')).toBe('Coaching Notes')
+  })
+
+  it('keeps "Notes" for every other pipeline', () => {
+    expect(notesTabLabel('Individual Session')).toBe('Notes')
+    expect(notesTabLabel('Workshop')).toBe('Notes')
+    expect(notesTabLabel('Selling Training')).toBe('Notes')
+  })
+
+  it('keeps "Notes" when the pipeline is unknown or unset', () => {
+    expect(notesTabLabel('')).toBe('Notes')
+    expect(notesTabLabel(undefined)).toBe('Notes')
+  })
+})
+
+describe('hideCallDuration', () => {
+  it('hides the duration badge only on the Deal entity', () => {
+    expect(hideCallDuration(DEAL_DOCTYPE)).toBe(true)
+    expect(hideCallDuration('CRM Deal')).toBe(true)
+  })
+
+  it('keeps the duration badge on every other entity page', () => {
+    expect(hideCallDuration('CRM Lead')).toBe(false)
+    expect(hideCallDuration('Contact')).toBe(false)
+    expect(hideCallDuration('')).toBe(false)
+    expect(hideCallDuration(undefined)).toBe(false)
   })
 })

@@ -43,6 +43,9 @@ of holding their own copies of the list. `disable_migrated_server_scripts` keeps
 | `Pipeline Status Filter`         | `crm.txb.api.pipelines.get_pipeline_statuses`                                |
 | `Lead Owner Read-Only`           | `restrict_owner_field` / `guard_owner_change`                                |
 | `Contact_Create Opportunity`     | `CreateDealFromContactModal.vue`                                             |
+| `Auto Refresh Call Count`        | `Deal.vue` reloads the deal after coaching actions / call-log changes        |
+| `Notes Tab Rename`               | `notesTabLabel` in `dealPresentation.js`, wired into `Deal.vue` tabs         |
+| `Hide Call Duration`             | `CallArea.vue` `hideDuration` option (`hideCallDuration`), set by `Deal.vue` |
 
 The 15 Server Scripts are listed in `RETIRED_SERVER_SCRIPTS`; their logic is in
 `crm/txb/doc_events`, `crm/txb/tasks` and `crm/txb/api`, wired through `hooks.py`.
@@ -52,11 +55,17 @@ owns it.
 
 ## Still live, deliberately
 
-`Auto Refresh Call Count`, `Disqualified Reason Prompt`, `Lead Creation Redirect`,
-`Notes Tab Rename`, `Pipeline Section Visibility`, `Workshop Datetime Modal`,
-`Organization Reload After Create`, the `Product Details` / `Forecasting` scripts and the
-three `<style>` injectors. Nothing native replaces them yet. They remain a standing risk:
-undiffable behaviour that can change between environments without a deploy.
+`Disqualified Reason Prompt`, `Lead Creation Redirect`, `Pipeline Section Visibility`,
+`Workshop Datetime Modal`, `Organization Reload After Create`, the `Product Details` /
+`Forecasting` scripts and the remaining `<style>` injectors. Nothing native replaces them
+yet. They remain a standing risk: undiffable behaviour that can change between environments
+without a deploy.
+
+`Auto Refresh Call Count`, `Notes Tab Rename` and `Hide Call Duration` moved to **Retired**
+above (TXB-147): the deal's completed-call total now refreshes through the canonical
+document reload after coaching actions and call-log changes, the Notes tab label is
+computed for coaching deals, and call duration is hidden through an explicit Deal-scoped
+`CallArea` option instead of a `<style>`/DOM strip.
 
 ## Verifying
 
