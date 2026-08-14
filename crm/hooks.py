@@ -207,6 +207,11 @@ doc_events = {
 		"validate": [
 			"crm.txb.permissions.guard_status_change",
 			"crm.txb.permissions.guard_transition",
+			# The scheduling invariant (TXB-149): "Workshop set" needs a scheduled date and
+			# time. Runs after the transition guard so a disallowed move is refused first,
+			# and before the field guards, which are about who may edit rather than what
+			# state the deal may rest in.
+			"crm.txb.doc_events.deal.require_workshop_schedule",
 			# Owner last: a user changing status and owner together hears about the
 			# status rule first, which is the more common mistake.
 			"crm.txb.ownership.guard_owner_change",

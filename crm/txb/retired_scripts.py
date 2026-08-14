@@ -37,6 +37,9 @@ SERVER_SCRIPT = "Server Script"
 #   completed call-log changes (native reactivity, no DOM polling);
 # notes tab rename -> Deal.vue computes the "Coaching Notes" tab label for coaching deals;
 # hide call duration -> CallArea.vue `hideDuration` option, set from Deal.vue;
+# workshop datetime modal -> the native Set Workshop action collects
+#   custom_workshop_scheduled_at, and crm.txb.doc_events.deal.require_workshop_schedule
+#   enforces it server-side (TXB-149).
 # pipeline section visibility -> committed pipeline depends_on (frontend/src/utils/
 #   pipelineLayout.js, applied in Deal.vue getParsedSections) evaluated reactively by
 #   SidePanelLayout.vue, with the stale `pipeline_type == "Training"` condition corrected
@@ -54,6 +57,7 @@ RETIRED_FORM_SCRIPTS = (
 	"Auto Refresh Call Count",
 	"Notes Tab Rename",
 	"Hide Call Duration",
+	"Workshop Datetime Modal",
 	"Pipeline Section Visibility",
 	"Forecasting Script",
 )
