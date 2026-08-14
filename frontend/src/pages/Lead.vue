@@ -241,6 +241,8 @@
     v-model="showLostReasonModal"
     doctype="CRM Lead"
     :document="document"
+    skippable
+    :skip-reason="PENDING_REVIEW"
   />
   <RequestOwnershipModal
     v-if="showRequestOwnership"
@@ -288,6 +290,11 @@ import {
   isTranslatable,
 } from '@/utils'
 import { getView } from '@/utils/view'
+import {
+  isDisqualifiedReasonUnresolved,
+  initialLeadTab,
+  PENDING_REVIEW,
+} from '@/utils/leadReasonPrompt'
 import { getSettings } from '@/stores/settings'
 import { globalStore } from '@/stores/global'
 import { statusesStore } from '@/stores/statuses'
@@ -349,6 +356,12 @@ const canDelete = computed(() => permissions.data?.permissions?.delete || false)
 const doc = computed(() => document.doc || {})
 
 onMounted(async () => {
+  // Native replacement for the `Lead Creation Redirect` script: a freshly opened Lead
+  // route defaults to the Data tab, but an explicit in-session selection (a tab hash in
+  // the URL) is left untouched.
+  const initialTab = initialLeadTab(route.hash)
+  if (initialTab) changeTabTo(initialTab.toLowerCase())
+
   if (document.doc) await triggerOnRender()
 })
 
@@ -545,6 +558,20 @@ function statusLabel(status) {
 }
 
 const showLostReasonModal = ref(false)
+
+// Native replacement for the `Disqualified Reason Prompt` script: opening a Disqualified
+// lead whose reason is still unresolved (blank or Pending Review) re-opens the reason
+// modal every time. Keying on the loaded lead name fires this once per opened lead;
+// resolved leads (a real reason set) never auto-open it.
+watch(
+  () => doc.value?.name,
+  (name) => {
+    if (name && isDisqualifiedReasonUnresolved(doc.value, getLeadStatus)) {
+      showLostReasonModal.value = true
+    }
+  },
+  { immediate: true },
+)
 
 function setLostReason() {
   if (

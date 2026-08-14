@@ -22,6 +22,7 @@ export default defineConfig({
         'src/utils/pipelineStatuses.js',
         'src/utils/takeAction.js',
         'src/utils/dealTransitions.js',
+        'src/utils/leadReasonPrompt.js',
       ],
     },
   },

@@ -30,13 +30,17 @@ SERVER_SCRIPT = "Server Script"
 # the wizard -> crm/txb/pipelines/ + crm.txb.api.actions (the duplicate Take Action menu);
 # the convert dialog -> ConvertToDealModal.vue; the status filter -> crm.txb.api.pipelines;
 # owner read-only -> restrict_owner_field/guard_owner_change;
-# create opportunity -> CreateDealFromContactModal.vue.
+# create opportunity -> CreateDealFromContactModal.vue;
+# disqualified reason prompt -> Lead.vue LostReasonModal auto-open;
+# lead creation redirect -> Lead.vue native Data-tab default.
 RETIRED_FORM_SCRIPTS = (
 	"CRM Wizard Framework",
 	"Convert Dialog - Pipeline Type",
 	"Pipeline Status Filter",
 	"Lead Owner Read-Only",
 	"Contact_Create Opportunity",
+	"Disqualified Reason Prompt",
+	"Lead Creation Redirect",
 )
 
 # Server Scripts, keyed off `disabled`. All now live in `crm/txb/doc_events`,
