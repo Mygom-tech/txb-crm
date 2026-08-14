@@ -31,6 +31,8 @@ SERVER_SCRIPT = "Server Script"
 # the convert dialog -> ConvertToDealModal.vue; the status filter -> crm.txb.api.pipelines;
 # owner read-only -> restrict_owner_field/guard_owner_change;
 # create opportunity -> CreateDealFromContactModal.vue;
+# disqualified reason prompt -> Lead.vue LostReasonModal auto-open;
+# lead creation redirect -> Lead.vue native Data-tab default;
 # auto refresh call count -> Deal.vue reloads the canonical deal after coaching actions and
 #   completed call-log changes (native reactivity, no DOM polling);
 # notes tab rename -> Deal.vue computes the "Coaching Notes" tab label for coaching deals;
@@ -41,6 +43,8 @@ RETIRED_FORM_SCRIPTS = (
 	"Pipeline Status Filter",
 	"Lead Owner Read-Only",
 	"Contact_Create Opportunity",
+	"Disqualified Reason Prompt",
+	"Lead Creation Redirect",
 	"Auto Refresh Call Count",
 	"Notes Tab Rename",
 	"Hide Call Duration",
