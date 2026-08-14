@@ -44,7 +44,7 @@ of holding their own copies of the list. `disable_migrated_server_scripts` keeps
 | `Lead Owner Read-Only`           | `restrict_owner_field` / `guard_owner_change`                                |
 | `Contact_Create Opportunity`     | `CreateDealFromContactModal.vue`                                             |
 | `Disqualified Reason Prompt`     | `Lead.vue` auto-open of `LostReasonModal` via `leadReasonPrompt.js`         |
-| `Lead Creation Redirect`         | `Lead.vue` Data-tab default via `leadReasonPrompt.initialLeadTab`           |
+| `Lead Creation Redirect`         | `router.js` tab-hash guard via `leadReasonPrompt.initialRouteTab`           |
 
 The 15 Server Scripts are listed in `RETIRED_SERVER_SCRIPTS`; their logic is in
 `crm/txb/doc_events`, `crm/txb/tasks` and `crm/txb/api`, wired through `hooks.py`.

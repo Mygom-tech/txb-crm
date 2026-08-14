@@ -3,6 +3,7 @@ import { call } from 'frappe-ui'
 import { usersStore } from '@/stores/users'
 import { sessionStore } from '@/stores/session'
 import { viewsStore } from '@/stores/views'
+import { initialRouteTab } from '@/utils/leadReasonPrompt'
 
 let personaChecked = false
 export const PERSONA_DONE_KEY = 'crm_persona_captured'
@@ -228,9 +229,12 @@ router.beforeEach(async (to, from, next) => {
   } else if (to.matched.length === 0) {
     next({ name: 'Invalid Page' })
   } else if (['Deal', 'Lead'].includes(to.name) && !to.hash) {
-    let storageKey = to.name === 'Deal' ? 'lastDealTab' : 'lastLeadTab'
-    const activeTab = localStorage.getItem(storageKey) || 'activity'
-    const hash = '#' + activeTab
+    // Native `Lead Creation Redirect`: a freshly opened lead route (arriving without a tab
+    // hash, i.e. no explicit in-session selection) is redirected to the Data tab. Deals
+    // keep resuming their last-visited tab. Routes that already carry a hash never reach
+    // this branch, so an explicit tab selection is preserved.
+    const lastVisitedTab = localStorage.getItem('lastDealTab') || 'activity'
+    const hash = '#' + initialRouteTab(to.name, lastVisitedTab)
     next({ ...to, hash })
   } else if (
     [

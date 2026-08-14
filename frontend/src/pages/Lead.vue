@@ -292,7 +292,6 @@ import {
 import { getView } from '@/utils/view'
 import {
   isDisqualifiedReasonUnresolved,
-  initialLeadTab,
   PENDING_REVIEW,
 } from '@/utils/leadReasonPrompt'
 import { getSettings } from '@/stores/settings'
@@ -356,12 +355,6 @@ const canDelete = computed(() => permissions.data?.permissions?.delete || false)
 const doc = computed(() => document.doc || {})
 
 onMounted(async () => {
-  // Native replacement for the `Lead Creation Redirect` script: a freshly opened Lead
-  // route defaults to the Data tab, but an explicit in-session selection (a tab hash in
-  // the URL) is left untouched.
-  const initialTab = initialLeadTab(route.hash)
-  if (initialTab) changeTabTo(initialTab.toLowerCase())
-
   if (document.doc) await triggerOnRender()
 })
 

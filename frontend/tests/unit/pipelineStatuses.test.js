@@ -9,7 +9,7 @@ import {
   PENDING_REVIEW,
   isDisqualifiedReasonUnresolved,
   reasonAfterSkip,
-  initialLeadTab,
+  initialRouteTab,
 } from '@/utils/leadReasonPrompt'
 
 const MAP = {
@@ -229,16 +229,20 @@ describe('reasonAfterSkip (skippable Pending Review behavior)', () => {
   })
 })
 
-describe('initialLeadTab (Lead Creation Redirect port)', () => {
-  it('defaults a freshly opened lead route to the Data tab', () => {
-    expect(initialLeadTab('')).toBe('Data')
-    expect(initialLeadTab(undefined)).toBe('Data')
-    expect(initialLeadTab('#')).toBe('Data')
+// initialRouteTab is invoked by the router guard only for a Lead/Deal route that arrives
+// without a hash; the guard's `!to.hash` check is what preserves an explicit in-session tab
+// selection (an explicit selection always carries a hash and never reaches this branch).
+describe('initialRouteTab (Lead Creation Redirect port)', () => {
+  it('redirects a freshly opened lead route to the Data tab', () => {
+    expect(initialRouteTab('Lead', 'activity')).toBe('data')
+    // Even a stored last-visited tab does not divert a newly opened lead off Data.
+    expect(initialRouteTab('Lead', 'emails')).toBe('data')
+    expect(initialRouteTab('Lead', undefined)).toBe('data')
   })
 
-  it('does not override an explicit in-session tab selection (URL hash)', () => {
-    expect(initialLeadTab('#emails')).toBeNull()
-    expect(initialLeadTab('#data')).toBeNull()
-    expect(initialLeadTab('#notes')).toBeNull()
+  it('leaves deals resuming their last-visited tab', () => {
+    expect(initialRouteTab('Deal', 'notes')).toBe('notes')
+    expect(initialRouteTab('Deal', '')).toBe('activity')
+    expect(initialRouteTab('Deal', undefined)).toBe('activity')
   })
 })

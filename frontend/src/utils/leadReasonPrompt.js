@@ -29,10 +29,12 @@ export function reasonAfterSkip(currentReason) {
   return reason && reason !== PENDING_REVIEW ? reason : PENDING_REVIEW
 }
 
-// A freshly opened Lead route shows the Data tab. An explicit in-session tab selection is
-// carried in the URL hash (the active tab manager pushes it on every tab change), so when a
-// hash is present it always wins and this returns null to leave the manager's choice alone.
-export function initialLeadTab(routeHash) {
-  const selected = (routeHash || '').replace(/^#/, '').trim()
-  return selected ? null : 'Data'
+// Native replacement for the `Lead Creation Redirect` Form Script. The router guard fills
+// the tab hash for a Lead/Deal route that arrives without one; this decides which tab that
+// is. A freshly opened *lead* route defaults to the Data tab, while deals keep their
+// last-visited-tab behavior. The guard only calls this when the route has no hash, so an
+// explicit in-session tab selection — which always carries a hash — is never overridden.
+export function initialRouteTab(routeName, lastVisitedTab) {
+  if (routeName === 'Lead') return 'data'
+  return lastVisitedTab || 'activity'
 }
