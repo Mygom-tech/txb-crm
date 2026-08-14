@@ -52,6 +52,7 @@ of holding their own copies of the list. `disable_migrated_server_scripts` keeps
 | `Forecasting Script`             | server-derived probability (`CRM Deal.update_default_probability`), refreshed by `Deal.vue` after save |
 | `Fix Time Picker`                | `.crm-datetime-picker` popover stacking + scroll-containment rules in `frontend/src/index.css` (`frontend/src/utils/timePicker.js`) |
 | `Fix Time Picker - Lead`         | same shared `.crm-datetime-picker` fix, applied by `Field.vue` and `SidePanelLayout.vue` |
+| `Organization Reload After Create` | `Organization.vue` reconciles its document resource to the canonical saved Organization on mount (`organizationLifecycle.js`), a scoped reload — no timer, no full-page reload |
 
 The 15 Server Scripts are listed in `RETIRED_SERVER_SCRIPTS`; their logic is in
 `crm/txb/doc_events`, `crm/txb/tasks` and `crm/txb/api`, wired through `hooks.py`.
@@ -61,9 +62,9 @@ owns it.
 
 ## Still live, deliberately
 
-`Workshop Datetime Modal`, `Organization Reload After Create`, the `Product Details` script
-and the remaining `<style>` injectors. Nothing native replaces them yet. They remain a
-standing risk: undiffable behaviour that can change between environments without a deploy.
+`Workshop Datetime Modal`, the `Product Details` script and the remaining `<style>`
+injectors. Nothing native replaces them yet. They remain a standing risk: undiffable
+behaviour that can change between environments without a deploy.
 
 `Disqualified Reason Prompt` and `Lead Creation Redirect` moved to **Retired** above
 (TXB-146): an unresolved Disqualified lead now re-opens `LostReasonModal` natively through
@@ -94,6 +95,17 @@ The same two corrections now ship as one shared source-level fix: `Field.vue` an
 `.crm-datetime-picker` class from `frontend/src/utils/timePicker.js`, and the matching rules
 in `frontend/src/index.css` lift the popover above dialogs/side panels and bound the time
 option list so a long minute list scrolls without clipping — no observer, no injected style.
+
+`Organization Reload After Create` moved to **Retired** above (TXB-150). A newly inserted
+Organization previously depended on that Form Script's delayed full-page reload to show its
+server-committed state. The create modal (`OrganizationModal.vue`) now routes to the new
+Organization with a one-shot `created` route flag, and `Organization.vue` reconciles its
+document resource to the canonical saved Organization on mount — a scoped resource reload,
+with the flag stripped from the URL through `history.replaceState`, so the saved identity,
+header and field values render immediately with no timer and no full-page reload. The
+decision logic is the pure helpers in `frontend/src/utils/organizationLifecycle.js`
+(`organizationLifecycle.test.js`). Modal-driven creation and link-field creation
+(`CreateDocumentModal.vue`, which does not redirect) are unchanged.
 
 ## Verifying
 
