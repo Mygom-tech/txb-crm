@@ -212,6 +212,10 @@ import {
 } from '@/utils'
 import { timestampCell } from '@/composables/useTimelinePreferences'
 import {
+  isFreshlyCreatedRoute,
+  queryWithoutCreatedFlag,
+} from '@/utils/organizationLifecycle'
+import {
   Breadcrumbs,
   Avatar,
   FileUploader,
@@ -262,6 +266,21 @@ function onEnriched() {
 }
 
 onMounted(async () => {
+  // Native replacement for the retired `Organization Reload After Create` Form Script.
+  // A freshly inserted Organization routes here from the create modal with a one-shot
+  // `created` flag. Reconcile the resource with the canonical saved document so its
+  // identity, header and field values (including any server-derived fields) render
+  // immediately, then drop the flag from the router's reactive query. This is a scoped
+  // resource reload — no timer and no full-page reload — and it keeps breadcrumb links
+  // clean so a later reload/back navigation does not reconcile again.
+  if (isFreshlyCreatedRoute(route.query)) {
+    await organization.reload?.()
+    router.replace({
+      name: 'Organization',
+      params: { organizationId: props.organizationId },
+      query: queryWithoutCreatedFlag(route.query),
+    })
+  }
   if (organization.doc) await triggerOnRender()
 })
 
