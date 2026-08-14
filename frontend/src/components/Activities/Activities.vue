@@ -103,7 +103,11 @@
                 />
               </div>
             </div>
-            <CallArea class="mb-4" :activity="call" />
+            <CallArea
+              class="mb-4"
+              :activity="call"
+              :hideDuration="hideCallDuration(doctype)"
+            />
           </div>
         </div>
       </div>
@@ -237,7 +241,10 @@
             "
             class="mb-4"
           >
-            <CallArea :activity="activity" />
+            <CallArea
+              :activity="activity"
+              :hideDuration="hideCallDuration(doctype)"
+            />
           </div>
           <div v-else class="mb-4 flex flex-col gap-2 py-1.5">
             <div class="flex items-center justify-stretch gap-2 text-base">
@@ -424,6 +431,7 @@
     v-model="all_activities"
     :doctype="doctype"
     :doc="doc"
+    @refreshDocument="_document.reload()"
   />
   <FilesUploader
     v-model="showFilesUploader"
@@ -477,6 +485,7 @@ import AllModals from '@/components/Activities/AllModals.vue'
 import FilesUploader from '@/components/FilesUploader/FilesUploader.vue'
 import TimelineTimestamp from '@/components/Activities/TimelineTimestamp.vue'
 import { startCase } from '@/utils'
+import { hideCallDuration } from '@/utils/dealPresentation'
 import { globalStore } from '@/stores/global'
 import { usersStore } from '@/stores/users'
 import { useTimelinePreferences } from '@/composables/useTimelinePreferences'

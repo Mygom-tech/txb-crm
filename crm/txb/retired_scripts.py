@@ -32,7 +32,11 @@ SERVER_SCRIPT = "Server Script"
 # owner read-only -> restrict_owner_field/guard_owner_change;
 # create opportunity -> CreateDealFromContactModal.vue;
 # disqualified reason prompt -> Lead.vue LostReasonModal auto-open;
-# lead creation redirect -> Lead.vue native Data-tab default.
+# lead creation redirect -> Lead.vue native Data-tab default;
+# auto refresh call count -> Deal.vue reloads the canonical deal after coaching actions and
+#   completed call-log changes (native reactivity, no DOM polling);
+# notes tab rename -> Deal.vue computes the "Coaching Notes" tab label for coaching deals;
+# hide call duration -> CallArea.vue `hideDuration` option, set from Deal.vue.
 RETIRED_FORM_SCRIPTS = (
 	"CRM Wizard Framework",
 	"Convert Dialog - Pipeline Type",
@@ -41,6 +45,9 @@ RETIRED_FORM_SCRIPTS = (
 	"Contact_Create Opportunity",
 	"Disqualified Reason Prompt",
 	"Lead Creation Redirect",
+	"Auto Refresh Call Count",
+	"Notes Tab Rename",
+	"Hide Call Duration",
 )
 
 # Server Scripts, keyed off `disabled`. All now live in `crm/txb/doc_events`,

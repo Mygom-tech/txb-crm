@@ -56,7 +56,10 @@
             <CalendarIcon class="size-3" />
           </template>
         </Badge>
-        <Badge v-if="call.status == 'Completed'" :label="call._duration">
+        <Badge
+          v-if="call.status == 'Completed' && !hideDuration"
+          :label="call._duration"
+        >
           <template #prefix>
             <DurationIcon class="size-3" />
           </template>
@@ -109,6 +112,9 @@ import { reactive, ref } from 'vue'
 
 const props = defineProps({
   activity: { type: Object, default: () => ({}) },
+  // Suppress the duration badge for this call. Set by the Deal page (via Activities) so
+  // duration is hidden only on deals, replacing the old `Hide Call Duration` DOM strip.
+  hideDuration: { type: Boolean, default: false },
 })
 
 const call = reactive(props.activity)
