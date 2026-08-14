@@ -8,10 +8,12 @@ from frappe.tests.utils import FrappeTestCase
 
 from crm.txb.constants import (
 	ADMIN_ROLE,
+	FIELD_WORKSHOP_SCHEDULED_AT,
 	PIPELINE_DELIVERING_COACHING,
 	PIPELINE_INDIVIDUAL_SESSION,
 	PIPELINE_STATUSES,
 	PIPELINE_WORKSHOP,
+	STATUS_WORKSHOP_SET,
 )
 from crm.txb.pipelines.actions import PIPELINE_ACTIONS
 from crm.txb.pipelines.individual_session import BAP_TYPES, LOCATION_TYPES
@@ -363,6 +365,133 @@ class TestTransitionEnforcement(FrappeTestCase):
 			spec["handler"] = original
 
 		self.assertFalse(frappe.flags.get("txb_action"))
+
+
+class TestWorkshopScheduleInvariant(FrappeTestCase):
+	"""TXB-149: a Workshop deal may not rest in "Workshop set" with no scheduled datetime.
+
+	The retired `Workshop Datetime Modal` Form Script prompted for this in the browser and
+	enforced nothing. The rule now lives in `require_workshop_schedule`, so every write path
+	-- the native action, a bare status set and the REST API -- reaches it. These tests
+	exercise the guard directly rather than through any one surface, because that is the
+	point of moving it server-side.
+	"""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		ensure_user(COACH, ["Sales User"])
+		ensure_user(ADMIN, ["Sales User", ADMIN_ROLE])
+		frappe.db.commit()  # nosemgrep -- roles must outlive per-test rollback
+
+	def setUp(self):
+		if not frappe.get_meta("CRM Deal").has_field(FIELD_WORKSHOP_SCHEDULED_AT):
+			self.skipTest(f"{FIELD_WORKSHOP_SCHEDULED_AT} is not installed on this site")
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+		frappe.flags.txb_action = None
+		frappe.db.rollback()
+
+	def make_deal(self, status, owner=None):
+		values = {"doctype": "CRM Deal", "pipeline_type": PIPELINE_WORKSHOP, "status": status}
+		if owner:
+			values["deal_owner"] = owner
+		return frappe.get_doc(values).insert(ignore_permissions=True)
+
+	def test_a_bare_write_to_workshop_set_without_a_schedule_is_refused(self):
+		"""The action flag is armed so the state-machine guard passes and only the schedule
+		invariant is left to reject the write -- i.e. an action-shaped write that failed to
+		capture the datetime is caught, not just an off-graph jump."""
+		deal = self.make_deal("VCS call run")
+		frappe.set_user(COACH)
+		deal.reload()
+		deal.status = STATUS_WORKSHOP_SET
+		frappe.flags.txb_action = deal.name
+
+		with self.assertRaisesRegex(frappe.ValidationError, "scheduled"):
+			deal.save(ignore_permissions=True)
+
+	def test_a_write_carrying_the_schedule_succeeds(self):
+		deal = self.make_deal("VCS call run")
+		frappe.set_user(COACH)
+		deal.reload()
+		deal.set(FIELD_WORKSHOP_SCHEDULED_AT, "2026-09-01 10:00:00")
+		deal.status = STATUS_WORKSHOP_SET
+		frappe.flags.txb_action = deal.name
+		deal.save(ignore_permissions=True)
+
+		self.assertEqual(
+			frappe.db.get_value("CRM Deal", deal.name, "status"), STATUS_WORKSHOP_SET
+		)
+
+	def test_the_admin_hatch_may_set_workshop_set_by_hand(self):
+		"""Admins keep the documented direct-write hatch for edges the graph omits."""
+		deal = self.make_deal("VCS call run")
+		frappe.set_user(ADMIN)
+		deal.reload()
+		deal.status = STATUS_WORKSHOP_SET
+		deal.save(ignore_permissions=True)
+
+		self.assertEqual(
+			frappe.db.get_value("CRM Deal", deal.name, "status"), STATUS_WORKSHOP_SET
+		)
+
+	def test_the_native_set_workshop_action_schedules_and_moves(self):
+		"""The described UI transition: Set Workshop captures the datetime and lands the
+		deal in "Workshop set" through the native action flow."""
+		from crm.txb.api.actions import execute_action
+
+		deal = self.make_deal("VCS call run", owner=COACH)
+		frappe.set_user(COACH)
+
+		execute_action(
+			deal.name,
+			"set_workshop",
+			{"ws_datetime": "2026-09-01 10:00:00", "ws_name": "Q3 Workshop"},
+		)
+
+		row = frappe.db.get_value(
+			"CRM Deal", deal.name, ["status", FIELD_WORKSHOP_SCHEDULED_AT], as_dict=True
+		)
+		self.assertEqual(row["status"], STATUS_WORKSHOP_SET)
+		self.assertTrue(row[FIELD_WORKSHOP_SCHEDULED_AT])
+
+	def test_running_a_vcs_call_with_a_confirmed_date_still_schedules(self):
+		"""A VCS call confirmed with a date jumps to "Workshop set"; this valid transition
+		must keep succeeding, so it now captures the datetime the invariant requires."""
+		from crm.txb.api.actions import execute_action
+
+		deal = self.make_deal("VCS call set", owner=COACH)
+		frappe.set_user(COACH)
+
+		execute_action(
+			deal.name,
+			"run_vcs_call",
+			{
+				"vcs_notes": "Confirmed on the call",
+				"ws_confirmed": "Yes",
+				"confirmed_ws_date": "2026-09-01 10:00:00",
+			},
+		)
+
+		row = frappe.db.get_value(
+			"CRM Deal", deal.name, ["status", FIELD_WORKSHOP_SCHEDULED_AT], as_dict=True
+		)
+		self.assertEqual(row["status"], STATUS_WORKSHOP_SET)
+		self.assertTrue(row[FIELD_WORKSHOP_SCHEDULED_AT])
+
+	def test_the_invariant_is_scoped_to_the_workshop_set_status(self):
+		"""A Workshop deal elsewhere in its pipeline is untouched by the rule."""
+		deal = self.make_deal("VCS call run")
+		frappe.set_user(COACH)
+		deal.reload()
+		deal.workshop_name = "Unrelated edit"
+		deal.save(ignore_permissions=True)
+
+		self.assertEqual(
+			frappe.db.get_value("CRM Deal", deal.name, "workshop_name"), "Unrelated edit"
+		)
 
 
 class TestTransitionMatrix(FrappeTestCase):

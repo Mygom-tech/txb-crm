@@ -98,6 +98,11 @@ CONVERSION_PIPELINE_INITIAL_STATUS = {
 FIELD_REGISTRATION_TOKEN = "custom_registration_token"
 FIELD_REGISTRATION_LINK = "custom_registration_link"
 
+# The scheduled workshop date and time, collected by the native Set Workshop action. A
+# Workshop deal may not rest in "Workshop set" without it; see
+# `crm.txb.doc_events.deal.require_workshop_schedule`.
+FIELD_WORKSHOP_SCHEDULED_AT = "custom_workshop_scheduled_at"
+
 # Number of random bytes behind a registration token. 32 bytes of urandom is far beyond
 # guessing range and keeps the URL a reasonable length.
 REGISTRATION_TOKEN_BYTES = 32

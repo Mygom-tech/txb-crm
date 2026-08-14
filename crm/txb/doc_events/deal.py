@@ -7,17 +7,55 @@ Ported from the `Generate Registration Token`, `Sync Deal Contact Name` and
 import secrets
 
 import frappe
+from frappe import _
 
 from crm.txb.constants import (
+	ADMIN_ROLE,
 	FIELD_DELIVERY_COACH,
 	FIELD_DELIVERY_COACH_NAME,
 	FIELD_REGISTRATION_LINK,
 	FIELD_REGISTRATION_TOKEN,
+	FIELD_WORKSHOP_SCHEDULED_AT,
 	PIPELINE_WORKSHOP,
 	REGISTRATION_BASE_URL,
 	REGISTRATION_TOKEN_BYTES,
 	STATUS_WORKSHOP_SET,
 )
+
+
+def require_workshop_schedule(doc, method=None):
+	"""A Workshop deal may not rest in "Workshop set" with no scheduled date and time.
+
+	The native Workshop action collects ``custom_workshop_scheduled_at`` before it moves the
+	deal, so a transition through the action flow always satisfies this. What this guards is
+	the other door: a direct document edit or a bare API write that flips ``status`` to
+	"Workshop set" without going through the action, which the retired Form Script used to
+	catch on the client and nothing enforced on the server.
+
+	The CRM "Admin" role keeps a direct-write hatch. Some edges the graph does not describe
+	still need a human with the authority to set them by hand; enforcing this for everyone
+	would trap those cases behind a field the action flow is the only supported way to fill.
+	"""
+	if doc.pipeline_type != PIPELINE_WORKSHOP or doc.status != STATUS_WORKSHOP_SET:
+		return
+
+	# A site without the field has no scheduling feature to enforce; guarding an absent
+	# field would refuse every Workshop set write there instead.
+	if not doc.meta.has_field(FIELD_WORKSHOP_SCHEDULED_AT):
+		return
+
+	if doc.get(FIELD_WORKSHOP_SCHEDULED_AT):
+		return
+
+	if ADMIN_ROLE in frappe.get_roles():
+		return
+
+	frappe.throw(
+		_("A workshop date and time must be scheduled before the deal can be set to {0}.").format(
+			STATUS_WORKSHOP_SET
+		),
+		title=_("Workshop Not Scheduled"),
+	)
 
 
 def generate_registration_token(doc, method=None):

@@ -36,7 +36,10 @@ SERVER_SCRIPT = "Server Script"
 # auto refresh call count -> Deal.vue reloads the canonical deal after coaching actions and
 #   completed call-log changes (native reactivity, no DOM polling);
 # notes tab rename -> Deal.vue computes the "Coaching Notes" tab label for coaching deals;
-# hide call duration -> CallArea.vue `hideDuration` option, set from Deal.vue.
+# hide call duration -> CallArea.vue `hideDuration` option, set from Deal.vue;
+# workshop datetime modal -> the native Set Workshop action collects
+#   custom_workshop_scheduled_at, and crm.txb.doc_events.deal.require_workshop_schedule
+#   enforces it server-side (TXB-149).
 RETIRED_FORM_SCRIPTS = (
 	"CRM Wizard Framework",
 	"Convert Dialog - Pipeline Type",
@@ -48,6 +51,7 @@ RETIRED_FORM_SCRIPTS = (
 	"Auto Refresh Call Count",
 	"Notes Tab Rename",
 	"Hide Call Duration",
+	"Workshop Datetime Modal",
 )
 
 # Server Scripts, keyed off `disabled`. All now live in `crm/txb/doc_events`,

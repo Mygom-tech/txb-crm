@@ -52,6 +52,13 @@ def set_vcs_call(deal, data):
 def run_vcs_call(deal, data):
 	apply_deal_fields(deal, RUN_VCS_CALL, data)
 
+	# A confirmed date here jumps the deal straight to "Workshop set", which may not rest
+	# without a scheduled datetime (see require_workshop_schedule). The confirmation field
+	# therefore carries the full datetime into custom_workshop_scheduled_at, and the plain
+	# workshop_date is derived from it so both the list column and the invariant are fed.
+	if data.get("ws_confirmed") == "Yes" and data.get("confirmed_ws_date"):
+		deal.workshop_date = date_part(data["confirmed_ws_date"])
+
 	add_note(
 		deal,
 		"VCS Call Run",
@@ -237,7 +244,7 @@ RUN_VCS_CALL = {
 		{"fieldname": "financial_notes", "label": "Financial Support Notes", "fieldtype": "Small Text", "deal_field": "custom_financial_support_notes"},
 		{"fieldname": "funding_manager", "label": "Funding Manager", "fieldtype": "Link", "options": "Contact", "deal_field": "custom_funding_manager_link"},
 		{"fieldname": "ws_confirmed", "label": "Is Workshop Date Confirmed?", "fieldtype": "Select", "options": YES_NO, "reqd": 1, "deal_field": "custom_workshop_date_confirmed"},
-		{"fieldname": "confirmed_ws_date", "label": "Confirmed Workshop Date", "fieldtype": "Date", "deal_field": "workshop_date", "depends_on": "eval:doc.ws_confirmed=='Yes'"},
+		{"fieldname": "confirmed_ws_date", "label": "Confirmed Workshop Date & Time", "fieldtype": "Datetime", "deal_field": "custom_workshop_scheduled_at", "depends_on": "eval:doc.ws_confirmed=='Yes'"},
 		{"fieldname": "additional_notes", "label": "Additional Notes", "fieldtype": "Small Text"},
 	],
 }
