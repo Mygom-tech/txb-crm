@@ -12,6 +12,15 @@ import {
   notesTabLabel,
   hideCallDuration,
 } from '@/utils/dealPresentation'
+import {
+  PIPELINE_INDIVIDUAL_SESSION,
+  PIPELINE_WORKSHOP,
+  PIPELINE_SELLING_TRAINING,
+  PIPELINE_DELIVERING_COACHING,
+  STALE_PIPELINE_TYPE_ALIASES,
+  correctPipelineTypeCondition,
+  applyPipelineDependencies,
+} from '@/utils/pipelineLayout'
 
 const MAP = {
   'Individual Session': [
@@ -199,5 +208,123 @@ describe('hideCallDuration', () => {
     expect(hideCallDuration('Contact')).toBe(false)
     expect(hideCallDuration('')).toBe(false)
     expect(hideCallDuration(undefined)).toBe(false)
+  })
+})
+
+// TXB-148: the Pipeline Section Visibility Form Script is replaced by committed pipeline
+// depends_on (pipelineLayout.js), applied in Deal.vue getParsedSections and evaluated
+// reactively by SidePanelLayout. These cover the correction of its stale "Training"
+// condition so Selling Training deals resolve their pipeline-specific fields/sections.
+describe('pipeline type constants', () => {
+  it('name the four TXB pipelines exactly as the backend does', () => {
+    // Mirrors crm/txb/constants.py; "Selling Training" is the value the retired Form
+    // Script got wrong ("Training").
+    expect(PIPELINE_INDIVIDUAL_SESSION).toBe('Individual Session')
+    expect(PIPELINE_WORKSHOP).toBe('Workshop')
+    expect(PIPELINE_SELLING_TRAINING).toBe('Selling Training')
+    expect(PIPELINE_DELIVERING_COACHING).toBe('Delivering Coaching')
+  })
+
+  it('records the stale "Training" alias and its correction', () => {
+    expect(STALE_PIPELINE_TYPE_ALIASES.Training).toBe('Selling Training')
+  })
+})
+
+describe('correctPipelineTypeCondition', () => {
+  it('rewrites the stale Selling Training condition', () => {
+    expect(
+      correctPipelineTypeCondition('eval:doc.pipeline_type == "Training"'),
+    ).toBe('eval:doc.pipeline_type == "Selling Training"')
+  })
+
+  it('preserves the operator and single-quote style', () => {
+    expect(
+      correctPipelineTypeCondition("eval:doc.pipeline_type!='Training'"),
+    ).toBe("eval:doc.pipeline_type!='Selling Training'")
+  })
+
+  it('corrects a stale condition combined with others', () => {
+    expect(
+      correctPipelineTypeCondition(
+        'eval:doc.pipeline_type == "Training" && doc.status == "Training submitted"',
+      ),
+    ).toBe(
+      'eval:doc.pipeline_type == "Selling Training" && doc.status == "Training submitted"',
+    )
+  })
+
+  it('leaves the real pipeline values untouched', () => {
+    for (const value of [
+      'Individual Session',
+      'Workshop',
+      'Selling Training',
+      'Delivering Coaching',
+    ]) {
+      const expr = `eval:doc.pipeline_type == "${value}"`
+      expect(correctPipelineTypeCondition(expr)).toBe(expr)
+    }
+  })
+
+  it('never touches a status literal that merely contains "Training"', () => {
+    const expr = 'eval:doc.status == "Training submitted"'
+    expect(correctPipelineTypeCondition(expr)).toBe(expr)
+  })
+
+  it('is a no-op for expressions without a pipeline_type comparison', () => {
+    expect(correctPipelineTypeCondition('eval:doc.linkedin')).toBe(
+      'eval:doc.linkedin',
+    )
+    expect(correctPipelineTypeCondition('')).toBe('')
+    expect(correctPipelineTypeCondition(undefined)).toBe(undefined)
+  })
+})
+
+describe('applyPipelineDependencies', () => {
+  it('corrects stale conditions on both fields and sections, in place', () => {
+    const sections = [
+      {
+        name: 'training_section',
+        depends_on: 'eval:doc.pipeline_type == "Training"',
+        columns: [
+          {
+            fields: [
+              {
+                fieldname: 'custom_training_owner',
+                depends_on: 'eval:doc.pipeline_type == "Training"',
+              },
+              {
+                fieldname: 'custom_delivery_coach',
+                depends_on: 'eval:doc.pipeline_type == "Delivering Coaching"',
+              },
+              { fieldname: 'deal_value' },
+            ],
+          },
+        ],
+      },
+      { name: 'contacts_section', columns: [{ fields: [] }] },
+    ]
+
+    const result = applyPipelineDependencies(sections)
+
+    expect(result).toBe(sections)
+    expect(sections[0].depends_on).toBe(
+      'eval:doc.pipeline_type == "Selling Training"',
+    )
+    const fields = sections[0].columns[0].fields
+    expect(fields[0].depends_on).toBe(
+      'eval:doc.pipeline_type == "Selling Training"',
+    )
+    // An already-correct pipeline condition is left alone.
+    expect(fields[1].depends_on).toBe(
+      'eval:doc.pipeline_type == "Delivering Coaching"',
+    )
+    // A field without depends_on is untouched.
+    expect(fields[2].depends_on).toBeUndefined()
+  })
+
+  it('tolerates a missing or malformed layout', () => {
+    expect(applyPipelineDependencies(undefined)).toBeUndefined()
+    expect(applyPipelineDependencies([])).toEqual([])
+    expect(applyPipelineDependencies([{ name: 'x' }])).toEqual([{ name: 'x' }])
   })
 })
