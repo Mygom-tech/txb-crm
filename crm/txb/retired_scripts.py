@@ -36,7 +36,13 @@ SERVER_SCRIPT = "Server Script"
 # auto refresh call count -> Deal.vue reloads the canonical deal after coaching actions and
 #   completed call-log changes (native reactivity, no DOM polling);
 # notes tab rename -> Deal.vue computes the "Coaching Notes" tab label for coaching deals;
-# hide call duration -> CallArea.vue `hideDuration` option, set from Deal.vue.
+# hide call duration -> CallArea.vue `hideDuration` option, set from Deal.vue;
+# pipeline section visibility -> committed pipeline depends_on (frontend/src/utils/
+#   pipelineLayout.js, applied in Deal.vue getParsedSections) evaluated reactively by
+#   SidePanelLayout.vue, with the stale `pipeline_type == "Training"` condition corrected
+#   to "Selling Training"; empty sections collapse through the standard fields-layout rule;
+# forecasting -> probability is derived server-side (CRM Deal update_default_probability)
+#   and Deal.vue reloads the document after a status save so the value shows with no reload.
 RETIRED_FORM_SCRIPTS = (
 	"CRM Wizard Framework",
 	"Convert Dialog - Pipeline Type",
@@ -48,6 +54,8 @@ RETIRED_FORM_SCRIPTS = (
 	"Auto Refresh Call Count",
 	"Notes Tab Rename",
 	"Hide Call Duration",
+	"Pipeline Section Visibility",
+	"Forecasting Script",
 )
 
 # Server Scripts, keyed off `disabled`. All now live in `crm/txb/doc_events`,

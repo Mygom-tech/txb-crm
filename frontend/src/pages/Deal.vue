@@ -418,6 +418,7 @@ import {
 import { getView } from '@/utils/view'
 import { allowedStatusesFor } from '@/utils/pipelineStatuses'
 import { notesTabLabel } from '@/utils/dealPresentation'
+import { applyPipelineDependencies } from '@/utils/pipelineLayout'
 import { actionOptions, runAction } from '@/utils/takeAction'
 import {
   allowedTargets,
@@ -767,6 +768,10 @@ on('reload-deal-sections', () => sections.reload())
 if (!sections.data) sections.fetch()
 
 function getParsedSections(_sections) {
+  // Correct the stale pipeline_type conditions the retired Pipeline Section Visibility
+  // Form Script carried (e.g. "Training" -> "Selling Training") before the layout reaches
+  // SidePanelLayout, which then evaluates the corrected depends_on reactively.
+  applyPipelineDependencies(_sections)
   _sections.forEach((section) => {
     if (section.name == 'contacts_section') return
     section.columns[0].fields.forEach((field) => {
@@ -1006,6 +1011,10 @@ function reloadResources(data) {
     getDealStatus(data.status).type != 'Lost'
   ) {
     sections.reload()
+    // The server re-derives probability from the new status (CRM Deal
+    // update_default_probability), replacing the old Forecasting Form Script. Reload the
+    // document so that server-derived value shows immediately, without a browser reload.
+    document.reload?.()
   }
 }
 </script>
