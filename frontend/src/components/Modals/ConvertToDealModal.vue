@@ -123,10 +123,11 @@ import Link from '@/components/Controls/Link.vue'
 import { useDocument } from '@/data/document'
 import { usersStore } from '@/stores/users'
 import { sessionStore } from '@/stores/session'
-import { statusesStore } from '@/stores/statuses'
 import { viewsStore } from '@/stores/views'
-import { allowedStatusesFor } from '@/utils/pipelineStatuses'
-import { selectFieldOptions } from '@/utils/selectOptions'
+import {
+  conversionPipelineTypes,
+  conversionInitialStatus,
+} from '@/utils/pipelineStatuses'
 import {
   excludeSelfRenderedFields,
   SELF_RENDERED_FIELDS,
@@ -147,7 +148,6 @@ const show = defineModel({ type: Boolean })
 
 const router = useRouter()
 
-const { pipelineStatuses } = statusesStore()
 const { views } = viewsStore()
 const { isManager } = usersStore()
 const { user } = sessionStore()
@@ -263,33 +263,26 @@ function destinationAfterConvert(dealName) {
 const pipelineType = ref('')
 const pipelineStatus = ref('')
 
-const { doctypeMeta: dealMeta } = getMeta('CRM Deal')
-
-const pipelineTypeOptions = computed(() => {
-  const field = dealMeta.value?.fields?.find(
-    (f) => f.fieldname === 'pipeline_type',
-  )
-  // Labels are translated here rather than in the helper, which stays presentation-free.
-  return selectFieldOptions(field).map(({ value }) => ({
-    label: __(value),
-    value,
-  }))
-})
-
-// Same source of truth as the deal page: the server-owned pipeline -> statuses map.
-const pipelineStatusOptions = computed(() =>
-  allowedStatusesFor(pipelineType.value, null, pipelineStatuses.data).map(
-    (value) => ({ label: __(value), value }),
-  ),
+// TXB-125: conversion is limited to the approved pipelines only. The full pipeline_type
+// Select on CRM Deal still exists for deals themselves; here we deliberately offer only the
+// convertible subset so a lead cannot be dropped onto a pipeline conversion is not meant to
+// reach. The backend re-validates this, so a tampered payload gains nothing.
+const pipelineTypeOptions = computed(() =>
+  conversionPipelineTypes().map((value) => ({ label: __(value), value })),
 )
 
-// Changing the pipeline invalidates a status chosen for the previous one.
+// TXB-125: the initial deal state is fixed per pipeline and derived, not chosen. The Status
+// control therefore shows exactly the required entry state and offers no alternative, so it
+// cannot be used to start the deal anywhere else. The server derives the same value and
+// ignores whatever arrives, making this display-only.
+const pipelineStatusOptions = computed(() => {
+  const status = conversionInitialStatus(pipelineType.value)
+  return status ? [{ label: __(status), value: status }] : []
+})
+
+// Selecting a pipeline pins its required initial state; there is nothing else to pick.
 watch(pipelineType, () => {
-  if (
-    !pipelineStatusOptions.value.some((o) => o.value === pipelineStatus.value)
-  ) {
-    pipelineStatus.value = ''
-  }
+  pipelineStatus.value = conversionInitialStatus(pipelineType.value)
 })
 
 const dealTabs = createResource({

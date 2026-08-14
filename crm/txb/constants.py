@@ -80,6 +80,20 @@ PIPELINE_STATUSES = {
 	],
 }
 
+# Lead conversion is restricted to a subset of pipelines, and the deal's initial state is
+# derived from the chosen pipeline server-side (TXB-125). This is the single source of
+# truth for both the allowed pipelines and their required entry status, so the interactive
+# modal, bulk conversion, and the whitelisted convert endpoint cannot drift or be bypassed.
+#
+# The entry status is intentionally the first status of each pipeline in PIPELINE_STATUSES,
+# but is pinned explicitly here so a reordering of that display list can never silently
+# change which state a freshly converted deal lands in.
+CONVERSION_PIPELINE_INITIAL_STATUS = {
+	PIPELINE_INDIVIDUAL_SESSION: "Submitted",
+	PIPELINE_WORKSHOP: "Workshop submitted",
+	PIPELINE_SELLING_TRAINING: "Training submitted",
+}
+
 # Custom fieldnames.
 FIELD_REGISTRATION_TOKEN = "custom_registration_token"
 FIELD_REGISTRATION_LINK = "custom_registration_link"
