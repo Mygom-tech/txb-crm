@@ -54,6 +54,28 @@ export function requiredFieldnames(action) {
 }
 
 /**
+ * Seed values for the dialog's reactive document, from each field's resolved default.
+ *
+ * The dialog builds its reactive document from `defaults`, not from field metadata, so a
+ * server-owned read-only value (Log Coaching Call's Total Completed Calls, defaulted per
+ * deal from the canonical total_completed_calls) must be handed over here or it renders as
+ * an empty read-only box. `default: 'Today'` is resolved to a real date, matching
+ * `actionFields`. Caller-supplied `extra` defaults (e.g. a kanban branch value) win.
+ *
+ * @param {Object} action
+ * @param {string} today - ISO date, injected so the function stays pure
+ * @param {Object} [extra] - defaults that override field-level ones
+ */
+export function actionDefaults(action, today, extra = {}) {
+  const seeded = {}
+  for (const field of action?.fields || []) {
+    if (field.default === undefined) continue
+    seeded[field.fieldname] = field.default === 'Today' ? today : field.default
+  }
+  return { ...seeded, ...extra }
+}
+
+/**
  * Open an action's form and execute it.
  *
  * Resolves with the server's response, or null when the user cancels.
@@ -65,9 +87,11 @@ export async function runAction(deal, action, { today, defaults } = {}) {
     title: __(action.label),
     fields: actionFields(action, isoToday),
     required: requiredFieldnames(action),
-    // A kanban drop pre-selects the branch value implied by the column, leaving it
-    // editable — the user may change their mind, and the card follows the result.
-    defaults: defaults || {},
+    // Seed the reactive document from the server-resolved field defaults so a read-only
+    // value (Total Completed Calls) actually renders, then let a kanban drop's branch
+    // value override — it pre-selects the column's branch but stays editable, and the
+    // card follows the result.
+    defaults: actionDefaults(action, isoToday, defaults || {}),
     submitLabel: __('Confirm'),
     cancelLabel: __('Cancel'),
   })

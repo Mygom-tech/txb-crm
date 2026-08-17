@@ -141,6 +141,14 @@ def execute_action(deal: str, action: str, data: str | dict | None = None) -> di
 	values = parse_data(data)
 	validate_required(spec, values)
 
+	# Conditional, action-specific rules (e.g. Next Coaching Call Date is required unless
+	# this is the last call). Runs before the flag is armed and before any write, so a
+	# rejected submission leaves nothing behind, and a direct API call meets the same rule
+	# the form's `mandatory_depends_on` enforces in the browser.
+	validator = spec.get("validate")
+	if validator:
+		validator(doc, values)
+
 	# Tells `guard_transition` this write is an action rather than a bare status set.
 	# Scoped to this document's name, not just truthy, so the exemption cannot leak onto
 	# another CRM Deal saved inside the same request. Cleared in `finally` so a throw
@@ -174,6 +182,12 @@ def validate_required(spec: dict, values: dict):
 	so only None/empty are missing for non-text values. For a text answer a run of spaces
 	is not a real answer either: a required Topic submitted as "   " is rejected here,
 	before the handler runs, so a direct API call cannot slip a blank Topic past the form.
+
+	Fields whose requiredness depends on another answer -- Next Coaching Call Date, which
+	is required only while "this is the last call" is unticked -- are enforced by the
+	action's own `validate` hook (see execute_action), because that condition is expressed
+	as the browser's `eval:` string and belongs to the action that owns it, not to this
+	generic emptiness check.
 	"""
 	missing = [
 		field["label"]
