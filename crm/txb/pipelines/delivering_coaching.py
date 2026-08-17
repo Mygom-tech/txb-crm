@@ -98,6 +98,29 @@ def log_coaching_call_defaults(deal) -> dict:
 	return {"completed_calls": deal.total_completed_calls or 0}
 
 
+def validate_log_coaching_call(deal, data):
+	"""Enforce the conditional Next Coaching Call Date rule before anything is written.
+
+	The form hides and drops the requirement for the date once "this is the last call" is
+	ticked; until then the date is mandatory. The dialog carries this as a
+	`mandatory_depends_on` eval, but the browser is not a boundary, so the same rule is
+	re-checked here against the submitted data. Raised as a MandatoryError so a direct API
+	call is rejected exactly like the form, before the handler runs or the deal is saved.
+	"""
+	if not data.get("is_last_call") and _is_blank(data.get("next_call_date")):
+		frappe.throw(
+			frappe._("{0} is required.").format(frappe._("Next Coaching Call Date")),
+			frappe.MandatoryError,
+		)
+
+
+def _is_blank(value) -> bool:
+	"""Missing for a required field: None, empty, or whitespace-only text."""
+	if value is None or value == "":
+		return True
+	return isinstance(value, str) and not value.strip()
+
+
 def log_coaching_call(deal, data):
 	"""The only Delivering Coaching action that does not move the status.
 
@@ -268,15 +291,26 @@ DELIVERING_COACHING_ACTIONS = (
 		"changes_status": False,
 		"admin_only": False,
 		"handler": log_coaching_call,
+		"validate": validate_log_coaching_call,
 		"field_defaults": log_coaching_call_defaults,
 		"fields": [
 			{"fieldname": "call_status", "label": "Call Status", "fieldtype": "Select", "options": "\n".join(CALL_STATUSES), "reqd": 1},
 			{"fieldname": "delivery_date", "label": "Coaching Call Delivery Date", "fieldtype": "Date", "reqd": 1, "default": "Today"},
-			{"fieldname": "completed_calls", "label": "Completed Calls", "fieldtype": "Int", "read_only": 1, "default": 0},
+			{"fieldname": "completed_calls", "label": "Total Completed Calls", "fieldtype": "Int", "read_only": 1, "default": 0},
 			{"fieldname": "topic", "label": "Topic", "fieldtype": "Data", "reqd": 1},
 			{"fieldname": "call_notes", "label": "Coaching Call Notes", "fieldtype": "Small Text", "reqd": 1},
 			{"fieldname": "is_last_call", "label": "This is the last coaching call", "fieldtype": "Check"},
-			{"fieldname": "next_call_date", "label": "Next Coaching Call Date", "fieldtype": "Datetime"},
+			# Next call date only applies while coaching continues: it is shown and required
+			# until "last call" is ticked, and hidden/optional once it is. The dialog reads
+			# these eval strings; the server re-checks the same rule in the action's
+			# `validate` hook so a direct API call cannot skip it.
+			{
+				"fieldname": "next_call_date",
+				"label": "Next Coaching Call Date",
+				"fieldtype": "Datetime",
+				"depends_on": "eval:!doc.is_last_call",
+				"mandatory_depends_on": "eval:!doc.is_last_call",
+			},
 		],
 	},
 	{

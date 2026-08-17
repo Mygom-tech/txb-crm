@@ -368,11 +368,14 @@ class TestTransitionEnforcement(FrappeTestCase):
 
 
 class TestLogCoachingCall(FrappeTestCase):
-	"""TXB-152: Log Coaching Call shows the canonical completed-call count and demands a Topic.
+	"""Log Coaching Call shows the canonical completed-call count and enforces its rules.
 
-	These exercise the server-owned schema through `get_available_actions` and the authoritative
-	rules through `execute_action`, because the browser is not a boundary: a direct API call must
-	see the same read-only count and the same Topic rejection the generated form presents.
+	TXB-152 added the read-only Total Completed Calls count and the mandatory Topic; TXB-153
+	makes Next Coaching Call Date conditional on the last-call checkbox. These exercise the
+	server-owned schema through `get_available_actions` and the authoritative rules through
+	`execute_action`, because the browser is not a boundary: a direct API call must see the
+	same read-only count, the same Topic rejection, and the same conditional next-date rule
+	the generated form presents.
 	"""
 
 	@classmethod
@@ -413,6 +416,14 @@ class TestLogCoachingCall(FrappeTestCase):
 			{"reference_doctype": DEAL_DOCTYPE, "reference_docname": deal_name},
 		)
 
+	def task_count(self, deal_name, title=None):
+		from crm.txb.pipelines.common import DEAL_DOCTYPE, TASK_DOCTYPE
+
+		filters = {"reference_doctype": DEAL_DOCTYPE, "reference_docname": deal_name}
+		if title is not None:
+			filters["title"] = title
+		return frappe.db.count(TASK_DOCTYPE, filters)
+
 	def test_completed_calls_is_read_only_and_sits_immediately_above_topic(self):
 		deal = self.make_deal(owner=COACH, total_completed_calls=3)
 		frappe.set_user(COACH)
@@ -424,6 +435,8 @@ class TestLogCoachingCall(FrappeTestCase):
 		completed = next(f for f in fields if f["fieldname"] == "completed_calls")
 		self.assertTrue(completed["read_only"])
 		self.assertEqual(completed["default"], 3)
+		# The label is shown to the coach verbatim; it must read exactly this.
+		self.assertEqual(completed["label"], "Total Completed Calls")
 
 	def test_completed_calls_defaults_to_zero_when_the_deal_total_is_unset(self):
 		deal = self.make_deal(owner=COACH)
@@ -490,6 +503,105 @@ class TestLogCoachingCall(FrappeTestCase):
 		self.assertEqual(row["status"], "Active")
 		self.assertEqual(row["total_completed_calls"], 2)
 		self.assertEqual(self.note_count(deal.name), 1)
+
+	# ── TXB-153: Next Coaching Call Date is conditional on the last-call checkbox ──
+
+	def test_next_call_date_is_conditionally_visible_and_mandatory_in_the_schema(self):
+		"""The schema carries the same eval the modal uses: shown + required until last call."""
+		deal = self.make_deal(owner=COACH)
+		frappe.set_user(COACH)
+
+		next_call = next(
+			f for f in self.log_call_fields(deal.name) if f["fieldname"] == "next_call_date"
+		)
+		self.assertEqual(next_call["depends_on"], "eval:!doc.is_last_call")
+		self.assertEqual(next_call["mandatory_depends_on"], "eval:!doc.is_last_call")
+
+	def test_a_non_last_call_without_a_next_date_is_rejected_atomically(self):
+		"""Unticked last-call + no next date is refused before any write, exactly as the modal."""
+		from crm.txb.api.actions import execute_action
+
+		deal = self.make_deal(owner=COACH, total_completed_calls=4)
+		frappe.set_user(COACH)
+
+		with self.assertRaises(frappe.MandatoryError):
+			execute_action(
+				deal.name,
+				"log_coaching_call",
+				{
+					"call_status": "Completed",
+					"delivery_date": "2026-08-17",
+					"topic": "Leadership styles",
+					"call_notes": "Reviewed DISC results",
+					"is_last_call": 0,
+				},
+			)
+
+		# The rejection is atomic: no deal, note, task, or count change survives.
+		self.assertEqual(
+			frappe.db.get_value("CRM Deal", deal.name, "total_completed_calls"), 4
+		)
+		self.assertEqual(self.note_count(deal.name), 0)
+		self.assertEqual(self.task_count(deal.name), 0)
+
+	def test_a_non_last_call_with_a_next_date_logs_and_schedules_the_follow_up(self):
+		from crm.txb.api.actions import execute_action
+
+		deal = self.make_deal(owner=COACH, total_completed_calls=1)
+		frappe.set_user(COACH)
+
+		execute_action(
+			deal.name,
+			"log_coaching_call",
+			{
+				"call_status": "Completed",
+				"delivery_date": "2026-08-17",
+				"topic": "Leadership styles",
+				"call_notes": "Reviewed DISC results",
+				"is_last_call": 0,
+				"next_call_date": "2026-08-24 10:00:00",
+			},
+		)
+
+		row = frappe.db.get_value(
+			"CRM Deal", deal.name, ["status", "total_completed_calls"], as_dict=True
+		)
+		self.assertEqual(row["status"], "Active")
+		self.assertEqual(row["total_completed_calls"], 2)
+		self.assertEqual(self.note_count(deal.name), 1)
+		# A next-call follow-up task is created when it is not the last call.
+		self.assertEqual(self.task_count(deal.name, title="Next Coaching Call"), 1)
+
+	def test_a_last_call_needs_no_next_date_and_schedules_no_follow_up(self):
+		from crm.txb.api.actions import execute_action
+
+		deal = self.make_deal(owner=COACH, total_completed_calls=5)
+		frappe.set_user(COACH)
+
+		execute_action(
+			deal.name,
+			"log_coaching_call",
+			{
+				"call_status": "Completed",
+				"delivery_date": "2026-08-17",
+				"topic": "Wrap up",
+				"call_notes": "Final session",
+				"is_last_call": 1,
+			},
+		)
+
+		row = frappe.db.get_value(
+			"CRM Deal",
+			deal.name,
+			["status", "total_completed_calls", "custom_last_coaching_call"],
+			as_dict=True,
+		)
+		# Status-neutral, the canonical count still advances, and no follow-up task is made.
+		self.assertEqual(row["status"], "Active")
+		self.assertEqual(row["total_completed_calls"], 6)
+		self.assertEqual(row["custom_last_coaching_call"], "Yes")
+		self.assertEqual(self.note_count(deal.name), 1)
+		self.assertEqual(self.task_count(deal.name, title="Next Coaching Call"), 0)
 
 
 class TestWorkshopScheduleInvariant(FrappeTestCase):
