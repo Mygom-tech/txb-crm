@@ -23,7 +23,16 @@ const LOG_CALL = {
       reqd: 1,
       default: 'Today',
     },
-    { fieldname: 'topic', label: 'Topic', fieldtype: 'Data' },
+    // Server-owned read-only count, injected immediately above Topic from the deal's
+    // canonical total_completed_calls (0 when unset).
+    {
+      fieldname: 'completed_calls',
+      label: 'Completed Calls',
+      fieldtype: 'Int',
+      read_only: 1,
+      default: 0,
+    },
+    { fieldname: 'topic', label: 'Topic', fieldtype: 'Data', reqd: 1 },
   ],
 }
 
@@ -78,6 +87,20 @@ describe('actionFields', () => {
     expect(actionFields({}, '2026-08-04')).toEqual([])
     expect(actionFields(undefined, '2026-08-04')).toEqual([])
   })
+
+  it('keeps the read-only Completed Calls count immediately above Topic', () => {
+    const fields = actionFields(LOG_CALL, '2026-08-04')
+    const names = fields.map((f) => f.fieldname)
+    expect(names.indexOf('completed_calls') + 1).toBe(names.indexOf('topic'))
+  })
+
+  it('preserves the server-supplied Completed Calls default and read-only flag', () => {
+    const completed = actionFields(LOG_CALL, '2026-08-04').find(
+      (f) => f.fieldname === 'completed_calls',
+    )
+    expect(completed.default).toBe(0)
+    expect(completed.read_only).toBe(1)
+  })
 })
 
 describe('requiredFieldnames', () => {
@@ -85,6 +108,7 @@ describe('requiredFieldnames', () => {
     expect(requiredFieldnames(LOG_CALL)).toEqual([
       'call_status',
       'delivery_date',
+      'topic',
     ])
   })
 

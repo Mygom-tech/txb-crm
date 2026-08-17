@@ -87,6 +87,17 @@ def set_first_call_date(deal, data):
 		)
 
 
+def log_coaching_call_defaults(deal) -> dict:
+	"""Per-deal defaults injected into the Log Coaching Call form when it is offered.
+
+	Completed Calls is shown read-only from the deal's canonical total, so the coach sees
+	the current count while logging. An unset total reads as 0 rather than a blank the
+	browser could be trusted to fill; the count is only ever advanced server-side by the
+	handler below, never taken from this default.
+	"""
+	return {"completed_calls": deal.total_completed_calls or 0}
+
+
 def log_coaching_call(deal, data):
 	"""The only Delivering Coaching action that does not move the status.
 
@@ -257,10 +268,12 @@ DELIVERING_COACHING_ACTIONS = (
 		"changes_status": False,
 		"admin_only": False,
 		"handler": log_coaching_call,
+		"field_defaults": log_coaching_call_defaults,
 		"fields": [
 			{"fieldname": "call_status", "label": "Call Status", "fieldtype": "Select", "options": "\n".join(CALL_STATUSES), "reqd": 1},
 			{"fieldname": "delivery_date", "label": "Coaching Call Delivery Date", "fieldtype": "Date", "reqd": 1, "default": "Today"},
-			{"fieldname": "topic", "label": "Topic", "fieldtype": "Data"},
+			{"fieldname": "completed_calls", "label": "Completed Calls", "fieldtype": "Int", "read_only": 1, "default": 0},
+			{"fieldname": "topic", "label": "Topic", "fieldtype": "Data", "reqd": 1},
 			{"fieldname": "call_notes", "label": "Coaching Call Notes", "fieldtype": "Small Text", "reqd": 1},
 			{"fieldname": "is_last_call", "label": "This is the last coaching call", "fieldtype": "Check"},
 			{"fieldname": "next_call_date", "label": "Next Coaching Call Date", "fieldtype": "Datetime"},
