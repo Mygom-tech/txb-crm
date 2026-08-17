@@ -47,7 +47,7 @@ def get_available_actions(deal: str) -> dict:
 				# The board pre-selects a branch value from the column the card was
 				# dropped on, which it can only do if it can see the mapping.
 				"to_state_map": action.get("to_state_map") or {},
-				"fields": action["fields"],
+				"fields": fields_with_defaults(action, doc),
 			}
 		)
 
@@ -58,6 +58,27 @@ def get_available_actions(deal: str) -> dict:
 		# inferring it from can_change_status -- which is a different, per-pipeline rule.
 		"is_admin": is_admin(),
 	}
+
+
+def fields_with_defaults(action: dict, doc) -> list[dict]:
+	"""The action's fields, with any per-deal defaults resolved from the live document.
+
+	Most actions have a static field list. Some -- Log Coaching Call -- need a default
+	computed from the deal itself (its canonical completed-call total), so the coach sees
+	the current server-owned value rather than something the browser supplies. The base
+	field dicts are never mutated; only shallow copies carry the override.
+	"""
+	resolver = action.get("field_defaults")
+	if not resolver:
+		return action["fields"]
+
+	overrides = resolver(doc) or {}
+	return [
+		{**field, "default": overrides[field["fieldname"]]}
+		if field["fieldname"] in overrides
+		else field
+		for field in action["fields"]
+	]
 
 
 def is_available(action: dict, status: str | None) -> bool:
@@ -146,18 +167,32 @@ def parse_data(data: str | dict | None) -> dict:
 
 
 def validate_required(spec: dict, values: dict):
-	"""Only None and empty string count as missing.
+	"""None, empty string, and whitespace-only text count as missing.
 
 	A falsy check would reject a required Int of 0 or a required Check left unticked --
-	and zero participants is exactly what gets recorded on a workshop being marked lost.
+	and zero participants is exactly what gets recorded on a workshop being marked lost --
+	so only None/empty are missing for non-text values. For a text answer a run of spaces
+	is not a real answer either: a required Topic submitted as "   " is rejected here,
+	before the handler runs, so a direct API call cannot slip a blank Topic past the form.
 	"""
 	missing = [
 		field["label"]
 		for field in spec["fields"]
-		if field.get("reqd") and values.get(field["fieldname"]) in (None, "")
+		if field.get("reqd") and _is_blank(values.get(field["fieldname"]))
 	]
 	if missing:
 		frappe.throw(
 			_("{0} is required.").format(", ".join(_(label) for label in missing)),
 			frappe.MandatoryError,
 		)
+
+
+def _is_blank(value) -> bool:
+	"""Missing for a required field: None, empty, or whitespace-only text.
+
+	A number (including 0) or a boolean is never blank; only strings are stripped, so a
+	required Int of 0 or an unticked Check still counts as answered.
+	"""
+	if value is None or value == "":
+		return True
+	return isinstance(value, str) and not value.strip()

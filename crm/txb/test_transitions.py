@@ -367,6 +367,131 @@ class TestTransitionEnforcement(FrappeTestCase):
 		self.assertFalse(frappe.flags.get("txb_action"))
 
 
+class TestLogCoachingCall(FrappeTestCase):
+	"""TXB-152: Log Coaching Call shows the canonical completed-call count and demands a Topic.
+
+	These exercise the server-owned schema through `get_available_actions` and the authoritative
+	rules through `execute_action`, because the browser is not a boundary: a direct API call must
+	see the same read-only count and the same Topic rejection the generated form presents.
+	"""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		ensure_user(COACH, ["Sales User"])
+		frappe.db.commit()  # nosemgrep -- roles must outlive per-test rollback
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+		frappe.flags.txb_action = None
+		frappe.db.rollback()
+
+	def make_deal(self, owner=None, total_completed_calls=None):
+		values = {
+			"doctype": "CRM Deal",
+			"pipeline_type": PIPELINE_DELIVERING_COACHING,
+			"status": "Active",
+		}
+		if owner:
+			values["deal_owner"] = owner
+		if total_completed_calls is not None:
+			values["total_completed_calls"] = total_completed_calls
+		return frappe.get_doc(values).insert(ignore_permissions=True)
+
+	def log_call_fields(self, deal_name):
+		from crm.txb.api.actions import get_available_actions
+
+		actions = get_available_actions(deal_name)["actions"]
+		spec = next(a for a in actions if a["name"] == "log_coaching_call")
+		return spec["fields"]
+
+	def note_count(self, deal_name):
+		from crm.txb.pipelines.common import DEAL_DOCTYPE, NOTE_DOCTYPE
+
+		return frappe.db.count(
+			NOTE_DOCTYPE,
+			{"reference_doctype": DEAL_DOCTYPE, "reference_docname": deal_name},
+		)
+
+	def test_completed_calls_is_read_only_and_sits_immediately_above_topic(self):
+		deal = self.make_deal(owner=COACH, total_completed_calls=3)
+		frappe.set_user(COACH)
+
+		fields = self.log_call_fields(deal.name)
+		names = [f["fieldname"] for f in fields]
+		self.assertEqual(names.index("completed_calls") + 1, names.index("topic"))
+
+		completed = next(f for f in fields if f["fieldname"] == "completed_calls")
+		self.assertTrue(completed["read_only"])
+		self.assertEqual(completed["default"], 3)
+
+	def test_completed_calls_defaults_to_zero_when_the_deal_total_is_unset(self):
+		deal = self.make_deal(owner=COACH)
+		frappe.set_user(COACH)
+
+		completed = next(
+			f for f in self.log_call_fields(deal.name) if f["fieldname"] == "completed_calls"
+		)
+		self.assertEqual(completed["default"], 0)
+
+	def test_topic_is_marked_required_in_the_generated_schema(self):
+		deal = self.make_deal(owner=COACH)
+		frappe.set_user(COACH)
+
+		topic = next(f for f in self.log_call_fields(deal.name) if f["fieldname"] == "topic")
+		self.assertTrue(topic["reqd"])
+
+	def test_a_whitespace_only_topic_is_rejected_without_touching_the_deal(self):
+		"""A direct API call cannot slip a blank Topic past the form, and nothing persists."""
+		from crm.txb.api.actions import execute_action
+
+		deal = self.make_deal(owner=COACH, total_completed_calls=2)
+		frappe.set_user(COACH)
+
+		with self.assertRaises(frappe.MandatoryError):
+			execute_action(
+				deal.name,
+				"log_coaching_call",
+				{
+					"call_status": "Completed",
+					"delivery_date": "2026-08-17",
+					"topic": "   ",
+					"call_notes": "Discussed goals",
+				},
+			)
+
+		# No deal, note, or count change survives the rejected submission.
+		self.assertEqual(
+			frappe.db.get_value("CRM Deal", deal.name, "total_completed_calls"), 2
+		)
+		self.assertEqual(self.note_count(deal.name), 0)
+
+	def test_a_valid_log_records_the_call_and_advances_the_canonical_count(self):
+		from crm.txb.api.actions import execute_action
+
+		deal = self.make_deal(owner=COACH, total_completed_calls=1)
+		frappe.set_user(COACH)
+
+		execute_action(
+			deal.name,
+			"log_coaching_call",
+			{
+				"call_status": "Completed",
+				"delivery_date": "2026-08-17",
+				"topic": "Leadership styles",
+				"call_notes": "Reviewed DISC results",
+			},
+		)
+
+		row = frappe.db.get_value(
+			"CRM Deal", deal.name, ["status", "total_completed_calls"], as_dict=True
+		)
+		# The status-neutral flow is preserved and the count refreshes from canonical state.
+		self.assertEqual(row["status"], "Active")
+		self.assertEqual(row["total_completed_calls"], 2)
+		self.assertEqual(self.note_count(deal.name), 1)
+
+
 class TestWorkshopScheduleInvariant(FrappeTestCase):
 	"""TXB-149: a Workshop deal may not rest in "Workshop set" with no scheduled datetime.
 
