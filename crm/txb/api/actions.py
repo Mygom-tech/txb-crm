@@ -15,6 +15,13 @@ from crm.txb.permissions import can_change_status, is_admin
 from crm.txb.pipelines.actions import find_action, get_actions, resolve_to_state
 
 DEAL_DOCTYPE = "CRM Deal"
+LEAD_DOCTYPE = "CRM Lead"
+
+# TXB-128: the canonical status a Log a reach unlocks, and the required reach fields. The
+# retired "Qualifying call" status is folded onto Contacted by a migration patch, so this
+# is the only status the reach gate ever targets.
+CONTACTED_STATUS = "Contacted"
+REACH_REQUIRED_FIELDS = ("summary", "follow_up_context")
 
 
 @frappe.whitelist()
@@ -166,6 +173,76 @@ def execute_action(deal: str, action: str, data: str | dict | None = None) -> di
 		frappe.flags.txb_action = None
 
 	return {"deal": doc.name, "status": doc.status}
+
+
+@frappe.whitelist()
+def log_reach(lead: str, status: str | None = None, activity: str | dict | None = None) -> dict:
+	"""Move a Lead into "Contacted" and record the reach that justifies it, atomically.
+
+	Entering Contacted is never a bare status flip (TXB-128): the browser posts a Log a
+	reach here, and the status changes only if the reach is valid. Required summary and
+	follow-up context are re-checked server-side -- the browser is not a security boundary
+	-- so a direct API call cannot slip a blank reach past the dialog. The reach lands on
+	the Lead's timeline and the status is set on one in-memory document saved once, so a
+	validation failure leaves both untouched and cancelling in the browser (nothing posted)
+	leaves the status unchanged.
+
+	`status` is accepted for symmetry with the browser payload but ignored: the reach only
+	ever unlocks Contacted, and trusting a caller-supplied target would let the endpoint set
+	an arbitrary status without its own gate.
+	"""
+	frappe.has_permission(LEAD_DOCTYPE, "write", lead, throw=True)
+
+	values = parse_data(activity)
+	validate_reach(values)
+
+	doc = frappe.get_doc(LEAD_DOCTYPE, lead)
+	# Timeline first, status second, one save: both share the request transaction, so a
+	# validation throw inside save() rolls the reach comment back with the status.
+	doc.add_comment("Info", reach_timeline_html(values))
+	doc.status = CONTACTED_STATUS
+	doc.save()
+
+	return {"lead": doc.name, "status": doc.status}
+
+
+def validate_reach(values: dict):
+	"""Required summary and follow-up context, with whitespace-only treated as blank.
+
+	Mirrors `validate_required`'s emptiness rule (see `_is_blank`) so a reach submitted
+	straight to the API meets exactly what the Log a reach dialog enforces in the browser.
+	"""
+	labels = {
+		"summary": _("Reach summary"),
+		"follow_up_context": _("Follow-up context"),
+	}
+	missing = [labels[field] for field in REACH_REQUIRED_FIELDS if _is_blank(values.get(field))]
+	if missing:
+		frappe.throw(
+			_("{0} is required.").format(", ".join(missing)),
+			frappe.MandatoryError,
+			title=_("Log a reach"),
+		)
+
+
+def reach_timeline_html(values: dict) -> str:
+	"""Render the reach as a timeline entry, preserving the summary, context and follow-up.
+
+	An optional follow-up date is only shown when supplied; the required fields are escaped
+	so a summary is recorded as text rather than interpreted as markup.
+	"""
+	escape = frappe.utils.escape_html
+	rows = [
+		f"<div><b>{_('Reach logged')}</b></div>",
+		f"<div>{escape(values['summary'].strip())}</div>",
+		f"<div><i>{_('Follow-up')}:</i> {escape(values['follow_up_context'].strip())}</div>",
+	]
+	follow_up_date = values.get("follow_up_date")
+	if follow_up_date and str(follow_up_date).strip():
+		rows.append(
+			f"<div><i>{_('Follow-up date')}:</i> {escape(str(follow_up_date).strip())}</div>"
+		)
+	return "".join(rows)
 
 
 def parse_data(data: str | dict | None) -> dict:

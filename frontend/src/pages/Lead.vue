@@ -294,6 +294,12 @@ import {
   isDisqualifiedReasonUnresolved,
   PENDING_REVIEW,
 } from '@/utils/leadReasonPrompt'
+import {
+  CONTACTED_STATUS,
+  logReach,
+  requiresReach,
+} from '@/utils/leadActions'
+import { sessionStore } from '@/stores/session'
 import { getSettings } from '@/stores/settings'
 import { globalStore } from '@/stores/global'
 import { statusesStore } from '@/stores/statuses'
@@ -321,6 +327,7 @@ import { useActiveTabManager } from '@/composables/useActiveTabManager'
 const { brand } = getSettings()
 const { $dialog, $socket, makeCall } = globalStore()
 const { statusOptions, getLeadStatus } = statusesStore()
+const { user: sessionUser } = sessionStore()
 const { isAdmin: userIsAdmin } = transitionsStore()
 const { doctypeMeta } = getMeta('CRM Lead')
 
@@ -506,8 +513,27 @@ const sections = createResource({
 })
 
 async function triggerStatusChange(value) {
+  // TXB-128: entering Contacted is gated on a Log a reach. Short-circuit before
+  // triggerOnChange so the in-memory status stays put until the reach is saved; cancelling
+  // then leaves the status exactly as it was.
+  if (requiresReach(doc.value?.status, value)) {
+    await enterContactedWithReach()
+    return
+  }
   await triggerOnChange('status', value)
   setLostReason()
+}
+
+// Prompt for the canonical reach, then let the server save the activity and the Contacted
+// status atomically. On success (or cancel) the document is reloaded from the server: on
+// cancel nothing was written, so this discards any optimistic status change and leaves the
+// status unchanged; on success it reflects the server-applied Contacted status.
+async function enterContactedWithReach() {
+  const result = await logReach(props.leadId, { actor: sessionUser })
+  document.reload?.()
+  if (result) {
+    sections.reload()
+  }
 }
 
 function updateField(name, value) {
@@ -583,6 +609,14 @@ function setLostReason() {
 
 function beforeStatusChange(data) {
   if (
+    Object.hasOwn(data ?? {}, 'status') &&
+    data.status === CONTACTED_STATUS
+  ) {
+    // The sidebar/activity control already mutated the in-memory status to Contacted but
+    // has not saved it. Require the reach before persisting; enterContactedWithReach
+    // reloads on cancel, reverting that optimistic change so the status is left unchanged.
+    enterContactedWithReach()
+  } else if (
     Object.hasOwn(data ?? {}, 'status') &&
     getLeadStatus(data.status).type == 'Lost'
   ) {
