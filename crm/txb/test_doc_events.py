@@ -15,7 +15,11 @@ from frappe.tests.utils import FrappeTestCase
 from crm.txb.doc_events.call_log import default_phone_numbers
 from crm.txb.doc_events.contact import sync_organization
 from crm.txb.doc_events.deal import primary_contact, sync_contact_name
-from crm.txb.doc_events.lead import default_disqualified_reason, require_reach_for_contacted
+from crm.txb.doc_events.lead import (
+	default_disqualified_reason,
+	require_discovery_details,
+	require_reach_for_contacted,
+)
 
 
 class FakeDoc:
@@ -129,6 +133,119 @@ class TestRequireReachForContacted(FrappeTestCase):
 	def test_moving_to_another_status_is_unaffected(self):
 		doc = FakeLead(status="Nurture", status_changed=True)
 		require_reach_for_contacted(doc)  # must not raise
+
+
+class TestRequireDiscoveryDetails(FrappeTestCase):
+	"""TXB-129: the server is the single enforcement point for entering Discovery meeting set.
+
+	The two Lead.vue handlers only prompt for the schedule; the guard is what stops the kanban
+	drag, the mobile control, a bulk edit or a raw API write from reaching Discovery meeting set
+	with no scheduling details recorded. These exercise the guard directly, so every bypassing
+	route is covered by the one rule rather than by each caller.
+	"""
+
+	def tearDown(self):
+		frappe.flags.txb_action = None
+
+	def test_bare_move_to_discovery_is_rejected(self):
+		"""A kanban/mobile/bulk write (no schedule flag armed) cannot reach the status."""
+		frappe.flags.txb_action = None
+		doc = FakeLead(status="Discovery meeting set", status_changed=True)
+		with self.assertRaises(frappe.ValidationError):
+			require_discovery_details(doc)
+
+	def test_schedule_discovery_save_is_allowed(self):
+		"""The schedule endpoint arms the flag with the lead's own name, so its save passes."""
+		doc = FakeLead(name="CRM-LEAD-0007", status="Discovery meeting set", status_changed=True)
+		frappe.flags.txb_action = "CRM-LEAD-0007"
+		require_discovery_details(doc)  # must not raise
+
+	def test_flag_for_another_lead_does_not_exempt(self):
+		"""The exemption is scoped to the document, so it cannot leak across a request."""
+		doc = FakeLead(name="CRM-LEAD-0007", status="Discovery meeting set", status_changed=True)
+		frappe.flags.txb_action = "CRM-LEAD-0009"
+		with self.assertRaises(frappe.ValidationError):
+			require_discovery_details(doc)
+
+	def test_unchanged_status_is_ignored(self):
+		"""Re-saving a lead already in the status does not re-demand a schedule."""
+		doc = FakeLead(status="Discovery meeting set", status_changed=False)
+		require_discovery_details(doc)  # must not raise
+
+	def test_insert_in_discovery_is_exempt(self):
+		"""A lead created directly in the status (import/seed) is not a transition."""
+		doc = FakeLead(status="Discovery meeting set", is_new=True, status_changed=True)
+		require_discovery_details(doc)  # must not raise
+
+	def test_moving_to_another_status_is_unaffected(self):
+		doc = FakeLead(status="Nurture", status_changed=True)
+		require_discovery_details(doc)  # must not raise
+
+
+class TestValidateDiscovery(FrappeTestCase):
+	"""TXB-129: the server re-validates the schedule so a direct API call meets the dialog's rule."""
+
+	def _valid_virtual(self):
+		return {
+			"meeting_date": "2026-09-01",
+			"meeting_time": "10:30:00",
+			"meeting_type": "Virtual",
+			"meeting_link": "https://meet.example.com/abc",
+		}
+
+	def _valid_onsite(self):
+		return {
+			"meeting_date": "2026-09-01",
+			"meeting_time": "10:30:00",
+			"meeting_type": "Onsite",
+			"meeting_address": "1 Gedimino Ave, Vilnius",
+		}
+
+	def test_complete_virtual_passes(self):
+		from crm.txb.api.actions import validate_discovery
+
+		validate_discovery(self._valid_virtual())  # must not raise
+
+	def test_complete_onsite_passes(self):
+		from crm.txb.api.actions import validate_discovery
+
+		validate_discovery(self._valid_onsite())  # must not raise
+
+	def test_virtual_without_link_is_rejected(self):
+		from crm.txb.api.actions import validate_discovery
+
+		values = self._valid_virtual()
+		values["meeting_link"] = "   "
+		with self.assertRaises(frappe.MandatoryError):
+			validate_discovery(values)
+
+	def test_onsite_without_address_is_rejected(self):
+		from crm.txb.api.actions import validate_discovery
+
+		values = self._valid_onsite()
+		del values["meeting_address"]
+		with self.assertRaises(frappe.MandatoryError):
+			validate_discovery(values)
+
+	def test_missing_date_time_or_type_is_rejected(self):
+		from crm.txb.api.actions import validate_discovery
+
+		for field in ("meeting_date", "meeting_time", "meeting_type"):
+			values = self._valid_virtual()
+			values[field] = ""
+			with self.assertRaises(frappe.MandatoryError):
+				validate_discovery(values)
+
+	def test_onsite_link_is_not_demanded_and_virtual_address_is_not(self):
+		"""Only the location detail for the chosen type is required; the other is irrelevant."""
+		from crm.txb.api.actions import validate_discovery
+
+		# Onsite carrying a stray link but no address still fails on the address, not the link.
+		values = self._valid_onsite()
+		del values["meeting_address"]
+		values["meeting_link"] = "https://ignored.example.com"
+		with self.assertRaises(frappe.MandatoryError):
+			validate_discovery(values)
 
 
 class TestDealEvents(FrappeTestCase):

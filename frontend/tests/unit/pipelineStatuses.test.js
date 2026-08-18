@@ -37,6 +37,17 @@ import {
   isFreshlyCreatedRoute,
   queryWithoutCreatedFlag,
 } from '@/utils/organizationLifecycle'
+import {
+  DISCOVERY_STATUS,
+  DISCOVERY_TYPE_VIRTUAL,
+  DISCOVERY_TYPE_ONSITE,
+  requiresDiscovery,
+  discoveryFields,
+  requiredDiscoveryFields,
+  validateDiscovery,
+  isDiscoveryValid,
+  buildDiscoveryActivity,
+} from '@/utils/leadActions'
 
 const MAP = {
   'Individual Session': [
@@ -755,5 +766,154 @@ describe('queryWithoutCreatedFlag (one-shot flag strip)', () => {
     const result = queryWithoutCreatedFlag(source)
     expect(result).not.toBe(source)
     expect(source[CREATED_QUERY_KEY]).toBe('1')
+  })
+})
+
+// TXB-129: the Schedule Discovery meeting contract. The Lead status "Discovery meeting set"
+// is reachable only through one scheduling action from every Lead entry point, and it cannot
+// be reached without complete scheduling details.
+describe('requiresDiscovery (TXB-129)', () => {
+  it('gates only the transition into Discovery meeting set', () => {
+    expect(requiresDiscovery('Contacted', DISCOVERY_STATUS)).toBe(true)
+    expect(requiresDiscovery('Contacted', 'Nurture')).toBe(false)
+  })
+
+  it('does not re-prompt once the meeting is already set', () => {
+    expect(requiresDiscovery(DISCOVERY_STATUS, DISCOVERY_STATUS)).toBe(false)
+  })
+})
+
+describe('discoveryFields (TXB-129)', () => {
+  const byName = () =>
+    Object.fromEntries(discoveryFields().map((field) => [field.fieldname, field]))
+
+  it('always requires date, time and type', () => {
+    const fields = byName()
+    expect(fields.meeting_date.reqd).toBe(1)
+    expect(fields.meeting_time.reqd).toBe(1)
+    expect(fields.meeting_type.reqd).toBe(1)
+    expect(fields.meeting_type.options).toContain(DISCOVERY_TYPE_VIRTUAL)
+    expect(fields.meeting_type.options).toContain(DISCOVERY_TYPE_ONSITE)
+  })
+
+  it('shows/requires the link only for Virtual and the address only for Onsite', () => {
+    const fields = byName()
+    expect(fields.meeting_link.depends_on).toContain(DISCOVERY_TYPE_VIRTUAL)
+    expect(fields.meeting_link.mandatory_depends_on).toContain(DISCOVERY_TYPE_VIRTUAL)
+    expect(fields.meeting_address.depends_on).toContain(DISCOVERY_TYPE_ONSITE)
+    expect(fields.meeting_address.mandatory_depends_on).toContain(DISCOVERY_TYPE_ONSITE)
+  })
+})
+
+describe('requiredDiscoveryFields (TXB-129)', () => {
+  it('adds the link for Virtual and the address for Onsite', () => {
+    expect(requiredDiscoveryFields({ meeting_type: DISCOVERY_TYPE_VIRTUAL })).toEqual([
+      'meeting_date',
+      'meeting_time',
+      'meeting_type',
+      'meeting_link',
+    ])
+    expect(requiredDiscoveryFields({ meeting_type: DISCOVERY_TYPE_ONSITE })).toEqual([
+      'meeting_date',
+      'meeting_time',
+      'meeting_type',
+      'meeting_address',
+    ])
+  })
+
+  it('requires only the base fields until a type is chosen', () => {
+    expect(requiredDiscoveryFields({})).toEqual([
+      'meeting_date',
+      'meeting_time',
+      'meeting_type',
+    ])
+  })
+})
+
+describe('validateDiscovery (TXB-129)', () => {
+  const virtual = {
+    meeting_date: '2026-09-01',
+    meeting_time: '10:30:00',
+    meeting_type: DISCOVERY_TYPE_VIRTUAL,
+    meeting_link: 'https://meet.example.com/abc',
+  }
+  const onsite = {
+    meeting_date: '2026-09-01',
+    meeting_time: '10:30:00',
+    meeting_type: DISCOVERY_TYPE_ONSITE,
+    meeting_address: '1 Gedimino Ave',
+  }
+
+  it('accepts a complete Virtual and a complete Onsite payload', () => {
+    expect(validateDiscovery(virtual)).toEqual([])
+    expect(validateDiscovery(onsite)).toEqual([])
+    expect(isDiscoveryValid(virtual)).toBe(true)
+    expect(isDiscoveryValid(onsite)).toBe(true)
+  })
+
+  it('requires a manual link for Virtual (whitespace is blank)', () => {
+    expect(validateDiscovery({ ...virtual, meeting_link: '   ' })).toEqual([
+      'meeting_link',
+    ])
+  })
+
+  it('requires an address for Onsite', () => {
+    const { meeting_address, ...withoutAddress } = onsite
+    expect(validateDiscovery(withoutAddress)).toEqual(['meeting_address'])
+  })
+
+  it('does not demand the other type’s location detail', () => {
+    expect(validateDiscovery(virtual)).not.toContain('meeting_address')
+    expect(validateDiscovery(onsite)).not.toContain('meeting_link')
+  })
+
+  it('reports missing date, time and type', () => {
+    expect(validateDiscovery({})).toEqual([
+      'meeting_date',
+      'meeting_time',
+      'meeting_type',
+    ])
+  })
+})
+
+describe('buildDiscoveryActivity (TXB-129)', () => {
+  it('returns null for an incomplete payload so nothing is posted', () => {
+    expect(buildDiscoveryActivity({ meeting_type: DISCOVERY_TYPE_VIRTUAL })).toBeNull()
+  })
+
+  it('carries only the location detail matching the chosen type', () => {
+    const onsite = buildDiscoveryActivity(
+      {
+        meeting_date: '2026-09-01',
+        meeting_time: '10:30:00',
+        meeting_type: DISCOVERY_TYPE_ONSITE,
+        meeting_address: '  1 Gedimino Ave  ',
+        meeting_link: 'https://ignored.example.com',
+      },
+      { actor: 'alice', now: '2026-08-18T00:00:00' },
+    )
+    expect(onsite.status).toBe(DISCOVERY_STATUS)
+    expect(onsite.activity).toMatchObject({
+      type: 'discovery',
+      actor: 'alice',
+      meeting_type: DISCOVERY_TYPE_ONSITE,
+      meeting_address: '1 Gedimino Ave',
+      meeting_link: null,
+    })
+
+    const virtual = buildDiscoveryActivity(
+      {
+        meeting_date: '2026-09-01',
+        meeting_time: '10:30:00',
+        meeting_type: DISCOVERY_TYPE_VIRTUAL,
+        meeting_link: '  https://meet.example.com/abc  ',
+      },
+      { actor: 'alice', now: '2026-08-18T00:00:00' },
+    )
+    expect(virtual.activity).toMatchObject({
+      meeting_type: DISCOVERY_TYPE_VIRTUAL,
+      meeting_link: 'https://meet.example.com/abc',
+      meeting_address: null,
+    })
   })
 })
