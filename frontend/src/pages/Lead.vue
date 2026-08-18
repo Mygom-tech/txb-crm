@@ -46,6 +46,12 @@
         </template>
       </Dropdown>
       <Button
+        v-if="requiresDiscovery(doc.status)"
+        :label="__('Run Discovery Meeting')"
+        variant="solid"
+        @click="runDiscovery"
+      />
+      <Button
         :label="__('Convert to Deal')"
         variant="solid"
         @click="showConvertToDealModal = true"
@@ -294,7 +300,12 @@ import {
   isDisqualifiedReasonUnresolved,
   PENDING_REVIEW,
 } from '@/utils/leadReasonPrompt'
-import { requiresDial, logADial } from '@/utils/leadActions'
+import {
+  requiresDial,
+  logADial,
+  requiresDiscovery,
+  runDiscoveryMeeting,
+} from '@/utils/leadActions'
 import { getSettings } from '@/stores/settings'
 import { globalStore } from '@/stores/global'
 import { statusesStore } from '@/stores/statuses'
@@ -533,6 +544,28 @@ async function logDialForStatus() {
     sections.reload()
   } catch (error) {
     toast.error(error.messages?.[0] || __('Could not log the dial'))
+  }
+}
+
+async function runDiscovery() {
+  try {
+    const result = await runDiscoveryMeeting(props.leadId)
+    // Cancel resolves null: nothing was sent, the lead stays at Discovery meeting set, so there
+    // is nothing to refresh.
+    if (!result) return
+
+    // The submit applied the outcome atomically -- a resting status, or a conversion that
+    // created/reused the Contact and one Opportunity. Refresh so the header, activity feed and
+    // side panel catch up; a converted lead routes to its new deal.
+    if (result.converted && result.deal) {
+      router.push({ name: 'Deal', params: { dealId: result.deal } })
+      return
+    }
+    document.reload?.()
+    reload.value = true
+    sections.reload()
+  } catch (error) {
+    toast.error(error.messages?.[0] || __('Could not run the discovery meeting'))
   }
 }
 

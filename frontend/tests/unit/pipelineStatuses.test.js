@@ -37,6 +37,19 @@ import {
   isFreshlyCreatedRoute,
   queryWithoutCreatedFlag,
 } from '@/utils/organizationLifecycle'
+import {
+  DISCOVERY_MEETING_SET_STATUS,
+  DISCOVERY_STATUS_OUTCOMES,
+  DISCOVERY_TERMINAL_OUTCOMES,
+  discoveryOutcomes,
+  isConversionOutcome,
+  isTerminalDiscoveryOutcome,
+  discoveryFields,
+  requiredDiscoveryFields,
+  requiresDiscovery,
+  canRunDiscovery,
+  discoveryPayload,
+} from '@/utils/leadActions'
 
 const MAP = {
   'Individual Session': [
@@ -755,5 +768,104 @@ describe('queryWithoutCreatedFlag (one-shot flag strip)', () => {
     const result = queryWithoutCreatedFlag(source)
     expect(result).not.toBe(source)
     expect(source[CREATED_QUERY_KEY]).toBe('1')
+  })
+})
+
+// TXB-131: Run Discovery Meeting is a guarded Lead action from "Discovery meeting set" that
+// requires notes and exactly one of six approved outcomes, then applies it in one server
+// transaction (crm.txb.lead_actions.run_discovery_meeting). The decision logic lives in
+// @/utils/leadActions as pure helpers and is exercised here; the server re-derives and enforces
+// the same contract, so this copy is a convenience, not the security boundary.
+describe('discovery outcomes (TXB-131)', () => {
+  it('offers exactly the six approved outcomes, non-conversion first then conversions', () => {
+    expect(discoveryOutcomes()).toEqual([
+      'Nurture',
+      'Not interested',
+      'Disqualified',
+      'Individual Session',
+      'Workshop',
+      'Selling Training',
+    ])
+    expect(discoveryOutcomes()).toHaveLength(6)
+  })
+
+  it('reuses the approved conversion pipelines as the convertible outcomes', () => {
+    // The three conversion outcomes are exactly the approved conversion pipelines (TXB-125),
+    // so no discovery-specific pipeline list can drift from the conversion authority.
+    for (const pipeline of conversionPipelineTypes()) {
+      expect(isConversionOutcome(pipeline)).toBe(true)
+    }
+    for (const status of DISCOVERY_STATUS_OUTCOMES) {
+      expect(isConversionOutcome(status)).toBe(false)
+    }
+  })
+
+  it('marks only Not interested and Disqualified as terminal (Admin-reopenable)', () => {
+    expect(DISCOVERY_TERMINAL_OUTCOMES).toEqual(['Not interested', 'Disqualified'])
+    expect(isTerminalDiscoveryOutcome('Not interested')).toBe(true)
+    expect(isTerminalDiscoveryOutcome('Disqualified')).toBe(true)
+    // Nurture is a warm resting state, not a closed one, so it is not Admin-locked.
+    expect(isTerminalDiscoveryOutcome('Nurture')).toBe(false)
+    expect(isTerminalDiscoveryOutcome('Individual Session')).toBe(false)
+  })
+})
+
+describe('discovery form contract (TXB-131)', () => {
+  it('requires both the notes and the single outcome', () => {
+    expect(requiredDiscoveryFields()).toEqual(['notes', 'outcome'])
+  })
+
+  it('resolves the outcome Select to the six approved outcomes', () => {
+    const outcome = discoveryFields().find((f) => f.fieldname === 'outcome')
+    // Newline-delimited, the string a Frappe Select expects (the dialog splits it).
+    expect(outcome.options).toBe(discoveryOutcomes().join('\n'))
+    expect(outcome.options.split('\n')).toEqual(discoveryOutcomes())
+    const notes = discoveryFields().find((f) => f.fieldname === 'notes')
+    expect(notes.reqd).toBe(1)
+    expect(notes.options).toBeUndefined()
+  })
+
+  it('is available only from the booked meeting status', () => {
+    expect(requiresDiscovery(DISCOVERY_MEETING_SET_STATUS)).toBe(true)
+    expect(requiresDiscovery('Discovery meeting set')).toBe(true)
+    expect(requiresDiscovery('New')).toBe(false)
+    expect(requiresDiscovery(undefined)).toBe(false)
+  })
+})
+
+describe('canRunDiscovery — notes and exactly one approved outcome (TXB-131)', () => {
+  it('accepts non-empty notes with any one approved outcome', () => {
+    expect(canRunDiscovery({ notes: 'Talked budget', outcome: 'Nurture' })).toBe(true)
+    expect(canRunDiscovery({ notes: 'Not a fit', outcome: 'Disqualified' })).toBe(true)
+    expect(
+      canRunDiscovery({ notes: 'Strong fit', outcome: 'Individual Session' }),
+    ).toBe(true)
+  })
+
+  it('rejects missing or blank notes', () => {
+    expect(canRunDiscovery({ outcome: 'Nurture' })).toBe(false)
+    expect(canRunDiscovery({ notes: '', outcome: 'Nurture' })).toBe(false)
+    expect(canRunDiscovery({ notes: '   ', outcome: 'Nurture' })).toBe(false)
+  })
+
+  it('rejects a missing or unapproved outcome', () => {
+    expect(canRunDiscovery({ notes: 'Notes' })).toBe(false)
+    expect(canRunDiscovery({ notes: 'Notes', outcome: '' })).toBe(false)
+    // A real pipeline that is not an approved conversion outcome is still refused.
+    expect(canRunDiscovery({ notes: 'Notes', outcome: 'Delivering Coaching' })).toBe(false)
+    // As is an arbitrary deal status.
+    expect(canRunDiscovery({ notes: 'Notes', outcome: 'Won' })).toBe(false)
+  })
+})
+
+describe('discoveryPayload (TXB-131)', () => {
+  it('sends only the two contract fields', () => {
+    expect(
+      discoveryPayload({ notes: 'n', outcome: 'Workshop', extra: 'x', status: 'y' }),
+    ).toEqual({ notes: 'n', outcome: 'Workshop' })
+  })
+
+  it('omits fields the submission never set', () => {
+    expect(discoveryPayload({ outcome: 'Nurture' })).toEqual({ outcome: 'Nurture' })
   })
 })

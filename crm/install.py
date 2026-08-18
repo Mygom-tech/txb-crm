@@ -62,6 +62,27 @@ def add_default_lead_statuses():
 			"type": "Ongoing",
 			"position": 3,
 		},
+		# The booked-meeting state Run Discovery Meeting (crm.txb.lead_actions) acts from, and the
+		# two terminal outcomes it can close on. Seeded idempotently -- like Contact attempted --
+		# so the guarded action has a from-state and valid targets; installs that already carry
+		# these statuses keep their own configuration. "Not interested" and "Disqualified" are
+		# Lost-type: once a lead rests there only an Admin may reopen it
+		# (crm.txb.lead_actions.guard_discovery_outcome).
+		"Discovery meeting set": {
+			"color": "orange",
+			"type": "Ongoing",
+			"position": 9,
+		},
+		"Not interested": {
+			"color": "red",
+			"type": "Lost",
+			"position": 10,
+		},
+		"Disqualified": {
+			"color": "red",
+			"type": "Lost",
+			"position": 11,
+		},
 		"Qualified": {
 			"color": "green",
 			"type": "Won",

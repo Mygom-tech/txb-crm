@@ -107,6 +107,35 @@ LEAD_STATUS_CONTACT_ATTEMPTED = "Contact attempted"
 # of the CRM Call Log `status` Select ("...,No Answer,...").
 DIAL_RESULT_NO_ANSWER = "No Answer"
 
+# The Lead status a booked discovery meeting rests at before it is run. "Run Discovery Meeting"
+# (crm.txb.lead_actions.run_discovery_meeting) is a guarded action available only from here:
+# it records meeting notes and applies exactly one outcome in a single transaction, so the lead
+# is never left in a stranded "meeting run" resting state. Named once so the action's
+# from-state, the seeded status, and the browser's requiresDiscovery() check cannot drift.
+LEAD_STATUS_DISCOVERY_MEETING_SET = "Discovery meeting set"
+
+# The three non-conversion outcomes of a discovery meeting, each a resting Lead status.
+LEAD_STATUS_NURTURE = "Nurture"
+LEAD_STATUS_NOT_INTERESTED = "Not interested"
+LEAD_STATUS_DISQUALIFIED = "Disqualified"
+
+# A discovery meeting closes on exactly one of six outcomes. Three keep the lead as a lead
+# (mapped here to the resting Lead status each lands on); the other three convert it into a
+# pipeline-correct Opportunity and reuse the existing conversion authority
+# (crm.fcrm.doctype.crm_lead.crm_lead.convert_to_deal), so the convertible set is exactly
+# CONVERSION_PIPELINE_INITIAL_STATUS.
+DISCOVERY_STATUS_OUTCOMES = {
+	LEAD_STATUS_NURTURE: LEAD_STATUS_NURTURE,
+	LEAD_STATUS_NOT_INTERESTED: LEAD_STATUS_NOT_INTERESTED,
+	LEAD_STATUS_DISQUALIFIED: LEAD_STATUS_DISQUALIFIED,
+}
+
+# The terminal discovery outcomes. Once a lead rests in one of these closed (Lost-type)
+# statuses, only an Admin may reopen it -- move it to any other status --
+# (crm.txb.lead_actions.guard_discovery_outcome). "Nurture" is deliberately excluded: it is a
+# warm resting state a user keeps working, not a closed one.
+DISCOVERY_TERMINAL_OUTCOMES = (LEAD_STATUS_NOT_INTERESTED, LEAD_STATUS_DISQUALIFIED)
+
 # Custom fieldnames.
 FIELD_REGISTRATION_TOKEN = "custom_registration_token"
 FIELD_REGISTRATION_LINK = "custom_registration_link"
