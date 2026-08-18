@@ -15,7 +15,7 @@ from frappe.tests.utils import FrappeTestCase
 from crm.txb.doc_events.call_log import default_phone_numbers
 from crm.txb.doc_events.contact import sync_organization
 from crm.txb.doc_events.deal import primary_contact, sync_contact_name
-from crm.txb.doc_events.lead import default_disqualified_reason
+from crm.txb.doc_events.lead import default_disqualified_reason, require_reach_for_contacted
 
 
 class FakeDoc:
@@ -67,6 +67,68 @@ class TestLeadEvents(FrappeTestCase):
 		doc = FakeDoc(status="New", lost_reason=None)
 		default_disqualified_reason(doc)
 		self.assertIsNone(doc.lost_reason)
+
+
+class FakeLead(FakeDoc):
+	"""Lead stand-in for the reach guard: models is_new / has_value_changed."""
+
+	def __init__(self, *, name="CRM-LEAD-0001", status="New", is_new=False, status_changed=True):
+		super().__init__(name=name, status=status)
+		self._is_new = is_new
+		self._status_changed = status_changed
+
+	def is_new(self):
+		return self._is_new
+
+	def has_value_changed(self, fieldname):
+		return self._status_changed if fieldname == "status" else False
+
+
+class TestRequireReachForContacted(FrappeTestCase):
+	"""TXB-128: the server is the single enforcement point for entering Contacted.
+
+	The two Lead.vue handlers only prompt for the reach; the guard is what stops the kanban
+	drag, the mobile control, a bulk edit or a raw API write from reaching Contacted with no
+	reach recorded. These exercise the guard directly, so every bypassing route is covered
+	by the one rule rather than by each caller.
+	"""
+
+	def tearDown(self):
+		frappe.flags.txb_action = None
+
+	def test_bare_move_to_contacted_is_rejected(self):
+		"""A kanban/mobile/bulk write (no reach flag armed) cannot reach Contacted."""
+		frappe.flags.txb_action = None
+		doc = FakeLead(status="Contacted", status_changed=True)
+		with self.assertRaises(frappe.ValidationError):
+			require_reach_for_contacted(doc)
+
+	def test_log_reach_save_is_allowed(self):
+		"""The reach endpoint arms the flag with the lead's own name, so its save passes."""
+		doc = FakeLead(name="CRM-LEAD-0007", status="Contacted", status_changed=True)
+		frappe.flags.txb_action = "CRM-LEAD-0007"
+		require_reach_for_contacted(doc)  # must not raise
+
+	def test_flag_for_another_lead_does_not_exempt(self):
+		"""The exemption is scoped to the document, so it cannot leak across a request."""
+		doc = FakeLead(name="CRM-LEAD-0007", status="Contacted", status_changed=True)
+		frappe.flags.txb_action = "CRM-LEAD-0009"
+		with self.assertRaises(frappe.ValidationError):
+			require_reach_for_contacted(doc)
+
+	def test_unchanged_status_is_ignored(self):
+		"""Re-saving a lead already in Contacted does not re-demand a reach."""
+		doc = FakeLead(status="Contacted", status_changed=False)
+		require_reach_for_contacted(doc)  # must not raise
+
+	def test_insert_in_contacted_is_exempt(self):
+		"""A lead created directly in Contacted (import/seed) is not a transition."""
+		doc = FakeLead(status="Contacted", is_new=True, status_changed=True)
+		require_reach_for_contacted(doc)  # must not raise
+
+	def test_moving_to_another_status_is_unaffected(self):
+		doc = FakeLead(status="Nurture", status_changed=True)
+		require_reach_for_contacted(doc)  # must not raise
 
 
 class TestDealEvents(FrappeTestCase):
