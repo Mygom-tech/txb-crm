@@ -173,7 +173,14 @@ doc_events = {
 			"crm.txb.ownership.claim_owner_on_insert",
 		],
 		"before_validate": ["crm.txb.doc_events.lead.default_disqualified_reason"],
-		"validate": ["crm.txb.ownership.guard_owner_change"],
+		# Reach guard first, so a user moving status and owner together hears the more
+		# specific "Log a reach" message. This is the server-side enforcement point for
+		# TXB-128: every route into Contacted (kanban drag, mobile, bulk, direct API) must
+		# go through log_reach, not just the two Lead.vue handlers.
+		"validate": [
+			"crm.txb.doc_events.lead.require_reach_for_contacted",
+			"crm.txb.ownership.guard_owner_change",
+		],
 	},
 	"CRM Call Log": {
 		"before_validate": ["crm.txb.doc_events.call_log.default_phone_numbers"],

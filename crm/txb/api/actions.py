@@ -197,11 +197,20 @@ def log_reach(lead: str, status: str | None = None, activity: str | dict | None 
 	validate_reach(values)
 
 	doc = frappe.get_doc(LEAD_DOCTYPE, lead)
-	# Timeline first, status second, one save: both share the request transaction, so a
-	# validation throw inside save() rolls the reach comment back with the status.
-	doc.add_comment("Info", reach_timeline_html(values))
-	doc.status = CONTACTED_STATUS
-	doc.save()
+
+	# Tells `require_reach_for_contacted` this status->Contacted write is the reach save
+	# rather than a bare status set. Scoped to this document's name, not just truthy, so the
+	# exemption cannot leak onto another CRM Lead saved inside the same request. Cleared in
+	# `finally` so a throw cannot leave it armed for the rest of the request.
+	frappe.flags.txb_action = doc.name
+	try:
+		# Timeline first, status second, one save: both share the request transaction, so a
+		# validation throw inside save() rolls the reach comment back with the status.
+		doc.add_comment("Info", reach_timeline_html(values))
+		doc.status = CONTACTED_STATUS
+		doc.save()
+	finally:
+		frappe.flags.txb_action = None
 
 	return {"lead": doc.name, "status": doc.status}
 
