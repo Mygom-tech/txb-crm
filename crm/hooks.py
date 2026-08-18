@@ -180,6 +180,9 @@ doc_events = {
 		"validate": [
 			"crm.txb.doc_events.lead.require_reach_for_contacted",
 			"crm.txb.ownership.guard_owner_change",
+			# Contact attempted is reachable only through crm.txb.lead_actions.log_a_dial;
+			# every other write to that status is refused here.
+			"crm.txb.lead_actions.guard_contact_attempted",
 		],
 	},
 	"CRM Call Log": {
