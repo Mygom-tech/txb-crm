@@ -25,6 +25,10 @@
       v-if="organization.doc"
       :parent="$refs.parentRef"
       class="flex h-full flex-col overflow-hidden border-r"
+      :defaultWidth="sidebarDefaultWidth"
+      :minWidth="SIDEBAR_MIN_WIDTH"
+      :maxWidth="SIDEBAR_MAX_WIDTH"
+      :persistWidth="saveOrganizationSidebarWidth"
     >
       <div class="border-b">
         <FileUploader
@@ -186,6 +190,12 @@
 <script setup>
 import ErrorPage from '@/components/ErrorPage.vue'
 import Resizer from '@/components/Resizer.vue'
+import {
+  entitySidebarWidth,
+  SIDEBAR_ENTITIES,
+  SIDEBAR_MIN_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+} from '@/utils/resizerState'
 import SidePanelLayout from '@/components/SidePanelLayout.vue'
 import Icon from '@/components/Icon.vue'
 import LayoutHeader from '@/components/LayoutHeader.vue'
@@ -234,6 +244,18 @@ import { useRoute, useRouter } from 'vue-router'
 
 const props = defineProps({
   organizationId: { type: String, required: true },
+})
+
+// Restore the persisted Organization sidebar width from its own namespace,
+// validated and clamped to the resizer's limits and the current viewport.
+// Shares the responsive default, validation and clamping with Deal/Lead while
+// keeping an independent saved width.
+const { load: loadOrganizationSidebarWidth, save: saveOrganizationSidebarWidth } =
+  entitySidebarWidth(SIDEBAR_ENTITIES.organization)
+const sidebarDefaultWidth = loadOrganizationSidebarWidth({
+  minWidth: SIDEBAR_MIN_WIDTH,
+  maxWidth: SIDEBAR_MAX_WIDTH,
+  viewportWidth: typeof window !== 'undefined' ? window.innerWidth : undefined,
 })
 
 const { brand } = getSettings()

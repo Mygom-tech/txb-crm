@@ -77,7 +77,14 @@
         />
       </template>
     </Tabs>
-    <Resizer class="flex flex-col justify-between border-l" side="right">
+    <Resizer
+      side="right"
+      class="flex flex-col justify-between border-l"
+      :defaultWidth="sidebarDefaultWidth"
+      :minWidth="SIDEBAR_MIN_WIDTH"
+      :maxWidth="SIDEBAR_MAX_WIDTH"
+      :persistWidth="saveLeadSidebarWidth"
+    >
       <div
         class="flex h-[45px] cursor-copy items-center border-b px-5 py-2.5 text-lg-medium text-ink-gray-9"
         @click="copyToClipboard(leadId)"
@@ -263,6 +270,12 @@ import DeleteLinkedDocModal from '@/components/DeleteLinkedDocModal.vue'
 import ErrorPage from '@/components/ErrorPage.vue'
 import Icon from '@/components/Icon.vue'
 import Resizer from '@/components/Resizer.vue'
+import {
+  entitySidebarWidth,
+  SIDEBAR_ENTITIES,
+  SIDEBAR_MIN_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+} from '@/utils/resizerState'
 import ActivityIcon from '@/components/Icons/ActivityIcon.vue'
 import EmailIcon from '@/components/Icons/EmailIcon.vue'
 import Email2Icon from '@/components/Icons/Email2Icon.vue'
@@ -349,6 +362,18 @@ const router = useRouter()
 
 const props = defineProps({
   leadId: { type: String, required: true },
+})
+
+// Restore the persisted Lead sidebar width from its own namespace, validated
+// and clamped to the resizer's limits and the current viewport. Shares the
+// responsive default, validation and clamping with Deal/Organization while
+// keeping an independent saved width.
+const { load: loadLeadSidebarWidth, save: saveLeadSidebarWidth } =
+  entitySidebarWidth(SIDEBAR_ENTITIES.lead)
+const sidebarDefaultWidth = loadLeadSidebarWidth({
+  minWidth: SIDEBAR_MIN_WIDTH,
+  maxWidth: SIDEBAR_MAX_WIDTH,
+  viewportWidth: typeof window !== 'undefined' ? window.innerWidth : undefined,
 })
 
 const reload = ref(false)
