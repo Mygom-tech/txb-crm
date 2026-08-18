@@ -46,6 +46,12 @@
         </template>
       </Dropdown>
       <Button
+        v-if="requiresDiscovery(doc.status)"
+        :label="__('Run Discovery Meeting')"
+        variant="solid"
+        @click="runDiscovery"
+      />
+      <Button
         :label="__('Convert to Deal')"
         variant="solid"
         @click="showConvertToDealModal = true"
@@ -300,9 +306,11 @@ import {
   requiresReach,
   requiresDial,
   logADial,
-  DISCOVERY_STATUS,
   requiresDiscovery,
+  runDiscoveryMeeting,
+  requiresDiscoverySchedule,
   logDiscovery,
+  DISCOVERY_STATUS,
 } from '@/utils/leadActions'
 import { sessionStore } from '@/stores/session'
 import { getSettings } from '@/stores/settings'
@@ -528,7 +536,7 @@ async function triggerStatusChange(value) {
   // TXB-129: entering Discovery meeting set is gated on scheduling a discovery meeting.
   // Short-circuit before triggerOnChange so the in-memory status stays put until the schedule
   // is saved; cancelling then leaves the status exactly as it was.
-  if (requiresDiscovery(doc.value?.status, value)) {
+  if (requiresDiscoverySchedule(doc.value?.status, value)) {
     await enterDiscoveryWithSchedule()
     return
   }
@@ -583,6 +591,28 @@ async function logDialForStatus() {
     sections.reload()
   } catch (error) {
     toast.error(error.messages?.[0] || __('Could not log the dial'))
+  }
+}
+
+async function runDiscovery() {
+  try {
+    const result = await runDiscoveryMeeting(props.leadId)
+    // Cancel resolves null: nothing was sent, the lead stays at Discovery meeting set, so there
+    // is nothing to refresh.
+    if (!result) return
+
+    // The submit applied the outcome atomically -- a resting status, or a conversion that
+    // created/reused the Contact and one Opportunity. Refresh so the header, activity feed and
+    // side panel catch up; a converted lead routes to its new deal.
+    if (result.converted && result.deal) {
+      router.push({ name: 'Deal', params: { dealId: result.deal } })
+      return
+    }
+    document.reload?.()
+    reload.value = true
+    sections.reload()
+  } catch (error) {
+    toast.error(error.messages?.[0] || __('Could not run the discovery meeting'))
   }
 }
 

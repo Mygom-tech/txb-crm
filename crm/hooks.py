@@ -187,6 +187,9 @@ doc_events = {
 			# Contact attempted is reachable only through crm.txb.lead_actions.log_a_dial;
 			# every other write to that status is refused here.
 			"crm.txb.lead_actions.guard_contact_attempted",
+			# A terminal discovery outcome (Not interested, Disqualified) may only be reopened
+			# by an Admin; every other user's attempt to move the status out is refused here.
+			"crm.txb.lead_actions.guard_discovery_outcome",
 		],
 	},
 	"CRM Call Log": {
