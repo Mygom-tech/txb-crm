@@ -49,6 +49,14 @@ def add_default_lead_statuses():
 			"type": "Ongoing",
 			"position": 2,
 		},
+		# Reached only through the Log a dial action (crm.txb.lead_actions); a dial that went
+		# unanswered lands the lead here. Seeded idempotently so the guarded transition has a
+		# target -- installs that already carry this status keep their own configuration.
+		"Contact attempted": {
+			"color": "orange",
+			"type": "Ongoing",
+			"position": 8,
+		},
 		"Nurture": {
 			"color": "blue",
 			"type": "Ongoing",

@@ -294,6 +294,7 @@ import {
   isDisqualifiedReasonUnresolved,
   PENDING_REVIEW,
 } from '@/utils/leadReasonPrompt'
+import { requiresDial, logADial } from '@/utils/leadActions'
 import { getSettings } from '@/stores/settings'
 import { globalStore } from '@/stores/global'
 import { statusesStore } from '@/stores/statuses'
@@ -506,8 +507,33 @@ const sections = createResource({
 })
 
 async function triggerStatusChange(value) {
+  // Contact attempted is server-guarded: it is reachable only through a logged dial. Open the
+  // Log a dial form instead of writing the status, and let the server move it atomically. The
+  // status is not touched first, so a cancelled dial leaves the lead exactly where it was.
+  if (requiresDial(value)) {
+    await logDialForStatus()
+    return
+  }
   await triggerOnChange('status', value)
   setLostReason()
+}
+
+async function logDialForStatus() {
+  try {
+    const result = await logADial(props.leadId)
+    // Cancel resolves null: nothing was sent, the status is unchanged, so there is nothing to
+    // refresh.
+    if (!result) return
+
+    // The dial wrote the status, a call log, and optionally a note and follow-up task. Refresh
+    // the document so the header status control catches up, the activity feed, and the side
+    // panel sections.
+    document.reload?.()
+    reload.value = true
+    sections.reload()
+  } catch (error) {
+    toast.error(error.messages?.[0] || __('Could not log the dial'))
+  }
 }
 
 function updateField(name, value) {
@@ -582,6 +608,14 @@ function setLostReason() {
 }
 
 function beforeStatusChange(data) {
+  // The side panel status control is guarded the same way as the header dropdown: moving to
+  // Contact attempted requires a logged dial. The panel has set the value locally but it is
+  // not persisted here -- the dial performs the atomic move -- so reload afterwards to either
+  // reflect the server state or discard the optimistic change when the dial was cancelled.
+  if (Object.hasOwn(data ?? {}, 'status') && requiresDial(data.status)) {
+    logDialForStatus().finally(() => document.reload?.())
+    return
+  }
   if (
     Object.hasOwn(data ?? {}, 'status') &&
     getLeadStatus(data.status).type == 'Lost'

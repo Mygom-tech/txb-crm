@@ -94,6 +94,19 @@ CONVERSION_PIPELINE_INITIAL_STATUS = {
 	PIPELINE_SELLING_TRAINING: "Training submitted",
 }
 
+# The Lead status a dial attempt lands on. "Contact attempted" may only be reached by the
+# canonical Log a dial action (crm.txb.lead_actions): a Kanban drag, the status dropdown and
+# Take Action all route through it, and crm.txb.lead_actions.guard_contact_attempted rejects
+# any other write to this status. Named once here so the guard, the action's to_state and the
+# browser's requiresDial() check cannot drift.
+LEAD_STATUS_CONTACT_ATTEMPTED = "Contact attempted"
+
+# The CRM Call Log status a dial attempt records. A dial that only reaches Contact attempted
+# is, by definition, one that went unanswered -- a connected call is a different outcome and a
+# different status -- so the result is fixed and never taken from the caller. This is a member
+# of the CRM Call Log `status` Select ("...,No Answer,...").
+DIAL_RESULT_NO_ANSWER = "No Answer"
+
 # Custom fieldnames.
 FIELD_REGISTRATION_TOKEN = "custom_registration_token"
 FIELD_REGISTRATION_LINK = "custom_registration_link"
