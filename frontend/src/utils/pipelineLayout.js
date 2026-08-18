@@ -111,3 +111,140 @@ export function applyPipelineDependencies(sections) {
 
   return sections
 }
+
+/**
+ * The Program Type field on CRM Deal (custom_program_type). Registration writes the same
+ * fieldname (crm/txb/api/registration.py); TXB-103 fixed its canonical placement on the
+ * Delivering Coaching pipeline, which this matrix preserves.
+ */
+export const PROGRAM_TYPE_FIELDNAME = 'custom_program_type'
+
+/**
+ * Pipeline presentation matrix (TXB-135).
+ *
+ * Each Opportunity pipeline shows only the fields and sections approved for it. Rather than
+ * delete anything, we tighten the layout unit's `depends_on` so `SidePanelLayout.vue`
+ * evaluates it reactively and simply stops rendering the unit for the excluded pipelines —
+ * the stored values stay on the document untouched, and switching `pipeline_type` re-shows
+ * them with no reload.
+ *
+ * `keepVisibleWhen` is an eval expression body (no `eval:` prefix) that must hold for the
+ * unit to remain visible; it is ANDed onto any existing `depends_on` (see
+ * {@link restrictDependsOn}), so a pipeline's native visibility for units this matrix does
+ * not name is left exactly as the layout defines it. A rule matches a section by its
+ * `label` and a field by its `fieldname` or `label`.
+ *
+ *   - Individual Session Details / Sessions — hidden on Workshop only.
+ *   - Program Type — kept only on Delivering Coaching (TXB-103); Workshop, Individual
+ *     Session and Selling Training all hide it.
+ */
+export const PIPELINE_VISIBILITY_RULES = [
+  {
+    labels: ['Individual Session Details', 'Sessions'],
+    keepVisibleWhen: `doc.pipeline_type != "${PIPELINE_WORKSHOP}"`,
+  },
+  {
+    labels: ['Program Type'],
+    fieldnames: [PROGRAM_TYPE_FIELDNAME],
+    keepVisibleWhen: `doc.pipeline_type == "${PIPELINE_DELIVERING_COACHING}"`,
+  },
+]
+
+function normalizeLabel(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+}
+
+function ruleMatchesSection(rule, section) {
+  if (!rule.labels) return false
+  const label = normalizeLabel(section.label)
+  return label !== '' && rule.labels.some((l) => normalizeLabel(l) === label)
+}
+
+function ruleMatchesField(rule, field) {
+  if (rule.fieldnames?.some((f) => f === field.fieldname)) return true
+  if (!rule.labels) return false
+  const label = normalizeLabel(field.label)
+  return label !== '' && rule.labels.some((l) => normalizeLabel(l) === label)
+}
+
+/**
+ * Reduce a `depends_on` value to a parenthesised eval body, or '' when it imposes no
+ * condition. A plain field name (Frappe's non-eval `depends_on`) becomes a truthiness
+ * check on that field so it can be composed.
+ */
+function toEvalBody(dependsOn) {
+  if (!dependsOn || typeof dependsOn !== 'string') return ''
+  const trimmed = dependsOn.trim()
+  if (!trimmed) return ''
+  if (trimmed.startsWith('eval:')) {
+    const body = trimmed.slice(5).trim()
+    return body ? `(${body})` : ''
+  }
+  return `(doc.${trimmed})`
+}
+
+/**
+ * AND a pipeline visibility condition onto an existing `depends_on`.
+ *
+ * Preserves the existing condition (so native per-pipeline visibility is not lost) and
+ * returns an `eval:` expression. Pure: builds a new string, never mutates input.
+ *
+ * @param {string} [existing]   the unit's current `depends_on`
+ * @param {string} evalBody     the extra condition (eval body, no `eval:` prefix)
+ * @returns {string}            the combined `eval:` expression
+ */
+export function restrictDependsOn(existing, evalBody) {
+  const added = `(${evalBody})`
+  const base = toEvalBody(existing)
+  return base ? `eval:${base} && ${added}` : `eval:${added}`
+}
+
+/**
+ * Apply the pipeline presentation matrix across a parsed side-panel layout in place.
+ *
+ * Walks every section and every field in its first column and, for any unit named by a
+ * {@link PIPELINE_VISIBILITY_RULES} rule, ANDs the rule's `keepVisibleWhen` onto its
+ * `depends_on`. Visibility only — no field is removed and no value is cleared. Mutates and
+ * returns the passed array (matching {@link applyPipelineDependencies}) and tolerates a
+ * missing or malformed shape.
+ *
+ * @param {Array<Object>} [sections]  the parsed side-panel sections
+ * @returns {Array<Object>|undefined}  the same array, gated by pipeline
+ */
+export function applyPipelineVisibility(sections) {
+  if (!Array.isArray(sections)) return sections
+
+  for (const section of sections) {
+    if (!section || typeof section !== 'object') continue
+
+    const sectionRule = PIPELINE_VISIBILITY_RULES.find((rule) =>
+      ruleMatchesSection(rule, section),
+    )
+    if (sectionRule) {
+      section.depends_on = restrictDependsOn(
+        section.depends_on,
+        sectionRule.keepVisibleWhen,
+      )
+    }
+
+    const fields = section.columns?.[0]?.fields
+    if (!Array.isArray(fields)) continue
+
+    for (const field of fields) {
+      if (!field || typeof field !== 'object') continue
+      const fieldRule = PIPELINE_VISIBILITY_RULES.find((rule) =>
+        ruleMatchesField(rule, field),
+      )
+      if (fieldRule) {
+        field.depends_on = restrictDependsOn(
+          field.depends_on,
+          fieldRule.keepVisibleWhen,
+        )
+      }
+    }
+  }
+
+  return sections
+}

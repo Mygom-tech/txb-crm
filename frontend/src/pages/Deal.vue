@@ -418,7 +418,10 @@ import {
 import { getView } from '@/utils/view'
 import { allowedStatusesFor } from '@/utils/pipelineStatuses'
 import { notesTabLabel } from '@/utils/dealPresentation'
-import { applyPipelineDependencies } from '@/utils/pipelineLayout'
+import {
+  applyPipelineDependencies,
+  applyPipelineVisibility,
+} from '@/utils/pipelineLayout'
 import { actionOptions, runAction } from '@/utils/takeAction'
 import {
   allowedTargets,
@@ -772,6 +775,11 @@ function getParsedSections(_sections) {
   // Form Script carried (e.g. "Training" -> "Selling Training") before the layout reaches
   // SidePanelLayout, which then evaluates the corrected depends_on reactively.
   applyPipelineDependencies(_sections)
+  // Then apply the pipeline presentation matrix (TXB-135): each Opportunity pipeline hides
+  // the sections/fields not approved for it (e.g. Workshop drops Individual Session
+  // Details, Sessions and Program Type). Presentation-only — SidePanelLayout re-evaluates
+  // these depends_on reactively and never clears the underlying values.
+  applyPipelineVisibility(_sections)
   _sections.forEach((section) => {
     if (section.name == 'contacts_section') return
     section.columns[0].fields.forEach((field) => {

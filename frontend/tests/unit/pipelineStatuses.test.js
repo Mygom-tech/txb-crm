@@ -26,7 +26,12 @@ import {
   STALE_PIPELINE_TYPE_ALIASES,
   correctPipelineTypeCondition,
   applyPipelineDependencies,
+  PROGRAM_TYPE_FIELDNAME,
+  PIPELINE_VISIBILITY_RULES,
+  restrictDependsOn,
+  applyPipelineVisibility,
 } from '@/utils/pipelineLayout'
+import { evaluateDependsOnValue } from '@/utils/expressions'
 import {
   CREATED_QUERY_KEY,
   isFreshlyCreatedRoute,
@@ -431,6 +436,253 @@ describe('applyPipelineDependencies', () => {
     expect(applyPipelineDependencies(undefined)).toBeUndefined()
     expect(applyPipelineDependencies([])).toEqual([])
     expect(applyPipelineDependencies([{ name: 'x' }])).toEqual([{ name: 'x' }])
+  })
+})
+
+// TXB-135: the pipeline presentation matrix. Each Opportunity pipeline shows only the
+// approved fields/sections; hiding tightens depends_on (applyPipelineVisibility, applied in
+// Deal.vue getParsedSections after the TXB-148 correction) so SidePanelLayout re-evaluates
+// it reactively and never deletes a stored value. Verified end-to-end through
+// evaluateDependsOnValue — the same evaluator SidePanelLayout uses.
+const TXB135_ALL_PIPELINES = [
+  PIPELINE_INDIVIDUAL_SESSION,
+  PIPELINE_WORKSHOP,
+  PIPELINE_SELLING_TRAINING,
+  PIPELINE_DELIVERING_COACHING,
+]
+
+// A parsed side-panel layout shaped like get_sidepanel_sections output: sections with a
+// `label`/`name` and a first column of `fields`. Program Type sits as a field so we can
+// assert its per-pipeline visibility.
+function makeDealLayout() {
+  return [
+    {
+      name: 'individual_session_details_section',
+      label: 'Individual Session Details',
+      columns: [{ fields: [{ fieldname: 'custom_session_owner' }] }],
+    },
+    {
+      name: 'sessions_section',
+      label: 'Sessions',
+      columns: [{ fields: [{ fieldname: 'custom_sessions' }] }],
+    },
+    {
+      name: 'program_section',
+      label: 'Program',
+      columns: [
+        {
+          fields: [
+            { fieldname: PROGRAM_TYPE_FIELDNAME, label: 'Program Type' },
+            { fieldname: 'deal_value' },
+          ],
+        },
+      ],
+    },
+    // Unrelated section the matrix must leave completely alone.
+    {
+      name: 'contacts_section',
+      label: 'Contacts',
+      columns: [{ fields: [{ fieldname: 'organization' }] }],
+    },
+  ]
+}
+
+function isVisibleFor(dependsOn, pipeline) {
+  // No depends_on means always shown.
+  if (!dependsOn) return true
+  return Boolean(evaluateDependsOnValue(dependsOn, { pipeline_type: pipeline }))
+}
+
+function sectionByLabel(sections, label) {
+  return sections.find((s) => s.label === label)
+}
+
+function programTypeField(sections) {
+  for (const section of sections) {
+    const field = section.columns?.[0]?.fields?.find(
+      (f) => f.fieldname === PROGRAM_TYPE_FIELDNAME,
+    )
+    if (field) return field
+  }
+  return undefined
+}
+
+describe('PIPELINE_VISIBILITY_RULES (TXB-135 presentation matrix)', () => {
+  it('names Program Type by its committed fieldname', () => {
+    expect(PROGRAM_TYPE_FIELDNAME).toBe('custom_program_type')
+  })
+
+  it('hides the individual-session sections on Workshop only', () => {
+    const rule = PIPELINE_VISIBILITY_RULES.find((r) =>
+      r.labels?.includes('Sessions'),
+    )
+    expect(rule.labels).toContain('Individual Session Details')
+    expect(rule.keepVisibleWhen).toBe(
+      `doc.pipeline_type != "${PIPELINE_WORKSHOP}"`,
+    )
+  })
+
+  it('keeps Program Type only on Delivering Coaching', () => {
+    const rule = PIPELINE_VISIBILITY_RULES.find((r) =>
+      r.fieldnames?.includes(PROGRAM_TYPE_FIELDNAME),
+    )
+    expect(rule.keepVisibleWhen).toBe(
+      `doc.pipeline_type == "${PIPELINE_DELIVERING_COACHING}"`,
+    )
+  })
+})
+
+describe('restrictDependsOn', () => {
+  it('wraps a bare condition in eval when there is no existing depends_on', () => {
+    expect(restrictDependsOn(undefined, 'doc.pipeline_type != "Workshop"')).toBe(
+      'eval:(doc.pipeline_type != "Workshop")',
+    )
+    expect(restrictDependsOn('', 'doc.pipeline_type != "Workshop"')).toBe(
+      'eval:(doc.pipeline_type != "Workshop")',
+    )
+  })
+
+  it('ANDs onto an existing eval condition, preserving it', () => {
+    expect(
+      restrictDependsOn(
+        'eval:doc.status == "Session Run"',
+        'doc.pipeline_type != "Workshop"',
+      ),
+    ).toBe(
+      'eval:(doc.status == "Session Run") && (doc.pipeline_type != "Workshop")',
+    )
+  })
+
+  it('treats a plain field dependency as a truthiness check', () => {
+    expect(
+      restrictDependsOn(
+        'custom_has_program',
+        'doc.pipeline_type == "Delivering Coaching"',
+      ),
+    ).toBe(
+      'eval:(doc.custom_has_program) && (doc.pipeline_type == "Delivering Coaching")',
+    )
+  })
+
+  it('does not lose the original visibility for a kept pipeline', () => {
+    const combined = restrictDependsOn(
+      'eval:doc.status != "Lost"',
+      'doc.pipeline_type != "Workshop"',
+    )
+    // Individual Session, not Lost -> still visible; Workshop -> hidden regardless.
+    expect(
+      evaluateDependsOnValue(combined, {
+        pipeline_type: 'Individual Session',
+        status: 'Submitted',
+      }),
+    ).toBeTruthy()
+    expect(
+      evaluateDependsOnValue(combined, {
+        pipeline_type: 'Individual Session',
+        status: 'Lost',
+      }),
+    ).toBeFalsy()
+    expect(
+      evaluateDependsOnValue(combined, {
+        pipeline_type: 'Workshop',
+        status: 'Submitted',
+      }),
+    ).toBeFalsy()
+  })
+})
+
+describe('applyPipelineVisibility', () => {
+  it('mutates and returns the same array', () => {
+    const sections = makeDealLayout()
+    expect(applyPipelineVisibility(sections)).toBe(sections)
+  })
+
+  it('tolerates a missing or malformed layout', () => {
+    expect(applyPipelineVisibility(undefined)).toBeUndefined()
+    expect(applyPipelineVisibility([])).toEqual([])
+    expect(applyPipelineVisibility([{ name: 'x' }])).toEqual([{ name: 'x' }])
+    expect(applyPipelineVisibility([null])).toEqual([null])
+  })
+
+  it('leaves sections/fields the matrix does not name untouched', () => {
+    const sections = applyPipelineVisibility(makeDealLayout())
+    const contacts = sectionByLabel(sections, 'Contacts')
+    expect(contacts.depends_on).toBeUndefined()
+    const dealValue = sectionByLabel(sections, 'Program').columns[0].fields[1]
+    expect(dealValue.fieldname).toBe('deal_value')
+    expect(dealValue.depends_on).toBeUndefined()
+  })
+
+  // ─── AC-1: Workshop hides Individual Session Details, Sessions, and Program Type ───
+  it('hides Individual Session Details, Sessions and Program Type on Workshop', () => {
+    const sections = applyPipelineVisibility(makeDealLayout())
+    const isd = sectionByLabel(sections, 'Individual Session Details')
+    const sess = sectionByLabel(sections, 'Sessions')
+    const programType = programTypeField(sections)
+
+    expect(isVisibleFor(isd.depends_on, PIPELINE_WORKSHOP)).toBe(false)
+    expect(isVisibleFor(sess.depends_on, PIPELINE_WORKSHOP)).toBe(false)
+    expect(isVisibleFor(programType.depends_on, PIPELINE_WORKSHOP)).toBe(false)
+  })
+
+  // ─── AC-2: Individual Session & Selling Training hide Program Type; ───
+  //          Delivering Coaching keeps it (TXB-103).
+  it('hides Program Type on Individual Session and Selling Training', () => {
+    const sections = applyPipelineVisibility(makeDealLayout())
+    const programType = programTypeField(sections)
+    expect(isVisibleFor(programType.depends_on, PIPELINE_INDIVIDUAL_SESSION)).toBe(
+      false,
+    )
+    expect(isVisibleFor(programType.depends_on, PIPELINE_SELLING_TRAINING)).toBe(
+      false,
+    )
+  })
+
+  it('keeps Program Type on Delivering Coaching (TXB-103 placement)', () => {
+    const sections = applyPipelineVisibility(makeDealLayout())
+    const programType = programTypeField(sections)
+    expect(
+      isVisibleFor(programType.depends_on, PIPELINE_DELIVERING_COACHING),
+    ).toBe(true)
+  })
+
+  it('keeps Individual Session Details and Sessions on every non-Workshop pipeline', () => {
+    const sections = applyPipelineVisibility(makeDealLayout())
+    const isd = sectionByLabel(sections, 'Individual Session Details')
+    const sess = sectionByLabel(sections, 'Sessions')
+    for (const pipeline of TXB135_ALL_PIPELINES.filter(
+      (p) => p !== PIPELINE_WORKSHOP,
+    )) {
+      expect(isVisibleFor(isd.depends_on, pipeline)).toBe(true)
+      expect(isVisibleFor(sess.depends_on, pipeline)).toBe(true)
+    }
+  })
+
+  // ─── AC-3: hiding is presentation-only — the field/value is never removed ───
+  it('never deletes fields or values, only gates visibility', () => {
+    const sections = applyPipelineVisibility(makeDealLayout())
+    // The Program Type field still exists in the layout on Workshop; it is only hidden.
+    const programType = programTypeField(sections)
+    expect(programType).toBeDefined()
+    expect(programType.fieldname).toBe(PROGRAM_TYPE_FIELDNAME)
+    // Every section and field remains present; only depends_on was added.
+    expect(sections).toHaveLength(4)
+    expect(sectionByLabel(sections, 'Sessions').columns[0].fields).toHaveLength(1)
+  })
+
+  it('matches Program Type by label when it is a standalone section', () => {
+    const sections = applyPipelineVisibility([
+      {
+        name: 'program_type_section',
+        label: 'Program Type',
+        columns: [{ fields: [{ fieldname: 'custom_program_type_note' }] }],
+      },
+    ])
+    const section = sectionByLabel(sections, 'Program Type')
+    expect(isVisibleFor(section.depends_on, PIPELINE_WORKSHOP)).toBe(false)
+    expect(isVisibleFor(section.depends_on, PIPELINE_DELIVERING_COACHING)).toBe(
+      true,
+    )
   })
 })
 
