@@ -1,30 +1,64 @@
 import { createDialog } from '@/utils/dialogs'
 import { candidateActions, prefillFor } from '@/utils/dealTransitions'
 import { runAction } from '@/utils/takeAction'
+import { logDiscovery, requiresDiscoverySchedule } from '@/utils/leadActions'
 
 const DEAL_DOCTYPE = 'CRM Deal'
+const LEAD_DOCTYPE = 'CRM Lead'
 
 /**
- * Decide — and for deals, perform — a kanban column transition.
+ * Decide — and for guarded transitions, perform — a kanban column transition.
  *
  * Deal status boards run the Take Action flow: pick the action (asking when more than
  * one applies), open its form pre-filled from the dropped column, and let the server
- * commit. Every other board keeps the plain confirm it has today.
+ * commit. Dropping a Lead into "Discovery meeting set" is guarded the same way the Lead
+ * detail header and sidebar are: it opens the Schedule Discovery meeting modal and lets
+ * the server's atomic schedule_discovery commit, never a bare status write that the
+ * backend guard would reject. Every other board keeps the plain confirm it has today.
  *
  * @param {Object} ctx - { doctype, itemName, fieldname, fieldLabel, from, to,
  *                         pipelineType, transitions, available, isAdmin }
  * @returns {Promise<{proceed: boolean, alreadySaved: boolean, finalStatus: string}>}
- *   `alreadySaved` tells the caller not to write the field itself — execute_action
- *   already did. `finalStatus` is where the deal actually ended up, which for a
- *   branching action may not be the column it was dropped on.
+ *   `alreadySaved` tells the caller not to write the field itself — the guarded action
+ *   already did. `finalStatus` is where the record actually ended up, which for a
+ *   branching deal action may not be the column it was dropped on.
  */
 export async function requestKanbanTransition(ctx) {
   if (ctx.doctype === DEAL_DOCTYPE && ctx.fieldname === 'status') {
     return dealStatusTransition(ctx)
   }
 
+  if (
+    ctx.doctype === LEAD_DOCTYPE &&
+    ctx.fieldname === 'status' &&
+    requiresDiscoverySchedule(ctx.from, ctx.to)
+  ) {
+    return leadDiscoveryTransition(ctx)
+  }
+
   const proceed = await confirmKanbanTransition(ctx)
   return { proceed, alreadySaved: false, finalStatus: ctx.to }
+}
+
+/**
+ * Route a Lead drop into "Discovery meeting set" through the existing Schedule Discovery
+ * meeting modal and its atomic schedule_discovery action — the same path the Lead detail
+ * header and sidebar use — instead of the generic confirm plus a direct status write that
+ * the backend guard rejects.
+ *
+ * logDiscovery resolves null on cancel, dismissal, or an incomplete submit the dialog kept
+ * out; each of those leaves the status untouched (nothing is posted), so we refuse and the
+ * caller reverts the moved card. A scheduling API failure throws out of logDiscovery, which
+ * the caller's catch turns into the same revert. Only an atomic schedule_discovery success
+ * returns a response, and only then is the transition already saved.
+ */
+async function leadDiscoveryTransition(ctx) {
+  const refused = { proceed: false, alreadySaved: false, finalStatus: ctx.from }
+
+  const result = await logDiscovery(ctx.itemName)
+  if (!result) return refused
+
+  return { proceed: true, alreadySaved: true, finalStatus: ctx.to }
 }
 
 async function dealStatusTransition(ctx) {

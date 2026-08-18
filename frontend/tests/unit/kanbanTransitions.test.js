@@ -4,7 +4,15 @@ vi.mock('@/utils/dialogs', () => ({
   createDialog: vi.fn(),
 }))
 
+// The discovery routing reuses the real requiresDiscoverySchedule gate but stubs the modal
+// side of logDiscovery so the routing decisions can be asserted without a browser dialog.
+vi.mock('@/utils/leadActions', async () => {
+  const actual = await vi.importActual('@/utils/leadActions')
+  return { ...actual, logDiscovery: vi.fn() }
+})
+
 import { createDialog } from '@/utils/dialogs'
+import { logDiscovery } from '@/utils/leadActions'
 import {
   requestKanbanTransition,
   confirmKanbanTransition,
@@ -104,6 +112,125 @@ describe('requestKanbanTransition — non-deal boards keep the confirm', () => {
       proceed: false,
       alreadySaved: false,
     })
+  })
+})
+
+describe('requestKanbanTransition — Lead drop into Discovery meeting set', () => {
+  const discoveryCtx = {
+    doctype: 'CRM Lead',
+    itemName: 'CRM-LEAD-01',
+    fieldname: 'status',
+    fieldLabel: 'Status',
+    from: 'Contacted',
+    to: 'Discovery meeting set',
+  }
+
+  beforeEach(() => {
+    createDialog.mockReset()
+    logDiscovery.mockReset()
+  })
+
+  it('opens the Schedule Discovery meeting modal instead of the generic confirm', async () => {
+    logDiscovery.mockResolvedValue({ status: 'Discovery meeting set' })
+
+    await requestKanbanTransition(discoveryCtx)
+
+    expect(logDiscovery).toHaveBeenCalledOnce()
+    expect(logDiscovery).toHaveBeenCalledWith('CRM-LEAD-01')
+    // No generic confirm dialog and no caller-issued status write path.
+    expect(createDialog).not.toHaveBeenCalled()
+  })
+
+  it('marks the transition already saved after schedule_discovery succeeds', async () => {
+    logDiscovery.mockResolvedValue({ status: 'Discovery meeting set' })
+
+    await expect(requestKanbanTransition(discoveryCtx)).resolves.toEqual({
+      proceed: true,
+      alreadySaved: true,
+      finalStatus: 'Discovery meeting set',
+    })
+  })
+
+  it('refuses and keeps the prior status when the modal is cancelled or dismissed', async () => {
+    logDiscovery.mockResolvedValue(null)
+
+    await expect(requestKanbanTransition(discoveryCtx)).resolves.toEqual({
+      proceed: false,
+      alreadySaved: false,
+      finalStatus: 'Contacted',
+    })
+  })
+
+  it('refuses when incomplete details leave nothing posted (null result)', async () => {
+    // logDiscovery keeps the dialog open on an incomplete submit and only ever resolves
+    // null when nothing was posted; the routing must not report a save in that case.
+    logDiscovery.mockResolvedValue(null)
+
+    const outcome = await requestKanbanTransition(discoveryCtx)
+    expect(outcome.proceed).toBe(false)
+    expect(outcome.alreadySaved).toBe(false)
+  })
+
+  it('propagates a scheduling failure so the caller reverts the card', async () => {
+    const failure = new Error('schedule_discovery failed')
+    logDiscovery.mockRejectedValue(failure)
+
+    await expect(requestKanbanTransition(discoveryCtx)).rejects.toThrow(
+      'schedule_discovery failed',
+    )
+  })
+
+  it('does not route a non-Discovery Lead transition through the modal', async () => {
+    // Open → Contacted keeps the plain confirm; the discovery modal is not opened.
+    const promise = requestKanbanTransition(ctx)
+    lastDialogOptions()
+      .actions.find((a) => a.label === 'OK')
+      .onClick({ close: vi.fn() })
+
+    await expect(promise).resolves.toEqual({
+      proceed: true,
+      alreadySaved: false,
+      finalStatus: 'Contacted',
+    })
+    expect(logDiscovery).not.toHaveBeenCalled()
+  })
+
+  it('does not re-route a Lead already resting in Discovery meeting set', async () => {
+    const stay = { ...discoveryCtx, from: 'Discovery meeting set' }
+    const promise = requestKanbanTransition(stay)
+    lastDialogOptions()
+      .actions.find((a) => a.label === 'OK')
+      .onClick({ close: vi.fn() })
+
+    await expect(promise).resolves.toEqual({
+      proceed: true,
+      alreadySaved: false,
+      finalStatus: 'Discovery meeting set',
+    })
+    expect(logDiscovery).not.toHaveBeenCalled()
+  })
+
+  it('leaves a Deal transition into the same-named status untouched by discovery routing', async () => {
+    const dealCtx = {
+      doctype: 'CRM Deal',
+      itemName: 'CRM-DEAL-01',
+      fieldname: 'status',
+      fieldLabel: 'Status',
+      from: 'Contacted',
+      to: 'Discovery meeting set',
+      transitions: [],
+      available: [],
+      isAdmin: false,
+    }
+
+    // No deal action describes this drop, so the deal flow refuses — discovery routing must
+    // not intercept a Deal doctype.
+    await expect(requestKanbanTransition(dealCtx)).resolves.toEqual({
+      proceed: false,
+      alreadySaved: false,
+      finalStatus: 'Contacted',
+    })
+    expect(logDiscovery).not.toHaveBeenCalled()
   })
 })
 
