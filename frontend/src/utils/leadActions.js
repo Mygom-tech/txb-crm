@@ -1,18 +1,170 @@
 /**
- * Log a dial: the one guarded Lead transition, rendered for the browser.
+ * Lead actions: the shared client-side contracts for the two guarded Lead transitions.
  *
- * "Contact attempted" is reachable only by logging a dial. The server owns the rule
- * (crm.txb.lead_actions): a Kanban drag, the status dropdown and Take Action all route
- * through it, and crm.txb.lead_actions.guard_contact_attempted refuses any other write to
- * that status. This module is the single client-side description of the same action, so the
- * surfaces that open the form all render one identical dialog and cannot drift from the
- * server -- mirroring how @/utils/takeAction relates to crm.txb.api.actions for deals.
+ * Two independent gates live here, each mirroring a server rule so every surface (sidebar,
+ * Kanban drop, status dropdown, Take Action) renders one identical dialog and cannot drift
+ * from the server:
  *
- * The pure helpers stay framework-free so the unit suite can exercise the contract without a
- * browser; frappe-ui is imported lazily inside logADial for the same reason.
+ * - Log a reach (TXB-128): moving a Lead into "Contacted" (which replaces the retired
+ *   "Qualifying call" status) is no longer a bare status flip -- it must record a canonical
+ *   reach activity. The atomic status+activity save lives behind
+ *   `crm.txb.api.actions.log_reach`, which re-checks the actor and the from-state.
+ * - Log a dial: "Contact attempted" is reachable only by logging a dial. The server owns the
+ *   rule (crm.txb.lead_actions); `guard_contact_attempted` refuses any other write to that
+ *   status, and the atomic save lives behind `crm.txb.lead_actions.log_a_dial`.
+ *
+ * The pure helpers stay framework-free so the unit suite can exercise both contracts without a
+ * browser; frappe-ui is imported lazily inside logReach/logADial for the same reason.
  */
 
 import { renderFieldLayoutDialog } from '@/utils/renderFieldLayoutDialog'
+
+// -----------------------------------------------------------------------------------------
+// Log a reach (TXB-128): entering "Contacted"
+// -----------------------------------------------------------------------------------------
+
+/** Canonical target status a reach unlocks. */
+export const CONTACTED_STATUS = 'Contacted'
+
+/** Legacy status name migrated into {@link CONTACTED_STATUS}. Kept so a stale board
+ * column or a cached filter still resolves to the reach gate. */
+export const LEGACY_CONTACTED_STATUS = 'Qualifying call'
+
+/**
+ * Does moving from `fromStatus` to `toStatus` require a Log a reach?
+ *
+ * Entering Contacted (from anywhere but Contacted itself) is the only gate. Re-saving a
+ * Lead that is already Contacted, or moving it onward, does not re-prompt — the reach is
+ * recorded once, on entry. The legacy name resolves to the same target so an
+ * un-migrated board still gates correctly.
+ */
+export function requiresReach(fromStatus, toStatus) {
+  const target = normalizeStatus(toStatus)
+  if (target !== CONTACTED_STATUS) return false
+  return normalizeStatus(fromStatus) !== CONTACTED_STATUS
+}
+
+/** Fold the retired status name onto its canonical replacement. */
+export function normalizeStatus(status) {
+  return status === LEGACY_CONTACTED_STATUS ? CONTACTED_STATUS : status
+}
+
+/** Fields the Log a reach dialog renders. Required flags mirror the server contract. */
+export function reachFields() {
+  return [
+    {
+      fieldname: 'summary',
+      label: __('Reach summary'),
+      fieldtype: 'Small Text',
+      reqd: 1,
+    },
+    {
+      fieldname: 'follow_up_context',
+      label: __('Follow-up context'),
+      fieldtype: 'Small Text',
+      reqd: 1,
+    },
+    {
+      fieldname: 'follow_up_date',
+      label: __('Follow-up date'),
+      fieldtype: 'Date',
+      reqd: 0,
+    },
+  ]
+}
+
+/** Fieldnames the server will reject if empty. */
+export function requiredReachFields() {
+  return reachFields()
+    .filter((field) => field.reqd)
+    .map((field) => field.fieldname)
+}
+
+/**
+ * Validate a Log a reach payload.
+ *
+ * Returns the list of missing required fieldnames; an empty list means valid. Whitespace
+ * is not a value, so a summary of spaces is treated as absent — the same rule the server
+ * enforces, checked here so the dialog can block submit before the round trip.
+ */
+export function validateReach(data) {
+  const doc = data || {}
+  return requiredReachFields().filter((fieldname) => !isFilled(doc[fieldname]))
+}
+
+/** True when the reach payload has every required field. */
+export function isReachValid(data) {
+  return validateReach(data).length === 0
+}
+
+function isFilled(value) {
+  if (value === undefined || value === null) return false
+  return String(value).trim().length > 0
+}
+
+/**
+ * Build the atomic reach payload: the activity plus the status it unlocks.
+ *
+ * `timestamp` and `actor` are stamped here from injected values so the function stays
+ * pure and testable. The server re-stamps them authoritatively; sending them keeps the
+ * optimistic UI honest. Returns null when the payload is invalid, so a caller cannot
+ * accidentally post an empty reach.
+ */
+export function buildReachActivity(data, { actor, now } = {}) {
+  if (!isReachValid(data)) return null
+  const doc = data || {}
+  const followUp = isFilled(doc.follow_up_date) ? doc.follow_up_date : null
+  return {
+    status: CONTACTED_STATUS,
+    activity: {
+      type: 'reach',
+      timestamp: now || new Date().toISOString(),
+      actor: actor || null,
+      summary: String(doc.summary).trim(),
+      follow_up_context: String(doc.follow_up_context).trim(),
+      follow_up_date: followUp,
+    },
+  }
+}
+
+/**
+ * Prompt for a reach, then atomically save the activity and the Contacted status.
+ *
+ * Resolves with the server's response, or null when the user cancels — cancelling leaves
+ * the Lead's status untouched, since nothing is posted.
+ */
+export async function logReach(lead, { actor, today } = {}) {
+  const data = await renderFieldLayoutDialog({
+    title: __('Log a reach'),
+    fields: reachFields(),
+    required: requiredReachFields(),
+    submitLabel: __('Log reach'),
+    cancelLabel: __('Cancel'),
+  })
+
+  // Cancel (or an invalid payload the dialog should have blocked): do not touch status.
+  if (!data) return null
+
+  const payload = buildReachActivity(data, {
+    actor,
+    now: today ? `${today}T00:00:00` : new Date().toISOString(),
+  })
+  if (!payload) return null
+
+  // Imported lazily so the pure helpers above stay unit-testable without dragging
+  // frappe-ui's resource plugin into the test environment.
+  const { call } = await import('frappe-ui')
+
+  return await call('crm.txb.api.actions.log_reach', {
+    lead,
+    status: payload.status,
+    activity: payload.activity,
+  })
+}
+
+// -----------------------------------------------------------------------------------------
+// Log a dial: entering "Contact attempted"
+// -----------------------------------------------------------------------------------------
 
 /** The status a Lead may only enter by logging a dial. */
 export const CONTACT_ATTEMPTED_STATUS = 'Contact attempted'
