@@ -49,18 +49,27 @@ def add_default_lead_statuses():
 			"type": "Ongoing",
 			"position": 2,
 		},
+		# TXB-129: reached only through the Schedule Discovery meeting action
+		# (crm.txb.api.actions.schedule_discovery). Ordered immediately after Contacted -- a
+		# lead is contacted, then a discovery meeting is set. Seeded idempotently so the guarded
+		# transition has a target; installs that already carry this status keep their own config.
+		"Discovery meeting set": {
+			"color": "blue",
+			"type": "Ongoing",
+			"position": 3,
+		},
 		# Reached only through the Log a dial action (crm.txb.lead_actions); a dial that went
 		# unanswered lands the lead here. Seeded idempotently so the guarded transition has a
 		# target -- installs that already carry this status keep their own configuration.
 		"Contact attempted": {
 			"color": "orange",
 			"type": "Ongoing",
-			"position": 8,
+			"position": 9,
 		},
 		"Nurture": {
 			"color": "blue",
 			"type": "Ongoing",
-			"position": 3,
+			"position": 4,
 		},
 		# The booked-meeting state Run Discovery Meeting (crm.txb.lead_actions) acts from, and the
 		# two terminal outcomes it can close on. Seeded idempotently -- like Contact attempted --
@@ -86,22 +95,22 @@ def add_default_lead_statuses():
 		"Qualified": {
 			"color": "green",
 			"type": "Won",
-			"position": 4,
+			"position": 5,
 		},
 		"Converted": {
 			"color": "teal",
 			"type": "Won",
-			"position": 5,
+			"position": 6,
 		},
 		"Unqualified": {
 			"color": "red",
 			"type": "Lost",
-			"position": 6,
+			"position": 7,
 		},
 		"Junk": {
 			"color": "purple",
 			"type": "Lost",
-			"position": 7,
+			"position": 8,
 		},
 	}
 

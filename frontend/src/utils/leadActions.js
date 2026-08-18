@@ -450,3 +450,175 @@ export async function runDiscoveryMeeting(lead, { defaults } = {}) {
     data: discoveryPayload(data),
   })
 }
+
+// -----------------------------------------------------------------------------------------
+// Schedule Discovery meeting (TXB-129): entering "Discovery meeting set"
+// -----------------------------------------------------------------------------------------
+
+/** The status a Lead may only enter by scheduling a discovery meeting. Ordered right after
+ * Contacted: a lead is contacted, then a discovery meeting is set. Aliases the Run Discovery
+ * Meeting contract's booked-meeting status so the two features share one literal. */
+export const DISCOVERY_STATUS = DISCOVERY_MEETING_SET_STATUS
+
+/** The two meeting types. Each unlocks a different required location detail. */
+export const DISCOVERY_TYPE_VIRTUAL = 'Virtual'
+export const DISCOVERY_TYPE_ONSITE = 'Onsite'
+
+/**
+ * Does moving from `fromStatus` to `toStatus` require scheduling a discovery meeting?
+ *
+ * Entering Discovery meeting set (from anywhere but itself) is the only gate. Re-saving a
+ * Lead already in that status, or moving it onward, does not re-prompt — the meeting is
+ * scheduled once, on entry.
+ */
+export function requiresDiscoverySchedule(fromStatus, toStatus) {
+  if (normalizeStatus(toStatus) !== DISCOVERY_STATUS) return false
+  return normalizeStatus(fromStatus) !== DISCOVERY_STATUS
+}
+
+/**
+ * Fields the Schedule Discovery meeting dialog renders. Date, time and type are always
+ * required; the manual link is required (and shown) only for a Virtual meeting, the address
+ * only for an Onsite one. No link is generated and no calendar entry is created — the link is
+ * whatever the user types.
+ */
+export function discoveryScheduleFields() {
+  const virtual = `eval:doc.meeting_type == '${DISCOVERY_TYPE_VIRTUAL}'`
+  const onsite = `eval:doc.meeting_type == '${DISCOVERY_TYPE_ONSITE}'`
+  return [
+    {
+      fieldname: 'meeting_date',
+      label: __('Meeting date'),
+      fieldtype: 'Date',
+      reqd: 1,
+    },
+    {
+      fieldname: 'meeting_time',
+      label: __('Meeting time'),
+      fieldtype: 'Time',
+      reqd: 1,
+    },
+    {
+      fieldname: 'meeting_type',
+      label: __('Meeting type'),
+      fieldtype: 'Select',
+      options: `${DISCOVERY_TYPE_VIRTUAL}\n${DISCOVERY_TYPE_ONSITE}`,
+      reqd: 1,
+    },
+    {
+      fieldname: 'meeting_link',
+      label: __('Meeting link'),
+      fieldtype: 'Data',
+      depends_on: virtual,
+      mandatory_depends_on: virtual,
+    },
+    {
+      fieldname: 'meeting_address',
+      label: __('Meeting address'),
+      fieldtype: 'Small Text',
+      depends_on: onsite,
+      mandatory_depends_on: onsite,
+    },
+  ]
+}
+
+/**
+ * The fieldnames that must be filled for the given payload. Date, time and type are always
+ * required; the conditional location detail depends on the chosen type. Mirrors the server
+ * contract so the dialog can block an incomplete submit before the round trip.
+ */
+export function requiredDiscoveryScheduleFields(data) {
+  const base = ['meeting_date', 'meeting_time', 'meeting_type']
+  const type = (data || {}).meeting_type
+  if (type === DISCOVERY_TYPE_VIRTUAL) return [...base, 'meeting_link']
+  if (type === DISCOVERY_TYPE_ONSITE) return [...base, 'meeting_address']
+  return base
+}
+
+/**
+ * Validate a discovery payload. Returns the list of missing required fieldnames; an empty
+ * list means valid. Whitespace is not a value, matching the server's emptiness rule.
+ */
+export function validateDiscovery(data) {
+  const doc = data || {}
+  return requiredDiscoveryScheduleFields(doc).filter((fieldname) => !isFilled(doc[fieldname]))
+}
+
+/** True when the discovery payload has every required field for its type. */
+export function isDiscoveryValid(data) {
+  return validateDiscovery(data).length === 0
+}
+
+/**
+ * Build the atomic discovery payload: the scheduling activity plus the status it unlocks.
+ *
+ * Only the location detail matching the chosen type travels — an Onsite meeting never carries
+ * a link and a Virtual one never carries an address. Returns null when the payload is invalid,
+ * so a caller cannot post an incomplete schedule. The server re-validates authoritatively.
+ */
+export function buildDiscoveryActivity(data, { actor, now } = {}) {
+  if (!isDiscoveryValid(data)) return null
+  const doc = data || {}
+  const type = doc.meeting_type
+  return {
+    status: DISCOVERY_STATUS,
+    activity: {
+      type: 'discovery',
+      timestamp: now || new Date().toISOString(),
+      actor: actor || null,
+      meeting_date: String(doc.meeting_date).trim(),
+      meeting_time: String(doc.meeting_time).trim(),
+      meeting_type: type,
+      meeting_link:
+        type === DISCOVERY_TYPE_VIRTUAL ? String(doc.meeting_link).trim() : null,
+      meeting_address:
+        type === DISCOVERY_TYPE_ONSITE ? String(doc.meeting_address).trim() : null,
+    },
+  }
+}
+
+/**
+ * Prompt for the discovery details, then atomically save the scheduling activity and the
+ * Discovery meeting set status server-side.
+ *
+ * The conditional required fields (link for Virtual, address for Onsite) are re-checked in
+ * `onSubmit`, which throws to keep the dialog open on an incomplete submit. Resolves with the
+ * server's response, or null when the user cancels — a cancel posts nothing, so the status is
+ * left untouched.
+ */
+export async function logDiscovery(lead, { actor, now } = {}) {
+  const isoNow = now || new Date().toISOString()
+
+  const data = await renderFieldLayoutDialog({
+    title: __('Schedule Discovery meeting'),
+    fields: discoveryScheduleFields(),
+    required: ['meeting_date', 'meeting_time', 'meeting_type'],
+    submitLabel: __('Schedule meeting'),
+    cancelLabel: __('Cancel'),
+    onSubmit: (formData) => {
+      // Conditional requiredness the static `required` list cannot express: keep the dialog
+      // open until the location detail for the chosen type is supplied.
+      if (validateDiscovery(formData).length) {
+        throw new Error(
+          __('Provide the meeting date, time, type, and the required location detail.'),
+        )
+      }
+    },
+  })
+
+  // Cancel (or a submit the guard above kept out): do not touch status, nothing is posted.
+  if (!data) return null
+
+  const payload = buildDiscoveryActivity(data, { actor, now: isoNow })
+  if (!payload) return null
+
+  // Imported lazily so the pure helpers above stay unit-testable without dragging frappe-ui's
+  // resource plugin into the test environment.
+  const { call } = await import('frappe-ui')
+
+  return await call('crm.txb.api.actions.schedule_discovery', {
+    lead,
+    status: payload.status,
+    activity: payload.activity,
+  })
+}

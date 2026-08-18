@@ -18,6 +18,50 @@ DEFAULT_DISQUALIFIED_REASON = "Pending Review"
 # ever has to defend.
 STATUS_CONTACTED = "Contacted"
 
+# TXB-129: the status a scheduled Discovery meeting unlocks. Every transition into it must go
+# through ``crm.txb.api.actions.schedule_discovery``; see ``require_discovery_details``.
+STATUS_DISCOVERY = "Discovery meeting set"
+
+
+def require_discovery_details(doc, method=None):
+	"""Entering Discovery meeting set must go through ``schedule_discovery`` (TXB-129).
+
+	The status carries a mandatory scheduled meeting -- a required date, time and type, plus a
+	manual link (Virtual) or address (Onsite) -- recorded on the timeline. The two Lead.vue
+	handlers prompt for it, but the browser is not a security boundary: the Leads kanban drag and
+	the mobile status control write ``status`` directly via ``frappe.client.set_value``, which
+	would otherwise land a lead in Discovery meeting set with no scheduling details at all. This
+	guard makes the server the single enforcement point -- every status->Discovery write that is
+	not the flagged ``schedule_discovery`` save is refused -- so no entrypoint, present or
+	future, can silently bypass the gate.
+
+	``schedule_discovery`` arms ``frappe.flags.txb_action`` with this document's name (mirroring
+	the reach guard), which is the one exemption. Inserts are exempt too: a lead created directly
+	in the status (an import, or a seed) is not a transition into it.
+	"""
+	if doc.is_new():
+		return
+
+	if not doc.has_value_changed("status"):
+		return
+
+	if doc.status != STATUS_DISCOVERY:
+		return
+
+	# The schedule endpoint scopes the flag to this document's name, so the exemption cannot leak
+	# onto another CRM Lead saved inside the same request.
+	if frappe.flags.get("txb_action") == doc.name:
+		return
+
+	frappe.throw(
+		_(
+			"Schedule a discovery meeting to move a lead into Discovery meeting set, so the "
+			"date, time, type and location that justify the change are recorded."
+		),
+		frappe.ValidationError,
+		title=_("Schedule Discovery meeting"),
+	)
+
 
 def require_reach_for_contacted(doc, method=None):
 	"""Entering Contacted must go through ``crm.txb.api.actions.log_reach`` (TXB-128).

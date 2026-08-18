@@ -179,6 +179,10 @@ doc_events = {
 		# go through log_reach, not just the two Lead.vue handlers.
 		"validate": [
 			"crm.txb.doc_events.lead.require_reach_for_contacted",
+			# Discovery meeting set is reachable only through
+			# crm.txb.api.actions.schedule_discovery; every other write to that status is
+			# refused here (TXB-129).
+			"crm.txb.doc_events.lead.require_discovery_details",
 			"crm.txb.ownership.guard_owner_change",
 			# Contact attempted is reachable only through crm.txb.lead_actions.log_a_dial;
 			# every other write to that status is refused here.

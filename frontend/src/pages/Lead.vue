@@ -308,6 +308,9 @@ import {
   logADial,
   requiresDiscovery,
   runDiscoveryMeeting,
+  requiresDiscoverySchedule,
+  logDiscovery,
+  DISCOVERY_STATUS,
 } from '@/utils/leadActions'
 import { sessionStore } from '@/stores/session'
 import { getSettings } from '@/stores/settings'
@@ -530,6 +533,13 @@ async function triggerStatusChange(value) {
     await enterContactedWithReach()
     return
   }
+  // TXB-129: entering Discovery meeting set is gated on scheduling a discovery meeting.
+  // Short-circuit before triggerOnChange so the in-memory status stays put until the schedule
+  // is saved; cancelling then leaves the status exactly as it was.
+  if (requiresDiscoverySchedule(doc.value?.status, value)) {
+    await enterDiscoveryWithSchedule()
+    return
+  }
   // Contact attempted is server-guarded: it is reachable only through a logged dial. Open the
   // Log a dial form instead of writing the status, and let the server move it atomically. The
   // status is not touched first, so a cancelled dial leaves the lead exactly where it was.
@@ -549,6 +559,19 @@ async function enterContactedWithReach() {
   const result = await logReach(props.leadId, { actor: sessionUser })
   document.reload?.()
   if (result) {
+    sections.reload()
+  }
+}
+
+// TXB-129: prompt for the discovery details, then let the server save the scheduling activity
+// and the Discovery meeting set status atomically. On success (or cancel) the document is
+// reloaded: on cancel nothing was written, so this discards any optimistic status change and
+// leaves the status unchanged; on success it reflects the server-applied status.
+async function enterDiscoveryWithSchedule() {
+  const result = await logDiscovery(props.leadId, { actor: sessionUser })
+  document.reload?.()
+  if (result) {
+    reload.value = true
     sections.reload()
   }
 }
@@ -681,6 +704,13 @@ function beforeStatusChange(data) {
     // has not saved it. Require the reach before persisting; enterContactedWithReach
     // reloads on cancel, reverting that optimistic change so the status is left unchanged.
     enterContactedWithReach()
+  } else if (
+    Object.hasOwn(data ?? {}, 'status') &&
+    data.status === DISCOVERY_STATUS
+  ) {
+    // Same gate as the header dropdown: require the discovery schedule before persisting.
+    // enterDiscoveryWithSchedule reloads on cancel, reverting the optimistic status change.
+    enterDiscoveryWithSchedule()
   } else if (
     Object.hasOwn(data ?? {}, 'status') &&
     getLeadStatus(data.status).type == 'Lost'
