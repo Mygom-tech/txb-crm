@@ -111,3 +111,148 @@ export function applyPipelineDependencies(sections) {
 
   return sections
 }
+
+/**
+ * The Program Type field on CRM Deal (custom_program_type). Registration writes the same
+ * fieldname (crm/txb/api/registration.py); TXB-103 fixed its canonical placement on the
+ * Delivering Coaching pipeline, which this matrix preserves.
+ */
+export const PROGRAM_TYPE_FIELDNAME = 'custom_program_type'
+
+/**
+ * Pipeline presentation matrix (TXB-135).
+ *
+ * Each Opportunity pipeline shows only the fields and sections approved for it. Rather than
+ * delete anything, we tighten the relevant *fields'* `depends_on` so `SidePanelLayout.vue`
+ * evaluates it reactively and simply stops rendering them for the excluded pipelines — the
+ * stored values stay on the document untouched, and switching `pipeline_type` re-shows them
+ * with no reload.
+ *
+ * Field-level gating is the only lever that works here: `SidePanelLayout.parsedSection`
+ * derives a section's visibility purely from its visible-field count
+ * (`section.visible = isContactSection || columns[0].fields.filter(f => f.visible).length`)
+ * and never evaluates `section.depends_on`. So a *section* rule is enforced by gating every
+ * field the section contains — once all its fields evaluate hidden the section collapses.
+ *
+ * `keepVisibleWhen` is an eval expression body (no `eval:` prefix) that must hold for a
+ * field to remain visible; it is ANDed onto that field's existing `depends_on` (see
+ * {@link restrictDependsOn}), so a pipeline's native visibility for fields this matrix does
+ * not name is left exactly as the layout defines it. A rule matches a *section* (whose every
+ * field it then gates) by the section `label`, and an individual *field* by its `fieldname`
+ * or `label`.
+ *
+ *   - Individual Session Details / Sessions — whole sections hidden on Workshop only.
+ *   - Program Type — kept only on Delivering Coaching (TXB-103); Workshop, Individual
+ *     Session and Selling Training all hide it.
+ */
+export const PIPELINE_VISIBILITY_RULES = [
+  {
+    labels: ['Individual Session Details', 'Sessions'],
+    keepVisibleWhen: `doc.pipeline_type != "${PIPELINE_WORKSHOP}"`,
+  },
+  {
+    labels: ['Program Type'],
+    fieldnames: [PROGRAM_TYPE_FIELDNAME],
+    keepVisibleWhen: `doc.pipeline_type == "${PIPELINE_DELIVERING_COACHING}"`,
+  },
+]
+
+function normalizeLabel(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+}
+
+function ruleMatchesSection(rule, section) {
+  if (!rule.labels) return false
+  const label = normalizeLabel(section.label)
+  return label !== '' && rule.labels.some((l) => normalizeLabel(l) === label)
+}
+
+function ruleMatchesField(rule, field) {
+  if (rule.fieldnames?.some((f) => f === field.fieldname)) return true
+  if (!rule.labels) return false
+  const label = normalizeLabel(field.label)
+  return label !== '' && rule.labels.some((l) => normalizeLabel(l) === label)
+}
+
+/**
+ * Reduce a `depends_on` value to a parenthesised eval body, or '' when it imposes no
+ * condition. A plain field name (Frappe's non-eval `depends_on`) becomes a truthiness
+ * check on that field so it can be composed.
+ */
+function toEvalBody(dependsOn) {
+  if (!dependsOn || typeof dependsOn !== 'string') return ''
+  const trimmed = dependsOn.trim()
+  if (!trimmed) return ''
+  if (trimmed.startsWith('eval:')) {
+    const body = trimmed.slice(5).trim()
+    return body ? `(${body})` : ''
+  }
+  return `(doc.${trimmed})`
+}
+
+/**
+ * AND a pipeline visibility condition onto an existing `depends_on`.
+ *
+ * Preserves the existing condition (so native per-pipeline visibility is not lost) and
+ * returns an `eval:` expression. Pure: builds a new string, never mutates input.
+ *
+ * @param {string} [existing]   the unit's current `depends_on`
+ * @param {string} evalBody     the extra condition (eval body, no `eval:` prefix)
+ * @returns {string}            the combined `eval:` expression
+ */
+export function restrictDependsOn(existing, evalBody) {
+  const added = `(${evalBody})`
+  const base = toEvalBody(existing)
+  return base ? `eval:${base} && ${added}` : `eval:${added}`
+}
+
+/**
+ * Apply the pipeline presentation matrix across a parsed side-panel layout in place.
+ *
+ * For each section, if a {@link PIPELINE_VISIBILITY_RULES} rule matches the section (by
+ * label) its `keepVisibleWhen` is ANDed onto *every* field in the section's first column —
+ * this is what actually hides the section, because SidePanelLayout collapses a section only
+ * once all of its fields are hidden. Otherwise each field is gated individually when a rule
+ * matches it (by `fieldname`/`label`), which is how the Program Type field is hidden while
+ * its neighbours in a shared section stay visible.
+ *
+ * Visibility only — no field is removed and no value is cleared. Mutates and returns the
+ * passed array (matching {@link applyPipelineDependencies}) and tolerates a missing or
+ * malformed shape.
+ *
+ * @param {Array<Object>} [sections]  the parsed side-panel sections
+ * @returns {Array<Object>|undefined}  the same array, gated by pipeline
+ */
+export function applyPipelineVisibility(sections) {
+  if (!Array.isArray(sections)) return sections
+
+  for (const section of sections) {
+    if (!section || typeof section !== 'object') continue
+
+    const fields = section.columns?.[0]?.fields
+    if (!Array.isArray(fields)) continue
+
+    // A section-level match hides the whole section, so it gates every field within;
+    // otherwise a field is gated only when a rule names it directly.
+    const sectionRule = PIPELINE_VISIBILITY_RULES.find((rule) =>
+      ruleMatchesSection(rule, section),
+    )
+
+    for (const field of fields) {
+      if (!field || typeof field !== 'object') continue
+      const rule =
+        sectionRule ??
+        PIPELINE_VISIBILITY_RULES.find((r) => ruleMatchesField(r, field))
+      if (rule) {
+        field.depends_on = restrictDependsOn(
+          field.depends_on,
+          rule.keepVisibleWhen,
+        )
+      }
+    }
+  }
+
+  return sections
+}
