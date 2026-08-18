@@ -123,18 +123,25 @@ export const PROGRAM_TYPE_FIELDNAME = 'custom_program_type'
  * Pipeline presentation matrix (TXB-135).
  *
  * Each Opportunity pipeline shows only the fields and sections approved for it. Rather than
- * delete anything, we tighten the layout unit's `depends_on` so `SidePanelLayout.vue`
- * evaluates it reactively and simply stops rendering the unit for the excluded pipelines —
- * the stored values stay on the document untouched, and switching `pipeline_type` re-shows
- * them with no reload.
+ * delete anything, we tighten the relevant *fields'* `depends_on` so `SidePanelLayout.vue`
+ * evaluates it reactively and simply stops rendering them for the excluded pipelines — the
+ * stored values stay on the document untouched, and switching `pipeline_type` re-shows them
+ * with no reload.
  *
- * `keepVisibleWhen` is an eval expression body (no `eval:` prefix) that must hold for the
- * unit to remain visible; it is ANDed onto any existing `depends_on` (see
- * {@link restrictDependsOn}), so a pipeline's native visibility for units this matrix does
- * not name is left exactly as the layout defines it. A rule matches a section by its
- * `label` and a field by its `fieldname` or `label`.
+ * Field-level gating is the only lever that works here: `SidePanelLayout.parsedSection`
+ * derives a section's visibility purely from its visible-field count
+ * (`section.visible = isContactSection || columns[0].fields.filter(f => f.visible).length`)
+ * and never evaluates `section.depends_on`. So a *section* rule is enforced by gating every
+ * field the section contains — once all its fields evaluate hidden the section collapses.
  *
- *   - Individual Session Details / Sessions — hidden on Workshop only.
+ * `keepVisibleWhen` is an eval expression body (no `eval:` prefix) that must hold for a
+ * field to remain visible; it is ANDed onto that field's existing `depends_on` (see
+ * {@link restrictDependsOn}), so a pipeline's native visibility for fields this matrix does
+ * not name is left exactly as the layout defines it. A rule matches a *section* (whose every
+ * field it then gates) by the section `label`, and an individual *field* by its `fieldname`
+ * or `label`.
+ *
+ *   - Individual Session Details / Sessions — whole sections hidden on Workshop only.
  *   - Program Type — kept only on Delivering Coaching (TXB-103); Workshop, Individual
  *     Session and Selling Training all hide it.
  */
@@ -204,11 +211,16 @@ export function restrictDependsOn(existing, evalBody) {
 /**
  * Apply the pipeline presentation matrix across a parsed side-panel layout in place.
  *
- * Walks every section and every field in its first column and, for any unit named by a
- * {@link PIPELINE_VISIBILITY_RULES} rule, ANDs the rule's `keepVisibleWhen` onto its
- * `depends_on`. Visibility only — no field is removed and no value is cleared. Mutates and
- * returns the passed array (matching {@link applyPipelineDependencies}) and tolerates a
- * missing or malformed shape.
+ * For each section, if a {@link PIPELINE_VISIBILITY_RULES} rule matches the section (by
+ * label) its `keepVisibleWhen` is ANDed onto *every* field in the section's first column —
+ * this is what actually hides the section, because SidePanelLayout collapses a section only
+ * once all of its fields are hidden. Otherwise each field is gated individually when a rule
+ * matches it (by `fieldname`/`label`), which is how the Program Type field is hidden while
+ * its neighbours in a shared section stay visible.
+ *
+ * Visibility only — no field is removed and no value is cleared. Mutates and returns the
+ * passed array (matching {@link applyPipelineDependencies}) and tolerates a missing or
+ * malformed shape.
  *
  * @param {Array<Object>} [sections]  the parsed side-panel sections
  * @returns {Array<Object>|undefined}  the same array, gated by pipeline
@@ -219,28 +231,24 @@ export function applyPipelineVisibility(sections) {
   for (const section of sections) {
     if (!section || typeof section !== 'object') continue
 
-    const sectionRule = PIPELINE_VISIBILITY_RULES.find((rule) =>
-      ruleMatchesSection(rule, section),
-    )
-    if (sectionRule) {
-      section.depends_on = restrictDependsOn(
-        section.depends_on,
-        sectionRule.keepVisibleWhen,
-      )
-    }
-
     const fields = section.columns?.[0]?.fields
     if (!Array.isArray(fields)) continue
 
+    // A section-level match hides the whole section, so it gates every field within;
+    // otherwise a field is gated only when a rule names it directly.
+    const sectionRule = PIPELINE_VISIBILITY_RULES.find((rule) =>
+      ruleMatchesSection(rule, section),
+    )
+
     for (const field of fields) {
       if (!field || typeof field !== 'object') continue
-      const fieldRule = PIPELINE_VISIBILITY_RULES.find((rule) =>
-        ruleMatchesField(rule, field),
-      )
-      if (fieldRule) {
+      const rule =
+        sectionRule ??
+        PIPELINE_VISIBILITY_RULES.find((r) => ruleMatchesField(r, field))
+      if (rule) {
         field.depends_on = restrictDependsOn(
           field.depends_on,
-          fieldRule.keepVisibleWhen,
+          rule.keepVisibleWhen,
         )
       }
     }

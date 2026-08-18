@@ -507,6 +507,16 @@ function programTypeField(sections) {
   return undefined
 }
 
+// Mirror SidePanelLayout.parsedSection exactly: a section is visible for the contacts
+// section, or when at least one of its fields is visible. It never consults
+// section.depends_on — so the only way the matrix can hide a section is by gating every
+// field it holds. This is the adversarial check the Agent QA blocker demanded.
+function sectionVisibleFor(section, pipeline) {
+  if (section.name === 'contacts_section') return true
+  const fields = section.columns?.[0]?.fields || []
+  return fields.some((field) => isVisibleFor(field.depends_on, pipeline))
+}
+
 describe('PIPELINE_VISIBILITY_RULES (TXB-135 presentation matrix)', () => {
   it('names Program Type by its committed fieldname', () => {
     expect(PROGRAM_TYPE_FIELDNAME).toBe('custom_program_type')
@@ -620,8 +630,16 @@ describe('applyPipelineVisibility', () => {
     const sess = sectionByLabel(sections, 'Sessions')
     const programType = programTypeField(sections)
 
-    expect(isVisibleFor(isd.depends_on, PIPELINE_WORKSHOP)).toBe(false)
-    expect(isVisibleFor(sess.depends_on, PIPELINE_WORKSHOP)).toBe(false)
+    // Sections hide only because their fields are gated (SidePanelLayout derives section
+    // visibility from visible-field count, not section.depends_on).
+    expect(isVisibleFor(isd.columns[0].fields[0].depends_on, PIPELINE_WORKSHOP)).toBe(
+      false,
+    )
+    expect(
+      isVisibleFor(sess.columns[0].fields[0].depends_on, PIPELINE_WORKSHOP),
+    ).toBe(false)
+    expect(sectionVisibleFor(isd, PIPELINE_WORKSHOP)).toBe(false)
+    expect(sectionVisibleFor(sess, PIPELINE_WORKSHOP)).toBe(false)
     expect(isVisibleFor(programType.depends_on, PIPELINE_WORKSHOP)).toBe(false)
   })
 
@@ -653,8 +671,8 @@ describe('applyPipelineVisibility', () => {
     for (const pipeline of TXB135_ALL_PIPELINES.filter(
       (p) => p !== PIPELINE_WORKSHOP,
     )) {
-      expect(isVisibleFor(isd.depends_on, pipeline)).toBe(true)
-      expect(isVisibleFor(sess.depends_on, pipeline)).toBe(true)
+      expect(sectionVisibleFor(isd, pipeline)).toBe(true)
+      expect(sectionVisibleFor(sess, pipeline)).toBe(true)
     }
   })
 
@@ -679,10 +697,9 @@ describe('applyPipelineVisibility', () => {
       },
     ])
     const section = sectionByLabel(sections, 'Program Type')
-    expect(isVisibleFor(section.depends_on, PIPELINE_WORKSHOP)).toBe(false)
-    expect(isVisibleFor(section.depends_on, PIPELINE_DELIVERING_COACHING)).toBe(
-      true,
-    )
+    // The section rule gates the inner field, which is what collapses the section.
+    expect(sectionVisibleFor(section, PIPELINE_WORKSHOP)).toBe(false)
+    expect(sectionVisibleFor(section, PIPELINE_DELIVERING_COACHING)).toBe(true)
   })
 })
 
