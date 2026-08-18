@@ -1,7 +1,7 @@
 // Namespaced browser-local persistence for the CRM resizable detail sidebars.
 //
-// Deal, Lead and Organization each get an independent namespaced width so a
-// preference on one detail page never bleeds into another, while all three
+// Deal, Lead, Organization and Contact each get an independent namespaced width
+// so a preference on one detail page never bleeds into another, while all four
 // share the same responsive default selection, validation, min/max limits and
 // viewport clamping. Everything lives under an entity-scoped namespace so
 // unrelated localStorage keys are never touched, and every restore path
@@ -11,11 +11,13 @@
 // to overflow the viewport and hide actions).
 
 // Entity keys used to namespace the per-entity width preference. Callers pass
-// one of these so Deal, Lead and Organization stay isolated from each other.
+// one of these so Deal, Lead, Organization and Contact stay isolated from each
+// other.
 export const SIDEBAR_ENTITIES = {
   deal: 'deal',
   lead: 'lead',
   organization: 'organization',
+  contact: 'contact',
 }
 
 // Root under which every CRM sidebar preference lives. Kept in one namespace so
@@ -112,8 +114,8 @@ export function responsiveDefaultWidth(viewportWidth, limits = {}) {
 /**
  * Restore the persisted sidebar width for a specific entity, validated and
  * clamped to limits. Falls back to the responsive default when nothing valid is
- * stored. Each entity reads its own namespaced key, so Deal, Lead and
- * Organization never share a saved width.
+ * stored. Each entity reads its own namespaced key, so Deal, Lead,
+ * Organization and Contact never share a saved width.
  */
 export function loadEntitySidebarWidth(entity, limits = {}) {
   const fallback = responsiveDefaultWidth(limits.viewportWidth, limits)

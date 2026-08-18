@@ -28,6 +28,10 @@
       v-if="contact.doc"
       :parent="$refs.parentRef"
       class="flex h-full flex-col overflow-hidden border-r"
+      :defaultWidth="sidebarDefaultWidth"
+      :minWidth="SIDEBAR_MIN_WIDTH"
+      :maxWidth="SIDEBAR_MAX_WIDTH"
+      :persistWidth="saveContactSidebarWidth"
     >
       <div class="border-b">
         <FileUploader
@@ -193,6 +197,12 @@
 <script setup>
 import ErrorPage from '@/components/ErrorPage.vue'
 import Resizer from '@/components/Resizer.vue'
+import {
+  entitySidebarWidth,
+  SIDEBAR_ENTITIES,
+  SIDEBAR_MIN_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+} from '@/utils/resizerState'
 import Icon from '@/components/Icon.vue'
 import SidePanelLayout from '@/components/SidePanelLayout.vue'
 import LayoutHeader from '@/components/LayoutHeader.vue'
@@ -249,6 +259,18 @@ const props = defineProps({
 
 const route = useRoute()
 const router = useRouter()
+
+// Restore the persisted Contact sidebar width from its own namespace, validated
+// and clamped to the resizer's limits and the current viewport. Shares the
+// responsive default, validation and clamping with Deal/Lead/Organization while
+// keeping an independent saved width.
+const { load: loadContactSidebarWidth, save: saveContactSidebarWidth } =
+  entitySidebarWidth(SIDEBAR_ENTITIES.contact)
+const sidebarDefaultWidth = loadContactSidebarWidth({
+  minWidth: SIDEBAR_MIN_WIDTH,
+  maxWidth: SIDEBAR_MAX_WIDTH,
+  viewportWidth: typeof window !== 'undefined' ? window.innerWidth : undefined,
+})
 
 const errorTitle = ref('')
 const errorMessage = ref('')
