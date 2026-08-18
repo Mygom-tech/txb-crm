@@ -419,6 +419,7 @@ import {
   DEAL_SIDEBAR_MIN_WIDTH,
   DEAL_SIDEBAR_MAX_WIDTH,
 } from '@/utils/resizerState'
+import { expandDealContacts } from '@/utils/dealContacts'
 import CustomActions from '@/components/CustomActions.vue'
 import EnrichFromWebsite from '@/components/EnrichFromWebsite.vue'
 import RequestOwnershipModal from '@/components/Modals/RequestOwnershipModal.vue'
@@ -888,12 +889,7 @@ const dealContacts = createResource({
   url: 'crm.fcrm.doctype.crm_deal.api.get_deal_contacts',
   params: { name: props.dealId },
   cache: ['deal_contacts', props.dealId],
-  transform: (data) => {
-    data.forEach((contact) => {
-      contact.opened = false
-    })
-    return data
-  },
+  transform: (data) => expandDealContacts(data),
 })
 
 if (!dealContacts.data) dealContacts.fetch()

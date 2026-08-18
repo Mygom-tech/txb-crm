@@ -1,22 +1,49 @@
-// Namespaced browser-local persistence for the CRM Deal resizable sidebar.
+// Namespaced browser-local persistence for the CRM resizable detail sidebars.
 //
-// Everything lives under one namespace so unrelated localStorage keys are never
-// touched, and every restore path validates + clamps before the value reaches
-// the layout. A corrupt, missing or out-of-range preference falls back to the
-// responsive default instead of producing an unusable sidebar (collapsed past
-// the min handle, or wide enough to overflow the viewport and hide actions).
+// Deal, Lead and Organization each get an independent namespaced width so a
+// preference on one detail page never bleeds into another, while all three
+// share the same responsive default selection, validation, min/max limits and
+// viewport clamping. Everything lives under an entity-scoped namespace so
+// unrelated localStorage keys are never touched, and every restore path
+// validates + clamps before the value reaches the layout. A corrupt, missing
+// or out-of-range preference falls back to the responsive default instead of
+// producing an unusable sidebar (collapsed past the min handle, or wide enough
+// to overflow the viewport and hide actions).
 
-// Single global width shared by every CRM Deal page, plus the per-section
-// expansion map. Kept in one namespace root so both keys can be reasoned about
-// together and cleared as a unit if needed.
-const NAMESPACE = 'crm.deal.sidebar'
-export const WIDTH_KEY = `${NAMESPACE}.width`
-export const SECTION_KEY = `${NAMESPACE}.sections`
+// Entity keys used to namespace the per-entity width preference. Callers pass
+// one of these so Deal, Lead and Organization stay isolated from each other.
+export const SIDEBAR_ENTITIES = {
+  deal: 'deal',
+  lead: 'lead',
+  organization: 'organization',
+}
+
+// Root under which every CRM sidebar preference lives. Kept in one namespace so
+// the keys can be reasoned about together and cleared as a unit if needed.
+const NAMESPACE = 'crm.sidebar'
+
+/** Namespaced localStorage key for a given entity's saved width. */
+export function widthKeyFor(entity) {
+  return `${NAMESPACE}.${entity}.width`
+}
+
+// Legacy single global width shared by every CRM Deal page, plus the per-section
+// expansion map. The Deal width now uses the entity-scoped key above; the
+// section map remains under the original Deal namespace.
+const DEAL_NAMESPACE = 'crm.deal.sidebar'
+export const WIDTH_KEY = widthKeyFor(SIDEBAR_ENTITIES.deal)
+export const SECTION_KEY = `${DEAL_NAMESPACE}.sections`
 
 // Component limits mirror the shared Resizer defaults so a value saved through
-// the resizer can never be restored outside the handle's own travel.
+// the resizer can never be restored outside the handle's own travel. Shared by
+// every entity sidebar so they clamp identically.
 export const DEAL_SIDEBAR_MIN_WIDTH = 16 * 16 // 256px
 export const DEAL_SIDEBAR_MAX_WIDTH = 30 * 16 // 480px
+
+// Aliases so Lead and Organization pages read intent-revealing names while
+// reusing the exact same limits as Deal.
+export const SIDEBAR_MIN_WIDTH = DEAL_SIDEBAR_MIN_WIDTH
+export const SIDEBAR_MAX_WIDTH = DEAL_SIDEBAR_MAX_WIDTH
 
 // Below this the layout is treated as compact (tablet/mobile) and keeps the
 // original narrow default; at or above it desktops get a wider sidebar so the
@@ -83,28 +110,58 @@ export function responsiveDefaultWidth(viewportWidth, limits = {}) {
 }
 
 /**
- * Restore the persisted sidebar width, validated and clamped to limits.
- * Falls back to the responsive default when nothing valid is stored.
+ * Restore the persisted sidebar width for a specific entity, validated and
+ * clamped to limits. Falls back to the responsive default when nothing valid is
+ * stored. Each entity reads its own namespaced key, so Deal, Lead and
+ * Organization never share a saved width.
  */
-export function loadSidebarWidth(limits = {}) {
+export function loadEntitySidebarWidth(entity, limits = {}) {
   const fallback = responsiveDefaultWidth(limits.viewportWidth, limits)
   const storage = safeStorage()
   if (!storage) return fallback
 
-  const raw = storage.getItem(WIDTH_KEY)
+  const raw = storage.getItem(widthKeyFor(entity))
   if (raw == null) return fallback
 
   const clamped = clampWidth(raw, limits)
   return clamped == null ? fallback : clamped
 }
 
-/** Persist the sidebar width. Ignores non-finite values. */
-export function saveSidebarWidth(width) {
+/**
+ * Persist the sidebar width for a specific entity under its namespaced key.
+ * Ignores non-finite values.
+ */
+export function saveEntitySidebarWidth(entity, width) {
   const storage = safeStorage()
   if (!storage) return
   const n = Number(width)
   if (!Number.isFinite(n)) return
-  storage.setItem(WIDTH_KEY, String(n))
+  storage.setItem(widthKeyFor(entity), String(n))
+}
+
+/**
+ * Build a `{ load, save }` pair bound to one entity namespace. The save
+ * callback matches the Resizer's `persistWidth` contract, so a page can wire a
+ * Resizer to its own isolated width preference in one call.
+ */
+export function entitySidebarWidth(entity) {
+  return {
+    load: (limits = {}) => loadEntitySidebarWidth(entity, limits),
+    save: (width) => saveEntitySidebarWidth(entity, width),
+  }
+}
+
+/**
+ * Restore the persisted Deal sidebar width. Backward-compatible wrapper over
+ * the entity-scoped loader.
+ */
+export function loadSidebarWidth(limits = {}) {
+  return loadEntitySidebarWidth(SIDEBAR_ENTITIES.deal, limits)
+}
+
+/** Persist the Deal sidebar width. Ignores non-finite values. */
+export function saveSidebarWidth(width) {
+  saveEntitySidebarWidth(SIDEBAR_ENTITIES.deal, width)
 }
 
 /**
