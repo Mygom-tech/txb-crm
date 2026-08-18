@@ -21,6 +21,11 @@ const props = defineProps({
   maxWidth: { type: Number, default: 30 * 16 },
   side: { type: String, default: 'left' },
   parent: { type: Object, default: null },
+  // Optional persistence hooks. When a caller supplies these (e.g. the CRM Deal
+  // sidebar) width is restored/saved through them into namespaced storage;
+  // otherwise the legacy single-key behavior below is preserved unchanged for
+  // every other sidebar sharing this component.
+  persistWidth: { type: Function, default: null },
 })
 
 const sidebarResizing = ref(false)
@@ -35,7 +40,11 @@ function startResize() {
       el.classList.remove('select-text1')
       el.classList.add('select-text')
     })
-    localStorage.setItem('sidebarWidth', sidebarWidth.value)
+    if (props.persistWidth) {
+      props.persistWidth(sidebarWidth.value)
+    } else {
+      localStorage.setItem('sidebarWidth', sidebarWidth.value)
+    }
     sidebarResizing.value = false
     document.removeEventListener('mousemove', resize)
   })

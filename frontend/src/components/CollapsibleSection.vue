@@ -67,19 +67,24 @@ const props = defineProps({
   headerClass: { type: [String, Object, Array], default: '' },
 })
 
+const emit = defineEmits(['update:opened'])
+
 const hide = ref(props.hideLabel)
 const opened = ref(props.opened)
 
 function toggle() {
   opened.value = !opened.value
+  emit('update:opened', opened.value)
 }
 
 function open() {
   opened.value = true
+  emit('update:opened', opened.value)
 }
 
 function close() {
   opened.value = false
+  emit('update:opened', opened.value)
 }
 </script>
 <script>
