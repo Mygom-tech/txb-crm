@@ -740,3 +740,137 @@ class TestTransitionMatrix(FrappeTestCase):
 		self.assertIn("Workshop submitted", text)
 		self.assertIn("Set VCS Call", text)
 		self.assertIn("| Admin only |", text)
+
+
+class TestLogReachNote(FrappeTestCase):
+	"""TXB-164: Log a reach is persisted as one native FCRM Note linked to the Lead.
+
+	The Notes tab is sourced exclusively from linked ``FCRM Note`` rows
+	(``crm/api/activities.py``), so the reach has to be a real Note rather than the ``Info``
+	comment the earlier TXB-157/TXB-163 delivery wrote -- that comment could never surface
+	under Notes. These pin the corrected contract: exactly one linked Note with labelled,
+	escaped content; no substitute Info comment; a rejected required field writes nothing; and
+	a status-save failure rolls the note back so nothing partial survives.
+	"""
+
+	NOTE_DOCTYPE = "FCRM Note"
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+		frappe.flags.txb_action = None
+		frappe.db.rollback()
+
+	def make_lead(self, status="New"):
+		return frappe.get_doc(
+			{"doctype": "CRM Lead", "first_name": "Reach", "status": status}
+		).insert(ignore_permissions=True)
+
+	def linked_notes(self, lead_name):
+		return frappe.db.get_all(
+			self.NOTE_DOCTYPE,
+			filters={"reference_doctype": "CRM Lead", "reference_docname": lead_name},
+			fields=["name", "title", "content"],
+		)
+
+	def info_comment_count(self, lead_name):
+		return frappe.db.count(
+			"Comment",
+			{
+				"reference_doctype": "CRM Lead",
+				"reference_name": lead_name,
+				"comment_type": "Info",
+			},
+		)
+
+	def test_a_valid_reach_creates_one_linked_note_with_labelled_escaped_content(self):
+		"""Exactly one Note, correctly referenced and titled, preserving every submitted field."""
+		from crm.txb.api.actions import CONTACTED_STATUS, log_reach
+
+		lead = self.make_lead()
+
+		result = log_reach(
+			lead.name,
+			activity={
+				"summary": "<b>Called the CEO</b>",
+				"follow_up_context": "Send the deck",
+				"follow_up_date": "2026-09-01",
+			},
+		)
+
+		notes = self.linked_notes(lead.name)
+		self.assertEqual(len(notes), 1)
+		note = notes[0]
+		self.assertEqual(note["title"], "Log a reach")
+		self.assertEqual(result["note"], note["name"])
+		self.assertEqual(result["status"], CONTACTED_STATUS)
+
+		content = note["content"]
+		# Every field is surfaced under its own explicit label.
+		self.assertIn("Reach summary", content)
+		self.assertIn("Follow-up context", content)
+		self.assertIn("Follow-up date", content)
+		# The submitted values are preserved, and user text is escaped rather than rendered.
+		self.assertIn("&lt;b&gt;Called the CEO&lt;/b&gt;", content)
+		self.assertNotIn("<b>Called the CEO", content)
+		self.assertIn("Send the deck", content)
+		self.assertIn("2026-09-01", content)
+
+		# The status moved to Contacted and no Info comment stands in for the Note.
+		self.assertEqual(frappe.db.get_value("CRM Lead", lead.name, "status"), CONTACTED_STATUS)
+		self.assertEqual(self.info_comment_count(lead.name), 0)
+
+	def test_an_absent_follow_up_date_renders_a_clear_not_set_marker(self):
+		"""The optional date is never dropped: a blank one is rendered as a not-set value."""
+		from crm.txb.api.actions import log_reach
+
+		lead = self.make_lead()
+
+		log_reach(
+			lead.name,
+			activity={"summary": "Left a voicemail", "follow_up_context": "Retry Monday"},
+		)
+
+		note = self.linked_notes(lead.name)[0]
+		self.assertIn("Follow-up date", note["content"])
+		self.assertIn("Not set", note["content"])
+
+	def test_a_blank_reach_is_rejected_and_writes_nothing(self):
+		"""A missing required field is refused before any write: no Note, no comment, no status."""
+		from crm.txb.api.actions import log_reach
+
+		lead = self.make_lead()
+
+		with self.assertRaises(frappe.MandatoryError):
+			log_reach(
+				lead.name,
+				activity={"summary": "   ", "follow_up_context": "Retry Monday"},
+			)
+
+		self.assertEqual(self.linked_notes(lead.name), [])
+		self.assertEqual(self.info_comment_count(lead.name), 0)
+		self.assertEqual(frappe.db.get_value("CRM Lead", lead.name, "status"), "New")
+
+	def test_a_status_save_failure_rolls_the_note_back(self):
+		"""If the Contacted save fails, the note insert is rolled back with it -- nothing partial."""
+		from crm.txb.api import actions
+		from crm.txb.api.actions import log_reach
+
+		lead = self.make_lead()
+
+		# Force the status write to fail after the note insert by targeting a status that does
+		# not exist, so `doc.save()` raises on the invalid CRM Lead Status link.
+		original = actions.CONTACTED_STATUS
+		actions.CONTACTED_STATUS = "Nonexistent Reach Status"
+		try:
+			with self.assertRaises(Exception):
+				log_reach(
+					lead.name,
+					activity={"summary": "Called the CEO", "follow_up_context": "Send the deck"},
+				)
+		finally:
+			actions.CONTACTED_STATUS = original
+
+		# The savepoint rolled both writes back: no note, no substitute comment, status unchanged.
+		self.assertEqual(self.linked_notes(lead.name), [])
+		self.assertEqual(self.info_comment_count(lead.name), 0)
+		self.assertEqual(frappe.db.get_value("CRM Lead", lead.name, "status"), "New")

@@ -22,6 +22,10 @@ LEAD_DOCTYPE = "CRM Lead"
 # is the only status the reach gate ever targets.
 CONTACTED_STATUS = "Contacted"
 REACH_REQUIRED_FIELDS = ("summary", "follow_up_context")
+# TXB-164: the reach Note and the Contacted status write share this savepoint so they land as
+# one unit -- a failure on either rolls both back, leaving no partial note and the status as it
+# was.
+REACH_SAVEPOINT = "txb_log_reach"
 
 # TXB-129: the status a scheduled Discovery meeting unlocks, ordered right after Contacted.
 # Date, time and type are always required; a Virtual meeting also requires a manually entered
@@ -212,15 +216,33 @@ def log_reach(lead: str, status: str | None = None, activity: str | dict | None 
 	# `finally` so a throw cannot leave it armed for the rest of the request.
 	frappe.flags.txb_action = doc.name
 	try:
-		# Timeline first, status second, one save: both share the request transaction, so a
-		# validation throw inside save() rolls the reach comment back with the status.
-		doc.add_comment("Info", reach_timeline_html(values))
-		doc.status = CONTACTED_STATUS
-		doc.save()
+		# Note first, status second, under one savepoint: the two writes commit together or
+		# not at all. The reach is stored as a native FCRM Note linked to the Lead (TXB-164) so
+		# it surfaces under the Notes tab, which is sourced exclusively from linked notes -- the
+		# retired Info comment never appeared there. A persistence failure on either write rolls
+		# the savepoint back, so a status-save throw cannot strand a partial note and the prior
+		# Lead status is left untouched.
+		frappe.db.savepoint(REACH_SAVEPOINT)
+		try:
+			note = frappe.get_doc(
+				{
+					"doctype": "FCRM Note",
+					"title": _("Log a reach"),
+					"content": reach_note_html(values),
+					"reference_doctype": LEAD_DOCTYPE,
+					"reference_docname": doc.name,
+				}
+			)
+			note.insert()
+			doc.status = CONTACTED_STATUS
+			doc.save()
+		except Exception:
+			frappe.db.rollback(save_point=REACH_SAVEPOINT)
+			raise
 	finally:
 		frappe.flags.txb_action = None
 
-	return {"lead": doc.name, "status": doc.status}
+	return {"lead": doc.name, "status": doc.status, "note": note.name}
 
 
 def validate_reach(values: dict):
@@ -242,24 +264,28 @@ def validate_reach(values: dict):
 		)
 
 
-def reach_timeline_html(values: dict) -> str:
-	"""Render the reach as a timeline entry, preserving the summary, context and follow-up.
+def reach_note_html(values: dict) -> str:
+	"""Render the reach as the body of its FCRM Note, preserving every submitted field.
 
-	An optional follow-up date is only shown when supplied; the required fields are escaped
-	so a summary is recorded as text rather than interpreted as markup.
+	The note always carries explicit Reach summary, Follow-up context and Follow-up date
+	labels so the card reads the same however it was created. The optional follow-up date is
+	shown verbatim when supplied and as a clear not-set marker when blank, rather than being
+	dropped. Every user-supplied value is escaped so a summary is recorded as text rather than
+	interpreted as markup.
 	"""
 	escape = frappe.utils.escape_html
-	rows = [
-		f"<div><b>{_('Reach logged')}</b></div>",
-		f"<div>{escape(values['summary'].strip())}</div>",
-		f"<div><i>{_('Follow-up')}:</i> {escape(values['follow_up_context'].strip())}</div>",
-	]
 	follow_up_date = values.get("follow_up_date")
 	if follow_up_date and str(follow_up_date).strip():
-		rows.append(
-			f"<div><i>{_('Follow-up date')}:</i> {escape(str(follow_up_date).strip())}</div>"
-		)
-	return "".join(rows)
+		follow_up_date_value = escape(str(follow_up_date).strip())
+	else:
+		follow_up_date_value = f"<i>{_('Not set')}</i>"
+	return "".join(
+		[
+			f"<div><b>{_('Reach summary')}:</b> {escape(values['summary'].strip())}</div>",
+			f"<div><b>{_('Follow-up context')}:</b> {escape(values['follow_up_context'].strip())}</div>",
+			f"<div><b>{_('Follow-up date')}:</b> {follow_up_date_value}</div>",
+		]
+	)
 
 
 @frappe.whitelist()
