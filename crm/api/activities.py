@@ -52,6 +52,13 @@ def get_deal_activities(name: str):
 	if lead:
 		activities, calls, notes, tasks, attachments = get_lead_activities(lead)
 		creation_text = _("converted the lead to this deal")
+		# The Lead's activities are surfaced here (and, through the Contact's linked deals, on
+		# a converted Contact) by aggregation, not by copying or reparenting: each record still
+		# references the Lead. Attribute them to that source so the timeline shows where a dial
+		# came from. The activity feed already carries is_lead; the call/note/task lists do not.
+		attribute_to_lead(calls, lead)
+		attribute_to_lead(notes, lead)
+		attribute_to_lead(tasks, lead)
 
 	activities.append(
 		{
@@ -371,6 +378,22 @@ def parse_grouped_versions(versions: list):
 	other_versions = versions[1:]
 	version["other_versions"] = other_versions
 	return version
+
+
+def attribute_to_lead(records: list, lead: str) -> list:
+	"""Tag aggregated records with their originating Lead, in place.
+
+	A converted Deal (and the Contact that reads its linked deals) shows the Lead's calls,
+	notes and tasks. They are the Lead's own records, referenced not duplicated, so mark them
+	as lead-sourced rather than making copies. Idempotent and defensive: a non-dict row (none
+	are expected) is skipped.
+	"""
+	for record in records or []:
+		if isinstance(record, dict):
+			record["is_lead"] = True
+			record["source_doctype"] = "CRM Lead"
+			record["source_docname"] = lead
+	return records
 
 
 def get_linked_calls(name: str):

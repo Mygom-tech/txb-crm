@@ -173,7 +173,12 @@ doc_events = {
 			"crm.txb.ownership.claim_owner_on_insert",
 		],
 		"before_validate": ["crm.txb.doc_events.lead.default_disqualified_reason"],
-		"validate": ["crm.txb.ownership.guard_owner_change"],
+		"validate": [
+			"crm.txb.ownership.guard_owner_change",
+			# Contact attempted is reachable only through crm.txb.lead_actions.log_a_dial;
+			# every other write to that status is refused here.
+			"crm.txb.lead_actions.guard_contact_attempted",
+		],
 	},
 	"CRM Call Log": {
 		"before_validate": ["crm.txb.doc_events.call_log.default_phone_numbers"],
