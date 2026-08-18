@@ -23,6 +23,14 @@ LEAD_DOCTYPE = "CRM Lead"
 CONTACTED_STATUS = "Contacted"
 REACH_REQUIRED_FIELDS = ("summary", "follow_up_context")
 
+# TXB-129: the status a scheduled Discovery meeting unlocks, ordered right after Contacted.
+# Date, time and type are always required; a Virtual meeting also requires a manually entered
+# link, an Onsite meeting an address. No link is generated and no calendar entry is created.
+DISCOVERY_STATUS = "Discovery meeting set"
+DISCOVERY_REQUIRED_FIELDS = ("meeting_date", "meeting_time", "meeting_type")
+DISCOVERY_TYPE_VIRTUAL = "Virtual"
+DISCOVERY_TYPE_ONSITE = "Onsite"
+
 
 @frappe.whitelist()
 def get_available_actions(deal: str) -> dict:
@@ -250,6 +258,102 @@ def reach_timeline_html(values: dict) -> str:
 	if follow_up_date and str(follow_up_date).strip():
 		rows.append(
 			f"<div><i>{_('Follow-up date')}:</i> {escape(str(follow_up_date).strip())}</div>"
+		)
+	return "".join(rows)
+
+
+@frappe.whitelist()
+def schedule_discovery(lead: str, status: str | None = None, activity: str | dict | None = None) -> dict:
+	"""Move a Lead into "Discovery meeting set" and record the meeting that justifies it, atomically.
+
+	Entering Discovery meeting set is never a bare status flip (TXB-129): the browser posts the
+	scheduling details here, and the status changes only if they are complete. Required date,
+	time and type -- plus a manual link for a Virtual meeting or an address for an Onsite one --
+	are re-checked server-side, because the browser is not a security boundary, so a direct API
+	call (or the Kanban drag) cannot slip an incomplete schedule past the dialog. The scheduling
+	activity lands on the Lead's timeline and the status is set on one in-memory document saved
+	once, so a validation failure records neither and cancelling in the browser (nothing posted)
+	leaves the status unchanged. No calendar entry, invitation, email or generated link is
+	created -- only the details the user supplied are recorded.
+
+	`status` is accepted for symmetry with the browser payload but ignored: this endpoint only
+	ever unlocks Discovery meeting set, and trusting a caller-supplied target would let it set an
+	arbitrary status without its own gate.
+	"""
+	frappe.has_permission(LEAD_DOCTYPE, "write", lead, throw=True)
+
+	values = parse_data(activity)
+	validate_discovery(values)
+
+	doc = frappe.get_doc(LEAD_DOCTYPE, lead)
+
+	# Tells `require_discovery_details` this status->Discovery write is the scheduled save rather
+	# than a bare status set. Scoped to this document's name, not just truthy, so the exemption
+	# cannot leak onto another CRM Lead saved inside the same request. Cleared in `finally` so a
+	# throw cannot leave it armed for the rest of the request.
+	frappe.flags.txb_action = doc.name
+	try:
+		# Timeline first, status second, one save: both share the request transaction, so a
+		# validation throw inside save() rolls the scheduling comment back with the status.
+		doc.add_comment("Info", discovery_timeline_html(values))
+		doc.status = DISCOVERY_STATUS
+		doc.save()
+	finally:
+		frappe.flags.txb_action = None
+
+	return {"lead": doc.name, "status": doc.status}
+
+
+def validate_discovery(values: dict):
+	"""Require date, time and type, plus the location detail for the chosen type.
+
+	Whitespace-only counts as blank (see `_is_blank`), matching what the Schedule Discovery
+	meeting dialog enforces in the browser. A Virtual meeting requires a manually entered link;
+	an Onsite meeting requires an address. An unknown/blank type fails on the base requirements
+	first, so the conditional check only ever runs for a real type.
+	"""
+	labels = {
+		"meeting_date": _("Meeting date"),
+		"meeting_time": _("Meeting time"),
+		"meeting_type": _("Meeting type"),
+		"meeting_link": _("Meeting link"),
+		"meeting_address": _("Meeting address"),
+	}
+
+	missing = [labels[field] for field in DISCOVERY_REQUIRED_FIELDS if _is_blank(values.get(field))]
+
+	meeting_type = values.get("meeting_type")
+	if meeting_type == DISCOVERY_TYPE_VIRTUAL and _is_blank(values.get("meeting_link")):
+		missing.append(labels["meeting_link"])
+	elif meeting_type == DISCOVERY_TYPE_ONSITE and _is_blank(values.get("meeting_address")):
+		missing.append(labels["meeting_address"])
+
+	if missing:
+		frappe.throw(
+			_("{0} is required.").format(", ".join(missing)),
+			frappe.MandatoryError,
+			title=_("Schedule Discovery meeting"),
+		)
+
+
+def discovery_timeline_html(values: dict) -> str:
+	"""Render the scheduled meeting as a timeline entry.
+
+	The user-supplied values are escaped so they are recorded as text rather than interpreted as
+	markup. Only the location detail matching the chosen type is shown.
+	"""
+	escape = frappe.utils.escape_html
+	rows = [
+		f"<div><b>{_('Discovery meeting scheduled')}</b></div>",
+		f"<div><i>{_('Date')}:</i> {escape(str(values.get('meeting_date', '')).strip())}"
+		f" <i>{_('Time')}:</i> {escape(str(values.get('meeting_time', '')).strip())}</div>",
+		f"<div><i>{_('Type')}:</i> {escape(str(values.get('meeting_type', '')).strip())}</div>",
+	]
+	if values.get("meeting_type") == DISCOVERY_TYPE_VIRTUAL:
+		rows.append(f"<div><i>{_('Link')}:</i> {escape(str(values.get('meeting_link', '')).strip())}</div>")
+	elif values.get("meeting_type") == DISCOVERY_TYPE_ONSITE:
+		rows.append(
+			f"<div><i>{_('Address')}:</i> {escape(str(values.get('meeting_address', '')).strip())}</div>"
 		)
 	return "".join(rows)
 
