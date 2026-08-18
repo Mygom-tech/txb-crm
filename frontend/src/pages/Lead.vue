@@ -585,6 +585,9 @@ async function enterContactedWithReach() {
   document.reload?.()
   if (result) {
     sections.reload()
+    // TXB-164: the reach is now saved as a native FCRM Note, so refresh the activities
+    // resource too -- otherwise the new card only appears under Notes after a manual reload.
+    activities.value?.all_activities?.reload()
   }
 }
 
