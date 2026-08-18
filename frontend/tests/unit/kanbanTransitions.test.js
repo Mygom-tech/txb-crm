@@ -4,15 +4,21 @@ vi.mock('@/utils/dialogs', () => ({
   createDialog: vi.fn(),
 }))
 
-// The discovery routing reuses the real requiresDiscoverySchedule gate but stubs the modal
-// side of logDiscovery so the routing decisions can be asserted without a browser dialog.
+// The guarded Lead routing reuses the real requiresReach / requiresDial /
+// requiresDiscoverySchedule gates but stubs the modal side of each log* action so the
+// routing decisions can be asserted without a browser dialog or a server round trip.
 vi.mock('@/utils/leadActions', async () => {
   const actual = await vi.importActual('@/utils/leadActions')
-  return { ...actual, logDiscovery: vi.fn() }
+  return {
+    ...actual,
+    logReach: vi.fn(),
+    logADial: vi.fn(),
+    logDiscovery: vi.fn(),
+  }
 })
 
 import { createDialog } from '@/utils/dialogs'
-import { logDiscovery } from '@/utils/leadActions'
+import { logReach, logADial, logDiscovery } from '@/utils/leadActions'
 import {
   requestKanbanTransition,
   confirmKanbanTransition,
@@ -28,8 +34,25 @@ const ctx = {
   to: 'Contacted',
 }
 
+// A genuinely unguarded Lead status move: not Contacted, not Contact attempted, not
+// Discovery meeting set, so none of the guarded actions apply and the plain confirm stays.
+const unguardedCtx = {
+  doctype: 'CRM Lead',
+  itemName: 'CRM-LEAD-01',
+  fieldname: 'status',
+  fieldLabel: 'Status',
+  from: 'Contacted',
+  to: 'Nurture',
+}
+
 function lastDialogOptions() {
   return createDialog.mock.calls.at(-1)[0]
+}
+
+function clickConfirmOk() {
+  lastDialogOptions()
+    .actions.find((a) => a.label === 'OK')
+    .onClick({ close: vi.fn() })
 }
 
 describe('confirmKanbanTransition', () => {
@@ -84,26 +107,27 @@ describe('confirmKanbanTransition', () => {
   })
 })
 
-describe('requestKanbanTransition — non-deal boards keep the confirm', () => {
+describe('requestKanbanTransition — unguarded boards keep the confirm', () => {
   beforeEach(() => {
     createDialog.mockReset()
+    logReach.mockReset()
+    logADial.mockReset()
+    logDiscovery.mockReset()
   })
 
   it('wraps the confirm result in the outcome shape', async () => {
-    const promise = requestKanbanTransition(ctx)
-    lastDialogOptions()
-      .actions.find((a) => a.label === 'OK')
-      .onClick({ close: vi.fn() })
+    const promise = requestKanbanTransition(unguardedCtx)
+    clickConfirmOk()
 
     await expect(promise).resolves.toEqual({
       proceed: true,
       alreadySaved: false,
-      finalStatus: 'Contacted',
+      finalStatus: 'Nurture',
     })
   })
 
   it('reports refusal when cancelled', async () => {
-    const promise = requestKanbanTransition(ctx)
+    const promise = requestKanbanTransition(unguardedCtx)
     lastDialogOptions()
       .actions.find((a) => a.label === 'Cancel')
       .onClick({ close: vi.fn() })
@@ -112,6 +136,127 @@ describe('requestKanbanTransition — non-deal boards keep the confirm', () => {
       proceed: false,
       alreadySaved: false,
     })
+  })
+
+  it('does not open any guarded Lead action for an unguarded move', async () => {
+    const promise = requestKanbanTransition(unguardedCtx)
+    clickConfirmOk()
+    await promise
+
+    expect(logReach).not.toHaveBeenCalled()
+    expect(logADial).not.toHaveBeenCalled()
+    expect(logDiscovery).not.toHaveBeenCalled()
+  })
+})
+
+describe('requestKanbanTransition — Lead drop into Contacted (Log a reach)', () => {
+  beforeEach(() => {
+    createDialog.mockReset()
+    logReach.mockReset()
+  })
+
+  it('opens Log a reach instead of the generic confirm', async () => {
+    logReach.mockResolvedValue({ status: 'Contacted' })
+
+    await requestKanbanTransition(ctx)
+
+    expect(logReach).toHaveBeenCalledOnce()
+    expect(logReach).toHaveBeenCalledWith('CRM-LEAD-01')
+    // No generic confirm dialog and no caller-issued status write path.
+    expect(createDialog).not.toHaveBeenCalled()
+  })
+
+  it('marks the transition already saved after log_reach succeeds', async () => {
+    // A single atomic log_reach records the reach and the status; the outcome tells the
+    // caller not to issue a second direct set_value.
+    logReach.mockResolvedValue({ status: 'Contacted' })
+
+    await expect(requestKanbanTransition(ctx)).resolves.toEqual({
+      proceed: true,
+      alreadySaved: true,
+      finalStatus: 'Contacted',
+    })
+  })
+
+  it('refuses and keeps the prior status when the reach is cancelled or dismissed', async () => {
+    logReach.mockResolvedValue(null)
+
+    await expect(requestKanbanTransition(ctx)).resolves.toEqual({
+      proceed: false,
+      alreadySaved: false,
+      finalStatus: 'Open',
+    })
+  })
+
+  it('refuses when incomplete details leave nothing posted (null result)', async () => {
+    // logReach keeps the dialog open on missing summary / follow-up context and only ever
+    // resolves null when nothing was posted; the routing must not report a save.
+    logReach.mockResolvedValue(null)
+
+    const outcome = await requestKanbanTransition(ctx)
+    expect(outcome.proceed).toBe(false)
+    expect(outcome.alreadySaved).toBe(false)
+  })
+
+  it('propagates a log_reach API failure so the caller reverts the card', async () => {
+    logReach.mockRejectedValue(new Error('log_reach failed'))
+
+    await expect(requestKanbanTransition(ctx)).rejects.toThrow('log_reach failed')
+  })
+
+  it('re-routes the legacy "Qualifying call" column through Log a reach', async () => {
+    logReach.mockResolvedValue({ status: 'Contacted' })
+    const legacy = { ...ctx, to: 'Qualifying call' }
+
+    await requestKanbanTransition(legacy)
+
+    expect(logReach).toHaveBeenCalledOnce()
+    expect(createDialog).not.toHaveBeenCalled()
+  })
+})
+
+describe('requestKanbanTransition — Lead drop into Contact attempted (Log a dial)', () => {
+  const dialCtx = { ...ctx, to: 'Contact attempted' }
+
+  beforeEach(() => {
+    createDialog.mockReset()
+    logADial.mockReset()
+  })
+
+  it('opens Log a dial instead of the generic confirm', async () => {
+    logADial.mockResolvedValue({ status: 'Contact attempted' })
+
+    await requestKanbanTransition(dialCtx)
+
+    expect(logADial).toHaveBeenCalledOnce()
+    expect(logADial).toHaveBeenCalledWith('CRM-LEAD-01')
+    expect(createDialog).not.toHaveBeenCalled()
+  })
+
+  it('marks the transition already saved after log_a_dial succeeds', async () => {
+    logADial.mockResolvedValue({ status: 'Contact attempted' })
+
+    await expect(requestKanbanTransition(dialCtx)).resolves.toEqual({
+      proceed: true,
+      alreadySaved: true,
+      finalStatus: 'Contact attempted',
+    })
+  })
+
+  it('refuses and keeps the prior status when the dial is cancelled or dismissed', async () => {
+    logADial.mockResolvedValue(null)
+
+    await expect(requestKanbanTransition(dialCtx)).resolves.toEqual({
+      proceed: false,
+      alreadySaved: false,
+      finalStatus: 'Open',
+    })
+  })
+
+  it('propagates a log_a_dial API failure so the caller reverts the card', async () => {
+    logADial.mockRejectedValue(new Error('log_a_dial failed'))
+
+    await expect(requestKanbanTransition(dialCtx)).rejects.toThrow('log_a_dial failed')
   })
 })
 
@@ -180,17 +325,15 @@ describe('requestKanbanTransition — Lead drop into Discovery meeting set', () 
     )
   })
 
-  it('does not route a non-Discovery Lead transition through the modal', async () => {
-    // Open → Contacted keeps the plain confirm; the discovery modal is not opened.
-    const promise = requestKanbanTransition(ctx)
-    lastDialogOptions()
-      .actions.find((a) => a.label === 'OK')
-      .onClick({ close: vi.fn() })
+  it('does not route an unguarded Lead transition through any guarded action', async () => {
+    // Contacted → Nurture keeps the plain confirm; no guarded action is opened.
+    const promise = requestKanbanTransition(unguardedCtx)
+    clickConfirmOk()
 
     await expect(promise).resolves.toEqual({
       proceed: true,
       alreadySaved: false,
-      finalStatus: 'Contacted',
+      finalStatus: 'Nurture',
     })
     expect(logDiscovery).not.toHaveBeenCalled()
   })
@@ -198,9 +341,7 @@ describe('requestKanbanTransition — Lead drop into Discovery meeting set', () 
   it('does not re-route a Lead already resting in Discovery meeting set', async () => {
     const stay = { ...discoveryCtx, from: 'Discovery meeting set' }
     const promise = requestKanbanTransition(stay)
-    lastDialogOptions()
-      .actions.find((a) => a.label === 'OK')
-      .onClick({ close: vi.fn() })
+    clickConfirmOk()
 
     await expect(promise).resolves.toEqual({
       proceed: true,
@@ -231,6 +372,46 @@ describe('requestKanbanTransition — Lead drop into Discovery meeting set', () 
       finalStatus: 'Contacted',
     })
     expect(logDiscovery).not.toHaveBeenCalled()
+  })
+})
+
+describe('requestKanbanTransition — Deal boards are unchanged by Lead guards', () => {
+  beforeEach(() => {
+    createDialog.mockReset()
+    logReach.mockReset()
+    logADial.mockReset()
+    logDiscovery.mockReset()
+  })
+
+  it('does not open a Lead guard for a Deal dropped into Contacted', async () => {
+    const dealCtx = {
+      doctype: 'CRM Deal',
+      itemName: 'CRM-DEAL-01',
+      fieldname: 'status',
+      fieldLabel: 'Status',
+      from: 'Open',
+      to: 'Contacted',
+      transitions: [],
+      available: [],
+      isAdmin: false,
+    }
+
+    await expect(requestKanbanTransition(dealCtx)).resolves.toEqual({
+      proceed: false,
+      alreadySaved: false,
+      finalStatus: 'Open',
+    })
+    expect(logReach).not.toHaveBeenCalled()
+    expect(logADial).not.toHaveBeenCalled()
+  })
+
+  it('does not open a Lead guard for a non-status Lead field move', async () => {
+    // A guarded status name arriving on a different field is not a status transition.
+    const promise = requestKanbanTransition({ ...ctx, fieldname: 'lead_owner' })
+    clickConfirmOk()
+
+    await promise
+    expect(logReach).not.toHaveBeenCalled()
   })
 })
 
