@@ -31,6 +31,9 @@ describe('widthKeyFor', () => {
     expect(widthKeyFor(SIDEBAR_ENTITIES.organization)).toBe(
       'crm.sidebar.organization.width',
     )
+    expect(widthKeyFor(SIDEBAR_ENTITIES.contact)).toBe(
+      'crm.sidebar.contact.width',
+    )
   })
 
   it('produces a unique key per entity', () => {
@@ -190,6 +193,94 @@ describe('entitySidebarWidth binding', () => {
     // The other entity is unaffected and uses its default.
     expect(org.load(LIMITS)).toBe(
       responsiveDefaultWidth(LIMITS.viewportWidth, LIMITS),
+    )
+  })
+})
+
+describe('Contact sidebar width persistence', () => {
+  it('namespaces the Contact width under its own key', () => {
+    expect(widthKeyFor(SIDEBAR_ENTITIES.contact)).toBe(
+      'crm.sidebar.contact.width',
+    )
+    saveEntitySidebarWidth(SIDEBAR_ENTITIES.contact, 360)
+    expect(
+      localStorage.getItem(widthKeyFor(SIDEBAR_ENTITIES.contact)),
+    ).toBe('360')
+  })
+
+  it('restores a valid saved Contact width unchanged', () => {
+    localStorage.setItem(widthKeyFor(SIDEBAR_ENTITIES.contact), '400')
+    expect(loadEntitySidebarWidth(SIDEBAR_ENTITIES.contact, LIMITS)).toBe(400)
+  })
+
+  it('falls back to the responsive default when nothing is stored', () => {
+    expect(loadEntitySidebarWidth(SIDEBAR_ENTITIES.contact, LIMITS)).toBe(420)
+    expect(
+      loadEntitySidebarWidth(SIDEBAR_ENTITIES.contact, {
+        ...LIMITS,
+        viewportWidth: 800,
+      }),
+    ).toBe(352)
+  })
+
+  it('restores the responsive default for a corrupt (invalid) saved width', () => {
+    localStorage.setItem(widthKeyFor(SIDEBAR_ENTITIES.contact), 'corrupt')
+    expect(loadEntitySidebarWidth(SIDEBAR_ENTITIES.contact, LIMITS)).toBe(420)
+  })
+
+  it('clamps an out-of-range (too small) saved width to the minimum', () => {
+    localStorage.setItem(widthKeyFor(SIDEBAR_ENTITIES.contact), '10')
+    expect(loadEntitySidebarWidth(SIDEBAR_ENTITIES.contact, LIMITS)).toBe(
+      SIDEBAR_MIN_WIDTH,
+    )
+  })
+
+  it('clamps an out-of-range (too large) saved width to the maximum', () => {
+    localStorage.setItem(widthKeyFor(SIDEBAR_ENTITIES.contact), '99999')
+    expect(loadEntitySidebarWidth(SIDEBAR_ENTITIES.contact, LIMITS)).toBe(
+      SIDEBAR_MAX_WIDTH,
+    )
+  })
+
+  it('clamps a restored Contact width to the narrower viewport', () => {
+    // 90% of a 400px viewport = 360, below the component max of 480.
+    localStorage.setItem(widthKeyFor(SIDEBAR_ENTITIES.contact), '480')
+    expect(
+      loadEntitySidebarWidth(SIDEBAR_ENTITIES.contact, {
+        ...LIMITS,
+        viewportWidth: 400,
+      }),
+    ).toBe(360)
+  })
+
+  it('keeps the Contact width isolated from other entity namespaces', () => {
+    saveEntitySidebarWidth(SIDEBAR_ENTITIES.deal, 300)
+    saveEntitySidebarWidth(SIDEBAR_ENTITIES.lead, 340)
+    saveEntitySidebarWidth(SIDEBAR_ENTITIES.organization, 380)
+    saveEntitySidebarWidth(SIDEBAR_ENTITIES.contact, 410)
+
+    expect(loadEntitySidebarWidth(SIDEBAR_ENTITIES.contact, LIMITS)).toBe(410)
+    // Saving Contact never overwrites the other namespaces.
+    expect(loadEntitySidebarWidth(SIDEBAR_ENTITIES.deal, LIMITS)).toBe(300)
+    expect(loadEntitySidebarWidth(SIDEBAR_ENTITIES.lead, LIMITS)).toBe(340)
+    expect(loadEntitySidebarWidth(SIDEBAR_ENTITIES.organization, LIMITS)).toBe(
+      380,
+    )
+  })
+
+  it('does not read another entity width when Contact has nothing saved', () => {
+    saveEntitySidebarWidth(SIDEBAR_ENTITIES.lead, 340)
+    expect(loadEntitySidebarWidth(SIDEBAR_ENTITIES.contact, LIMITS)).toBe(
+      responsiveDefaultWidth(LIMITS.viewportWidth, LIMITS),
+    )
+  })
+
+  it('exposes a load/save pair bound to the Contact namespace', () => {
+    const contact = entitySidebarWidth(SIDEBAR_ENTITIES.contact)
+    contact.save(300)
+    expect(contact.load(LIMITS)).toBe(300)
+    expect(localStorage.getItem(widthKeyFor(SIDEBAR_ENTITIES.contact))).toBe(
+      '300',
     )
   })
 })
