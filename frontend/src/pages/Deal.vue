@@ -88,7 +88,14 @@
         />
       </template>
     </Tabs>
-    <Resizer side="right" class="flex flex-col justify-between border-l">
+    <Resizer
+      side="right"
+      class="flex flex-col justify-between border-l"
+      :defaultWidth="sidebarDefaultWidth"
+      :minWidth="DEAL_SIDEBAR_MIN_WIDTH"
+      :maxWidth="DEAL_SIDEBAR_MAX_WIDTH"
+      :persistWidth="saveSidebarWidth"
+    >
       <div
         class="flex h-[45px] cursor-copy items-center border-b px-5 py-2.5 text-lg-medium text-ink-gray-9"
         @click="copyToClipboard(dealId)"
@@ -406,6 +413,12 @@ import Link from '@/components/Controls/Link.vue'
 import CollapsibleSection from '@/components/CollapsibleSection.vue'
 import SidePanelLayout from '@/components/SidePanelLayout.vue'
 import SLASection from '@/components/SLASection.vue'
+import {
+  loadSidebarWidth,
+  saveSidebarWidth,
+  DEAL_SIDEBAR_MIN_WIDTH,
+  DEAL_SIDEBAR_MAX_WIDTH,
+} from '@/utils/resizerState'
 import CustomActions from '@/components/CustomActions.vue'
 import EnrichFromWebsite from '@/components/EnrichFromWebsite.vue'
 import RequestOwnershipModal from '@/components/Modals/RequestOwnershipModal.vue'
@@ -481,6 +494,16 @@ const errorTitle = ref('')
 const errorMessage = ref('')
 const showDeleteLinkedDocModal = ref(false)
 const showRequestOwnership = ref(false)
+
+// Restore the persisted CRM Deal sidebar width, validated and clamped to the
+// resizer's own limits and the current viewport. Resolved once at setup so the
+// sidebar renders at the remembered (or responsive default) width immediately,
+// then re-saved through the resizer on drag.
+const sidebarDefaultWidth = loadSidebarWidth({
+  minWidth: DEAL_SIDEBAR_MIN_WIDTH,
+  maxWidth: DEAL_SIDEBAR_MAX_WIDTH,
+  viewportWidth: typeof window !== 'undefined' ? window.innerWidth : undefined,
+})
 
 const {
   triggerOnChange,

@@ -13,6 +13,7 @@
             :label="section.label"
             :hideLabel="!section.label"
             :opened="section.opened"
+            @update:opened="(opened) => onSectionToggle(section, opened)"
           >
             <template v-if="!preview" #actions>
               <slot name="actions" v-bind="{ section }">
@@ -462,6 +463,11 @@ import {
 import { flt } from '@/utils/numberFormat.js'
 import { timePickerAttrs } from '@/utils/timePicker'
 import {
+  loadSectionState,
+  setSectionOpened,
+  DEAL_DEFAULT_OPEN_SECTIONS,
+} from '@/utils/resizerState'
+import {
   Checkbox,
   DatePicker,
   DateTimePicker,
@@ -777,7 +783,29 @@ function parsedSection(section, editButtonAdded) {
       section.columns?.[0].fields.filter((f) => f.visible).length
   }
 
+  section.opened = resolveSectionOpened(section)
+
   return section
+}
+
+// CRM Deal sidebar sections remember their expansion per section. A saved
+// preference always wins. On first visit (no saved preference) the key sections
+// are forced open regardless of the layout's own default, while every other
+// section — and every other doctype — keeps its layout-supplied `opened`
+// untouched, so no unrelated section changes its initial state.
+function resolveSectionOpened(section) {
+  if (props.doctype !== 'CRM Deal') return section.opened
+
+  const saved = loadSectionState()[section.name]
+  if (typeof saved === 'boolean') return saved
+
+  if (DEAL_DEFAULT_OPEN_SECTIONS.includes(section.name)) return true
+  return section.opened
+}
+
+function onSectionToggle(section, opened) {
+  if (props.doctype !== 'CRM Deal' || !section?.name) return
+  setSectionOpened(section.name, opened)
 }
 
 function isFieldVisible(field, scriptHidden) {
