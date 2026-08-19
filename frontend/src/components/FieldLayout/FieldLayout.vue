@@ -29,8 +29,9 @@
 <script setup>
 import Section from '@/components/FieldLayout/Section.vue'
 import { useDocument } from '@/data/document'
+import { reconcileTabSelection, tabIdentity } from '@/utils/fieldLayoutTabs'
 import { Tabs } from 'frappe-ui'
-import { ref, computed, provide } from 'vue'
+import { ref, computed, provide, watch } from 'vue'
 
 const props = defineProps({
   tabs: { type: Array, default: () => [] },
@@ -85,6 +86,32 @@ const hasTabs = computed(() => {
     processedTabs.value.length > 1 ||
     (processedTabs.value.length == 1 && processedTabs.value[0].label)
   )
+})
+
+// Track the selected tab by identity, not just its index. processedTabs can change while the
+// component is mounted — e.g. the Opportunity Data tabs react to pipeline_type (TXB-171) — so a
+// raw tabIndex can end up pointing at a different tab or past the end (a blank panel). Reconcile
+// on every change: keep the selection when the same tab survives, otherwise fall back to the
+// first visible tab.
+const activeTabKey = ref(null)
+
+watch(
+  processedTabs,
+  (tabs) => {
+    const { index, key } = reconcileTabSelection(tabs, activeTabKey.value)
+    tabIndex.value = index
+    activeTabKey.value = key
+  },
+  { immediate: true },
+)
+
+// A user selecting a tab moves tabIndex; remember which tab that is so the reconciliation above
+// can preserve it across the next processedTabs change.
+watch(tabIndex, (index) => {
+  const tabs = processedTabs.value
+  if (index >= 0 && index < tabs.length) {
+    activeTabKey.value = tabIdentity(tabs[index])
+  }
 })
 
 provide(
