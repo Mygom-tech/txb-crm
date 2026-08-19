@@ -36,8 +36,8 @@
   </div>
   <div v-else class="pb-8">
     <FieldLayout
-      v-if="tabs.data"
-      :tabs="tabs.data"
+      v-if="visibleTabs"
+      :tabs="visibleTabs"
       :data="document.doc"
       :doctype="doctype"
     />
@@ -64,8 +64,8 @@ import LoadingIndicator from '@/components/Icons/LoadingIndicator.vue'
 import { usersStore } from '@/stores/users'
 import { useDocument } from '@/data/document'
 import { isMobileView } from '@/composables/settings'
-import { applyPipelineTabsLayout } from '@/utils/pipelineLayout'
-import { ref, watch, getCurrentInstance } from 'vue'
+import { applyPipelineTabsLayout, resolveVisibleTabs } from '@/utils/pipelineLayout'
+import { ref, watch, computed, getCurrentInstance } from 'vue'
 
 const props = defineProps({
   doctype: { type: String, required: true },
@@ -95,6 +95,17 @@ const tabs = createResource({
   // Deal, the only doctype with a pipeline_type.
   transform: (data) =>
     props.doctype === 'CRM Deal' ? applyPipelineTabsLayout(data) : data,
+})
+
+// The Data tabs actually rendered: the shared Data tab plus the current pipeline's relevant
+// sheet tab. Derived reactively from the fetched layout and the deal's pipeline_type through
+// the same semantic ownership authority the section gating uses (TXB-171), so a tab whose
+// entire content belongs to other pipelines is dropped and the list follows pipeline_type the
+// moment it changes. Scoped to CRM Deal; other doctypes keep the full tab list.
+const visibleTabs = computed(() => {
+  const layout = tabs.data
+  if (!layout || props.doctype !== 'CRM Deal') return layout
+  return resolveVisibleTabs(layout, document.doc?.pipeline_type)
 })
 
 function saveChanges() {

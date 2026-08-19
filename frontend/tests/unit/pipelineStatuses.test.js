@@ -29,12 +29,15 @@ import {
   PROGRAM_TYPE_FIELDNAME,
   SECTION_GROUPS,
   PIPELINE_OWNERSHIP,
-  PIPELINE_TAB_POLICY,
   resolveVisibleTabs,
   restrictDependsOn,
   applyPipelineVisibility,
   applyPipelineTabsLayout,
 } from '@/utils/pipelineLayout'
+import {
+  tabIdentity,
+  reconcileTabSelection,
+} from '@/utils/fieldLayoutTabs'
 import { evaluateDependsOnValue } from '@/utils/expressions'
 import {
   CREATED_QUERY_KEY,
@@ -947,28 +950,121 @@ describe('applyPipelineTabsLayout drives the same matrix on the Data tab (ac-1/a
   })
 })
 
-// TXB-170: the tab-policy extension point is declared but empty in this correction — no
-// current activity/Email/Calls tab is removed. resolveVisibleTabs is a pure no-op until the
-// policy names something, so tab-ownership changes are a matrix edit, not a renderer change.
-describe('resolveVisibleTabs (declared tab-policy extension point)', () => {
-  it('ships an empty policy and leaves current activity/Email/Calls tabs unchanged', () => {
-    expect(PIPELINE_TAB_POLICY).toEqual({})
-    const tabs = [{ label: 'Activity' }, { label: 'Emails' }, { label: 'Calls' }, { label: 'Data' }]
-    for (const pipeline of TXB135_ALL_PIPELINES) {
-      expect(resolveVisibleTabs(tabs, pipeline)).toEqual(tabs)
+// TXB-171: Data sub-tab visibility is derived from the same semantic section ownership
+// registry that gates the sections themselves — not a second tab-label list. On the exact
+// Workshop defect (CRM-DEAL-2026-00339) the BAP/Training/Delivery sheet tab headers must drop,
+// leaving only the shared Data tab and the current pipeline's one sheet tab.
+
+// A parsed Opportunity Data layout shaped like get_fields_layout output: a shared "Data" tab
+// (unclassified Contact section) plus one sheet tab per owned group, each owning its section.
+function makeOpportunityDataTabs() {
+  return [
+    {
+      name: 'data_tab',
+      label: 'Data',
+      sections: [
+        { name: 'section_shared', label: 'Contact', columns: [{ fields: [field('email', 'Email')] }] },
+      ],
+    },
+    { name: 'bap_tab', label: 'BAP Sheet', sections: [{ name: 'section_bap', label: 'BAP Sheet', columns: [{ fields: [field('custom_bap_score', 'BAP Score')] }] }] },
+    { name: 'vcs_tab', label: 'VCS Sheet', sections: [{ name: 'section_vcs', label: 'VCS Sheet', columns: [{ fields: [field('custom_vcs_score', 'VCS Score')] }] }] },
+    { name: 'training_tab', label: 'Training Sheet', sections: [{ name: 'section_training', label: 'Training Sheet', columns: [{ fields: [field('custom_training_topic', 'Topic')] }] }] },
+    { name: 'delivery_tab', label: 'Delivery Sheet', sections: [{ name: 'section_delivery', label: 'Delivery Sheet', columns: [{ fields: [field('custom_delivery_date', 'Delivery Date')] }] }] },
+  ]
+}
+
+describe('resolveVisibleTabs derives Data sub-tab visibility from section ownership (ac-1/ac-2)', () => {
+  const SHEET_TAB_OWNER = {
+    'BAP Sheet': PIPELINE_INDIVIDUAL_SESSION,
+    'VCS Sheet': PIPELINE_WORKSHOP,
+    'Training Sheet': PIPELINE_SELLING_TRAINING,
+    'Delivery Sheet': PIPELINE_DELIVERING_COACHING,
+  }
+  const labelsOf = (tabs) => tabs.map((t) => t.label)
+
+  // The exact ownership matrix, over the real multi-tab shape, for all four pipelines: the
+  // shared Data tab always survives, and exactly the owned sheet tab is kept.
+  it.each(TXB135_ALL_PIPELINES)('keeps the shared Data tab and only the owned sheet tab for %s', (pipeline) => {
+    const labels = labelsOf(resolveVisibleTabs(makeOpportunityDataTabs(), pipeline))
+    expect(labels).toContain('Data')
+    for (const [sheet, owner] of Object.entries(SHEET_TAB_OWNER)) {
+      expect(labels.includes(sheet)).toBe(owner === pipeline)
     }
+    expect(labels).toHaveLength(2)
   })
 
-  it('would filter tabs a policy names, without mutating the input', () => {
-    // Simulate a future policy locally to prove the extension point is wired (the shipped
-    // PIPELINE_TAB_POLICY stays empty).
-    const tabs = [{ label: 'Delivery' }, { label: 'Data' }]
-    const policy = { [PIPELINE_WORKSHOP]: ['Delivery'] }
-    const hidden = policy[PIPELINE_WORKSHOP].map((l) => l.toLowerCase())
-    const kept = tabs.filter((t) => !hidden.includes(t.label.toLowerCase()))
-    expect(kept).toEqual([{ label: 'Data' }])
-    // The shipped resolver with the empty policy keeps everything.
-    expect(resolveVisibleTabs(tabs, PIPELINE_WORKSHOP)).toEqual(tabs)
+  // The exact Workshop defect from CRM-DEAL-2026-00339: Data + VCS Sheet only.
+  it('reduces the Workshop deal to Data and VCS Sheet, dropping BAP/Training/Delivery', () => {
+    expect(labelsOf(resolveVisibleTabs(makeOpportunityDataTabs(), PIPELINE_WORKSHOP))).toEqual([
+      'Data',
+      'VCS Sheet',
+    ])
+  })
+
+  // Presentation-only — the resolver filters which tabs render but removes no field, section,
+  // or stored value, and never mutates the input layout.
+  it('is presentation-only — never mutates the input tabs or their sections', () => {
+    const tabs = makeOpportunityDataTabs()
+    const before = JSON.stringify(tabs)
+    resolveVisibleTabs(tabs, PIPELINE_WORKSHOP)
+    expect(JSON.stringify(tabs)).toBe(before)
+  })
+
+  // A tab whose only section cannot render (no fields) is dropped even though its label is
+  // unclassified; a shared renderable tab is kept.
+  it('drops a non-renderable tab and keeps a shared renderable one', () => {
+    const tabs = [
+      { name: 'data_tab', label: 'Data', sections: [{ name: 's', label: 'Contact', columns: [{ fields: [field('email', 'Email')] }] }] },
+      { name: 'empty_tab', label: 'Extras', sections: [{ name: 'e', label: 'Extras', columns: [{ fields: [] }] }] },
+    ]
+    expect((resolveVisibleTabs(tabs, PIPELINE_WORKSHOP)).map((t) => t.label)).toEqual(['Data'])
+  })
+
+  // A falsy pipeline (deal with no pipeline yet) or a malformed input hides nothing.
+  it('returns tabs untouched for a falsy pipeline or a non-array input', () => {
+    const tabs = makeOpportunityDataTabs()
+    expect(resolveVisibleTabs(tabs, '')).toBe(tabs)
+    expect(resolveVisibleTabs(tabs, undefined)).toBe(tabs)
+    expect(resolveVisibleTabs(undefined, PIPELINE_WORKSHOP)).toBeUndefined()
+  })
+})
+
+// TXB-171: FieldLayout stores its selection as a numeric index, but the visible tab set is
+// reactive (the Data tabs follow pipeline_type). reconcileTabSelection keeps the selection by
+// identity when the tab survives and falls back deterministically to the first tab otherwise,
+// so a hidden selected tab never leaves an invalid index or a blank panel (ac-3).
+describe('reconcileTabSelection (active-tab fallback)', () => {
+  const tabs = () => [{ name: 'data_tab', label: 'Data' }, { name: 'vcs_tab', label: 'VCS Sheet' }]
+
+  it('derives a stable identity from name, then label', () => {
+    expect(tabIdentity({ name: 'a', label: 'A' })).toBe('a')
+    expect(tabIdentity({ label: 'A' })).toBe('A')
+    expect(tabIdentity(undefined)).toBe(null)
+  })
+
+  it('preserves the selected tab by identity even when its index moves', () => {
+    // VCS Sheet was selected at index 1; after Data is dropped it is now index 0.
+    const { index, key } = reconcileTabSelection([{ name: 'vcs_tab', label: 'VCS Sheet' }], 'vcs_tab')
+    expect(index).toBe(0)
+    expect(key).toBe('vcs_tab')
+  })
+
+  it('falls back to the first tab when the selected tab disappears', () => {
+    // BAP Sheet was selected but the pipeline changed to Workshop, so it is gone.
+    const { index, key } = reconcileTabSelection(tabs(), 'bap_tab')
+    expect(index).toBe(0)
+    expect(key).toBe('data_tab')
+  })
+
+  it('keeps a still-visible selection at its current position', () => {
+    const { index, key } = reconcileTabSelection(tabs(), 'vcs_tab')
+    expect(index).toBe(1)
+    expect(key).toBe('vcs_tab')
+  })
+
+  it('returns an empty, in-range selection when there are no tabs', () => {
+    expect(reconcileTabSelection([], 'vcs_tab')).toEqual({ index: 0, key: null })
+    expect(reconcileTabSelection(undefined, 'vcs_tab')).toEqual({ index: 0, key: null })
   })
 })
 

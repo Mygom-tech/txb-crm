@@ -255,16 +255,6 @@ export const PIPELINE_OWNERSHIP = {
 }
 
 /**
- * Declared tab-policy extension point (TXB-170).
- *
- * Shape only, deliberately empty: maps a `pipeline_type` to the activity/Data tab labels it
- * should hide. Wiring exists ({@link resolveVisibleTabs}) so a future tab-ownership decision
- * is a matrix edit, but no current Deal activity, Email, or Calls tab is removed by this
- * correction — Activity Log equivalence and a tab matrix are separately approved work.
- */
-export const PIPELINE_TAB_POLICY = {}
-
-/**
  * groupId -> owning pipeline. Derived once from {@link PIPELINE_OWNERSHIP} so the ownership
  * matrix stays the single source of truth (each group has exactly one owner).
  */
@@ -415,24 +405,64 @@ export function applyPipelineVisibility(sections) {
   return sections
 }
 
+/** Whether a section can render — it holds at least one field across any of its columns. */
+function sectionRenderable(section) {
+  let renderable = false
+  forEachSectionField(section, () => {
+    renderable = true
+  })
+  return renderable
+}
+
 /**
- * Apply the declared tab-policy to a parsed tabs array. With the shipped empty
- * {@link PIPELINE_TAB_POLICY} this is a pure no-op that returns the tabs untouched, so no
- * current activity/Email/Calls tab is removed. It exists so a future tab-ownership decision
- * is expressed as policy rather than a renderer condition.
+ * Whether a section is eligible to render for `pipelineType`, resolved through the same
+ * ownership authority the gating uses ({@link sectionGroupFor} + {@link GROUP_OWNER}): a
+ * shared/unclassified section (no owning group) is eligible for every pipeline, while an
+ * owned section is eligible only on its owning pipeline.
+ */
+function sectionEligibleForPipeline(section, pipelineType) {
+  const group = sectionGroupFor(section)
+  if (!group) return true
+  return GROUP_OWNER[group.id] === pipelineType
+}
+
+/**
+ * Whether a Data layout tab stays visible for `pipelineType`. It is kept when it holds at
+ * least one renderable section eligible for the pipeline (current-pipeline-owned or
+ * shared/unclassified), and hidden only when every section it owns is pipeline-ineligible or
+ * non-renderable. A tab with an unknown/malformed shape is kept.
+ */
+function tabVisibleForPipeline(tab, pipelineType) {
+  const sections = tab?.sections
+  if (!Array.isArray(sections)) return true
+  return sections.some(
+    (section) =>
+      sectionRenderable(section) && sectionEligibleForPipeline(section, pipelineType),
+  )
+}
+
+/**
+ * Filter a parsed Data Fields tab list down to the tabs relevant to a pipeline (TXB-171).
+ *
+ * Visibility is derived from the same semantic ownership registry that gates sections, not
+ * from a separate tab-label list: a tab is kept when it contains current-pipeline-owned or
+ * shared/unclassified renderable content, and dropped when all of its content is owned by
+ * other pipelines or cannot render. This is how the Opportunity Data tabs collapse to the
+ * shared Data tab plus the current pipeline's one sheet tab.
+ *
+ * Presentation-only: it filters which tabs render but never removes a field, section, or
+ * stored value. Pure — it returns a new array and never mutates the input. When `pipelineType`
+ * is empty (e.g. a deal with no pipeline yet, or a non-Deal caller) the tabs are returned
+ * untouched so nothing is hidden unexpectedly.
  *
  * @param {Array<Object>} [tabs]         parsed tabs (`{ label|name, sections }`)
  * @param {string} [pipelineType]        the deal's `pipeline_type`
- * @returns {Array<Object>|undefined}    tabs the policy keeps visible
+ * @returns {Array<Object>|undefined}    the tabs eligible for the pipeline
  */
 export function resolveVisibleTabs(tabs, pipelineType) {
   if (!Array.isArray(tabs)) return tabs
-  const hidden = PIPELINE_TAB_POLICY[pipelineType]
-  if (!Array.isArray(hidden) || hidden.length === 0) return tabs
-  const hiddenLabels = hidden.map((l) => normalizeLabel(l))
-  return tabs.filter(
-    (tab) => !hiddenLabels.includes(normalizeLabel(tab?.label ?? tab?.name)),
-  )
+  if (!pipelineType) return tabs
+  return tabs.filter((tab) => tabVisibleForPipeline(tab, pipelineType))
 }
 
 /**
@@ -444,8 +474,9 @@ export function resolveVisibleTabs(tabs, pipelineType) {
  * `tabs -> sections -> columns -> fields` and evaluates each field's `depends_on` reactively
  * exactly like the side panel. This reuses the one pure resolver ({@link gateSectionVisibility})
  * across every tab's sections (and every column within each section, not just the first) so
- * the same ownership matrix drives both callers. Activity tab *removal* is governed
- * separately by {@link resolveVisibleTabs}; this call leaves the tab list itself untouched.
+ * the same ownership matrix drives both callers. Which tabs *render* is governed separately by
+ * {@link resolveVisibleTabs} from the same ownership authority; this call gates the sections
+ * inside each tab and leaves the tab list itself untouched.
  *
  * Presentation-only: it never deletes a field or clears a stored value; it only composes
  * visibility constraints onto `depends_on`. Mutates and returns the passed `tabs` array and
