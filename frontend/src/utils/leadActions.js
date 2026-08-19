@@ -196,9 +196,8 @@ export const DISCOVERY_STATUS_OUTCOMES = ['Nurture', 'Not interested', 'Disquali
 export const DISCOVERY_TERMINAL_OUTCOMES = ['Not interested', 'Disqualified']
 
 /**
- * The dial contract. The result is a read-only, server-fixed field: a dial that only reaches
- * Contact attempted is a "No answer" by definition, so it is never asked of the user and the
- * server re-asserts it regardless of what a client sends.
+ * The dial contract. Result is an explicit final manual-call outcome; transient provider states
+ * are excluded. Every approved result still completes the requested Contact attempted move.
  */
 export const LOG_A_DIAL = {
   name: 'log_a_dial',
@@ -216,9 +215,10 @@ export const LOG_A_DIAL = {
     {
       fieldname: 'dial_result',
       label: 'Result',
-      fieldtype: 'Data',
-      read_only: 1,
-      default: 'No answer',
+      fieldtype: 'Select',
+      reqd: 1,
+      options: 'Completed\nFailed\nBusy\nNo Answer\nCanceled',
+      default: 'No Answer',
     },
     { fieldname: 'notes', label: 'Notes', fieldtype: 'Small Text' },
     {
@@ -247,8 +247,7 @@ export function dialFields(action = LOG_A_DIAL, now) {
 }
 
 /**
- * Fieldnames the user must fill. Read-only fields carry a server-fixed value and are never
- * asked of the user, so they are excluded even when marked required.
+ * Fieldnames the user must fill. Read-only fields are excluded even when marked required.
  */
 export function requiredDialFields(action = LOG_A_DIAL) {
   return (action?.fields || [])
@@ -258,8 +257,8 @@ export function requiredDialFields(action = LOG_A_DIAL) {
 
 /**
  * Seed values for the dialog's reactive document, from each field's resolved default. The
- * fixed result is included so a submit that never touched it still carries one. Caller-supplied
- * `extra` defaults win.
+ * selected result default is included so a submit that never changes it still carries one.
+ * Caller-supplied `extra` defaults win.
  */
 export function dialDefaults(action = LOG_A_DIAL, now, extra = {}) {
   const seeded = {}
@@ -287,8 +286,8 @@ export function requiresDial(status) {
 
 /**
  * The payload posted to crm.txb.lead_actions.log_a_dial. Only the contract's own fields
- * travel, and the fixed result is re-asserted so a client that dropped the read-only field
- * cannot submit a dial without one. The server re-derives the actor and re-validates.
+ * travel. The server re-derives the actor and validates the selected result against its own
+ * final-outcome allow-list before writing anything.
  */
 export function dialPayload(values = {}, action = LOG_A_DIAL) {
   const names = (action?.fields || []).map((field) => field.fieldname)
@@ -296,7 +295,6 @@ export function dialPayload(values = {}, action = LOG_A_DIAL) {
   for (const name of names) {
     if (values[name] !== undefined) payload[name] = values[name]
   }
-  payload.dial_result = 'No answer'
   return payload
 }
 
