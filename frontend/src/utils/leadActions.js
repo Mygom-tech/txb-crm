@@ -220,7 +220,7 @@ export const LOG_A_DIAL = {
       options: 'Completed\nFailed\nBusy\nNo Answer\nCanceled',
       default: 'No Answer',
     },
-    { fieldname: 'notes', label: 'Notes', fieldtype: 'Small Text' },
+    { fieldname: 'notes', label: 'Notes', fieldtype: 'Small Text', reqd: 1 },
     {
       fieldname: 'follow_up_date',
       label: 'Follow-up Date',
