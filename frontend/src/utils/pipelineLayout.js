@@ -74,12 +74,55 @@ export function correctPipelineTypeCondition(dependsOn) {
 }
 
 /**
+ * Invoke `fn` for every field in a parsed section, across *all* of its columns.
+ *
+ * The side-panel layout only populates `columns[0]`, but the Data Fields tab layout
+ * (`get_fields_layout`) lays fields out over several columns per section. Walking every
+ * column keeps one traversal correct for both shapes instead of silently skipping the
+ * Data tab's second-and-later columns. Tolerates a missing or malformed shape.
+ *
+ * @param {Object} section  a parsed layout section
+ * @param {(field: Object) => void} fn  applied to each field object
+ */
+function forEachSectionField(section, fn) {
+  const columns = section?.columns
+  if (!Array.isArray(columns)) return
+
+  for (const column of columns) {
+    const fields = column?.fields
+    if (!Array.isArray(fields)) continue
+    for (const field of fields) {
+      if (!field || typeof field !== 'object') continue
+      fn(field)
+    }
+  }
+}
+
+/**
+ * Rewrite stale `pipeline_type` literals in a single section's `depends_on` and in every
+ * one of its fields (across all columns). Mutates the section in place.
+ */
+function correctSectionDependencies(section) {
+  if (!section || typeof section !== 'object') return
+
+  if (section.depends_on) {
+    section.depends_on = correctPipelineTypeCondition(section.depends_on)
+  }
+
+  forEachSectionField(section, (field) => {
+    if (field.depends_on) {
+      field.depends_on = correctPipelineTypeCondition(field.depends_on)
+    }
+  })
+}
+
+/**
  * Correct the pipeline conditions across a parsed side-panel layout in place.
  *
- * Walks every section and every field in its first column, rewriting stale `pipeline_type`
- * literals in their `depends_on` (and the section's own `depends_on`). Mutates and returns
- * the passed `sections` array — matching how `getParsedSections` already augments the
- * layout — and tolerates a missing or malformed shape.
+ * Walks every section and every field in each of its columns, rewriting stale
+ * `pipeline_type` literals in their `depends_on` (and the section's own `depends_on`).
+ * Mutates and returns the passed `sections` array — matching how `getParsedSections`
+ * already augments the layout — and tolerates a missing or malformed shape.
  *
  * The correction is applied here, once, as the layout is parsed; `SidePanelLayout.vue`
  * then evaluates the corrected conditions reactively, so switching `pipeline_type` or
@@ -92,21 +135,7 @@ export function applyPipelineDependencies(sections) {
   if (!Array.isArray(sections)) return sections
 
   for (const section of sections) {
-    if (!section || typeof section !== 'object') continue
-
-    if (section.depends_on) {
-      section.depends_on = correctPipelineTypeCondition(section.depends_on)
-    }
-
-    const fields = section.columns?.[0]?.fields
-    if (!Array.isArray(fields)) continue
-
-    for (const field of fields) {
-      if (!field || typeof field !== 'object') continue
-      if (field.depends_on) {
-        field.depends_on = correctPipelineTypeCondition(field.depends_on)
-      }
-    }
+    correctSectionDependencies(section)
   }
 
   return sections
@@ -209,14 +238,41 @@ export function restrictDependsOn(existing, evalBody) {
 }
 
 /**
+ * Gate a single section by the presentation matrix, across all of its columns. Mutates the
+ * section in place.
+ *
+ * A section-level rule match (by `label`) ANDs its `keepVisibleWhen` onto *every* field the
+ * section holds — this is what hides the whole section, because a section collapses only
+ * once all of its fields evaluate hidden. Otherwise a field is gated only when a rule names
+ * it directly (by `fieldname`/`label`), which is how the Program Type field is hidden while
+ * its neighbours in a shared section stay visible.
+ */
+function gateSectionVisibility(section) {
+  if (!section || typeof section !== 'object') return
+
+  const sectionRule = PIPELINE_VISIBILITY_RULES.find((rule) =>
+    ruleMatchesSection(rule, section),
+  )
+
+  forEachSectionField(section, (field) => {
+    const rule =
+      sectionRule ??
+      PIPELINE_VISIBILITY_RULES.find((r) => ruleMatchesField(r, field))
+    if (rule) {
+      field.depends_on = restrictDependsOn(field.depends_on, rule.keepVisibleWhen)
+    }
+  })
+}
+
+/**
  * Apply the pipeline presentation matrix across a parsed side-panel layout in place.
  *
  * For each section, if a {@link PIPELINE_VISIBILITY_RULES} rule matches the section (by
- * label) its `keepVisibleWhen` is ANDed onto *every* field in the section's first column —
- * this is what actually hides the section, because SidePanelLayout collapses a section only
- * once all of its fields are hidden. Otherwise each field is gated individually when a rule
- * matches it (by `fieldname`/`label`), which is how the Program Type field is hidden while
- * its neighbours in a shared section stay visible.
+ * label) its `keepVisibleWhen` is ANDed onto *every* field in the section — this is what
+ * actually hides the section, because a section collapses only once all of its fields are
+ * hidden. Otherwise each field is gated individually when a rule matches it (by
+ * `fieldname`/`label`), which is how the Program Type field is hidden while its neighbours
+ * in a shared section stay visible.
  *
  * Visibility only — no field is removed and no value is cleared. Mutates and returns the
  * passed array (matching {@link applyPipelineDependencies}) and tolerates a missing or
@@ -229,30 +285,44 @@ export function applyPipelineVisibility(sections) {
   if (!Array.isArray(sections)) return sections
 
   for (const section of sections) {
-    if (!section || typeof section !== 'object') continue
-
-    const fields = section.columns?.[0]?.fields
-    if (!Array.isArray(fields)) continue
-
-    // A section-level match hides the whole section, so it gates every field within;
-    // otherwise a field is gated only when a rule names it directly.
-    const sectionRule = PIPELINE_VISIBILITY_RULES.find((rule) =>
-      ruleMatchesSection(rule, section),
-    )
-
-    for (const field of fields) {
-      if (!field || typeof field !== 'object') continue
-      const rule =
-        sectionRule ??
-        PIPELINE_VISIBILITY_RULES.find((r) => ruleMatchesField(r, field))
-      if (rule) {
-        field.depends_on = restrictDependsOn(
-          field.depends_on,
-          rule.keepVisibleWhen,
-        )
-      }
-    }
+    gateSectionVisibility(section)
   }
 
   return sections
+}
+
+/**
+ * Apply the same pipeline authority — stale-literal correction *and* the TXB-135
+ * presentation matrix — to a Data Fields tab layout in place.
+ *
+ * The Opportunity Data tab (`Activities/DataFields.vue`) loads its own `Data Fields` layout
+ * from `get_fields_layout` and hands it straight to `FieldLayout`, which renders the shape
+ * `tabs -> sections -> columns -> fields` and evaluates each field's `depends_on` reactively
+ * exactly like the side panel. PR #31 gated only Deal.vue's side-panel sections, so a
+ * Workshop deal still rendered Sessions and Individual Session Details on the Data tab.
+ * This walks every tab's sections (and every column within each section, not just the
+ * first) so the one shared matrix drives both callers.
+ *
+ * Presentation-only: it never deletes a field or clears a stored value; it only composes
+ * visibility constraints onto `depends_on`. Mutates and returns the passed `tabs` array and
+ * tolerates a missing or malformed shape.
+ *
+ * @param {Array<Object>} [tabs]  the parsed Data Fields tabs
+ * @returns {Array<Object>|undefined}  the same array, corrected and gated by pipeline
+ */
+export function applyPipelineTabsLayout(tabs) {
+  if (!Array.isArray(tabs)) return tabs
+
+  for (const tab of tabs) {
+    if (!tab || typeof tab !== 'object') continue
+    const sections = tab.sections
+    if (!Array.isArray(sections)) continue
+
+    for (const section of sections) {
+      correctSectionDependencies(section)
+      gateSectionVisibility(section)
+    }
+  }
+
+  return tabs
 }
