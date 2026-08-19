@@ -40,3 +40,4 @@ crm.patches.v1_0.disable_owner_form_scripts
 crm.patches.v1_0.backfill_record_owners
 crm.patches.v1_0.disable_fix_time_picker_scripts
 crm.patches.v1_0.migrate_qualifying_call_to_contacted
+crm.patches.v1_0.seed_discovery_meeting_run_status

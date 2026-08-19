@@ -36,6 +36,7 @@ from crm.txb.constants import (
 	DISCOVERY_STATUS_OUTCOMES,
 	DISCOVERY_TERMINAL_OUTCOMES,
 	LEAD_STATUS_CONTACT_ATTEMPTED,
+	LEAD_STATUS_DISCOVERY_MEETING_RUN,
 	LEAD_STATUS_DISCOVERY_MEETING_SET,
 )
 from crm.txb.permissions import is_admin
@@ -396,6 +397,32 @@ def guard_discovery_outcome(doc, method=None):
 	frappe.throw(
 		_("Only an Admin can reopen a lead that is {0}.").format(_(old_status)),
 		title=_("Reopen Not Permitted"),
+	)
+
+
+def guard_discovery_meeting_run(doc, method=None):
+	"""Refuse any write that would strand a lead in Discovery meeting run.
+
+	Bound to CRM Lead `validate`. Discovery meeting run is the guarded trigger status that
+	exposes Run Discovery Meeting across every status surface -- it is never a durable resting
+	state. The browser routes a move into it through `run_discovery_meeting` (which lands the
+	lead on an outcome status or a converted Opportunity, never on this status), but the browser
+	is not a security boundary: a Kanban drag, the mobile status control, a bulk edit or a raw
+	API write could otherwise persist the bare status. Because no legitimate action ever rests a
+	lead here, this guard has no exemption flag -- every insert or transition into the status is
+	refused, so a lead can never be left stranded in the trigger state.
+	"""
+	if doc.get("status") != LEAD_STATUS_DISCOVERY_MEETING_RUN:
+		return
+	if not doc.is_new() and not doc.has_value_changed("status"):
+		return
+
+	frappe.throw(
+		_(
+			"Discovery meeting run is not a resting status. Use Run Discovery Meeting to record "
+			"the meeting notes and apply an outcome."
+		),
+		title=_("Run Discovery Meeting"),
 	)
 
 

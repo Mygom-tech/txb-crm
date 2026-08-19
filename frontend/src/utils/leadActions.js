@@ -186,6 +186,15 @@ export const CONTACT_ATTEMPTED_STATUS = 'Contact attempted'
 export const DISCOVERY_MEETING_SET_STATUS = 'Discovery meeting set'
 
 /**
+ * The guarded trigger status that exposes Run Discovery Meeting on every status surface. It is
+ * ordered immediately after Discovery meeting set but is never a durable resting state: selecting
+ * it routes through {@link runDiscoveryMeeting}, which applies one of six outcomes and moves the
+ * lead on in the same server transaction. Mirrors the server's LEAD_STATUS_DISCOVERY_MEETING_RUN
+ * (crm/txb/constants.py); crm.txb.lead_actions.guard_discovery_meeting_run refuses any bare write.
+ */
+export const DISCOVERY_MEETING_RUN_STATUS = 'Discovery meeting run'
+
+/**
  * The three discovery outcomes that keep the lead a lead, each a resting Lead status.
  * "Not interested" and "Disqualified" are terminal -- Admin-reopenable only, enforced by the
  * server; "Nurture" is a warm resting state that stays freely movable.
@@ -401,6 +410,20 @@ export function requiresDiscovery(status) {
 }
 
 /**
+ * Does moving from `fromStatus` to `toStatus` trigger Run Discovery Meeting? Entering the
+ * Discovery meeting run trigger status is guarded only from the booked-meeting state, so a status
+ * control, Kanban drop or mobile move into it opens the six-outcome modal instead of persisting a
+ * bare status the backend guard rejects. A caller whose in-memory status was already mutated
+ * optimistically passes `fromStatus` as undefined; the target-only gate still fires so it too
+ * routes through the modal rather than writing the trigger status.
+ */
+export function requiresDiscoveryRun(fromStatus, toStatus) {
+  if (normalizeStatus(toStatus) !== DISCOVERY_MEETING_RUN_STATUS) return false
+  const from = normalizeStatus(fromStatus)
+  return from === undefined || from === DISCOVERY_MEETING_SET_STATUS
+}
+
+/**
  * Whether a submission is complete: non-empty notes and exactly one of the six approved
  * outcomes. A blank outcome or one outside the set is rejected, as is missing notes.
  */
@@ -506,25 +529,27 @@ export const LEAD_TRANSITION_FAILED = 'failed'
 export const LEAD_TRANSITION_PLAIN = 'plain-save'
 
 /**
- * Whether moving from `fromStatus` to `toStatus` is one of the three guarded Lead transitions:
- * entering Contacted (Log a reach), Contact attempted (Log a dial) or Discovery meeting set
- * (Schedule Discovery meeting). A caller whose in-memory status has already been mutated
- * optimistically (the side-panel / Details controls) passes `fromStatus` as undefined; the
- * target-only gates -- the dial, and entering Contacted or Discovery from anywhere -- still fire.
+ * Whether moving from `fromStatus` to `toStatus` is one of the four guarded Lead transitions:
+ * entering Contacted (Log a reach), Contact attempted (Log a dial), Discovery meeting set
+ * (Schedule Discovery meeting) or Discovery meeting run (Run Discovery Meeting). A caller whose
+ * in-memory status has already been mutated optimistically (the side-panel / Details controls)
+ * passes `fromStatus` as undefined; the target-only gates -- the dial, and entering Contacted,
+ * Discovery or the meeting-run trigger from anywhere -- still fire.
  */
 export function isGuardedLeadTransition(fromStatus, toStatus) {
   return (
     requiresReach(fromStatus, toStatus) ||
     requiresDial(toStatus) ||
-    requiresDiscoverySchedule(fromStatus, toStatus)
+    requiresDiscoverySchedule(fromStatus, toStatus) ||
+    requiresDiscoveryRun(fromStatus, toStatus)
   )
 }
 
 /**
  * The single authority every existing-Lead status caller delegates to before persistence.
  *
- * It picks the guarded action the transition requires -- Log a reach, Log a dial or Schedule
- * Discovery meeting -- runs it, and classifies the result into one of the four
+ * It picks the guarded action the transition requires -- Log a reach, Log a dial, Schedule
+ * Discovery meeting or Run Discovery Meeting -- runs it, and classifies the result into one of the four
  * {@link LEAD_TRANSITION_SAVED}/CANCELLED/FAILED/PLAIN outcomes. The guarded action stays the
  * sole owner of the atomic activity-plus-status write; this function never writes a status
  * itself, so a cancelled or failed action leaves the Lead exactly where it was.
@@ -549,7 +574,7 @@ export async function resolveLeadStatusTransition(
   lead,
   { actor, now, defaults, actions } = {},
 ) {
-  const run = { logReach, logADial, logDiscovery, ...(actions || {}) }
+  const run = { logReach, logADial, logDiscovery, runDiscoveryMeeting, ...(actions || {}) }
 
   let invoke = null
   if (requiresReach(fromStatus, toStatus)) {
@@ -558,6 +583,10 @@ export async function resolveLeadStatusTransition(
     invoke = () => run.logADial(lead, { now, defaults })
   } else if (requiresDiscoverySchedule(fromStatus, toStatus)) {
     invoke = () => run.logDiscovery(lead, { actor, now })
+  } else if (requiresDiscoveryRun(fromStatus, toStatus)) {
+    // Entering the Discovery meeting run trigger opens the six-outcome modal; the server applies
+    // the chosen outcome atomically, so the lead never rests on the trigger status itself.
+    invoke = () => run.runDiscoveryMeeting(lead, { defaults })
   }
 
   // Unguarded: the caller owns the ordinary status save (including the Lost-reason path).
