@@ -166,6 +166,21 @@ REGISTRATION_BASE_URL = "https://crm.txbconsulting.com"
 FIELD_DELIVERY_COACH = "custom_delivery_coach"
 FIELD_DELIVERY_COACH_NAME = "custom_delivery_coach_name"
 
+# TXB-126 handover links tying a Won sales Opportunity to the single aggregate Delivering
+# Coaching delivery Opportunity it hands over to. Dedicated and app-managed so the handover
+# is bidirectionally discoverable, deliberately NOT reusing `custom_source_deal`: Workshop QR
+# registration writes that field on its separate zero-to-many attendee candidates, so sharing
+# it would blur the two flows and defeat a uniqueness rule.
+#
+# FIELD_SALES_SOURCE_DEAL lives on the delivery deal and points back to its sales source. It
+# is the collision-free discriminator: database-unique (see the handover fields patch), so at
+# most one aggregate delivery deal can ever reference a given source, and that constraint is
+# what recovers a duplicate-key race in create_coaching_deal.
+# FIELD_DELIVERY_DEAL lives on the source deal and points forward to the delivery deal, so a
+# user can navigate source -> delivery as well as delivery -> source.
+FIELD_SALES_SOURCE_DEAL = "custom_sales_source_deal"
+FIELD_DELIVERY_DEAL = "custom_delivery_deal"
+
 # The field carrying commission-bearing ownership, per doctype.
 #
 # Single source of truth: `crm.permissions.org_hierarchy` scopes record visibility by the
