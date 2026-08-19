@@ -31,6 +31,9 @@ export const CONTACTED_STATUS = 'Contacted'
  * column or a cached filter still resolves to the reach gate. */
 export const LEGACY_CONTACTED_STATUS = 'Qualifying call'
 
+/** Exact display value currently emitted by the staging Kanban column. */
+const CONTACT_ATTEMPTED_DISPLAY_STATUS = 'Contact Attempted'
+
 /**
  * Does moving from `fromStatus` to `toStatus` require a Log a reach?
  *
@@ -45,9 +48,13 @@ export function requiresReach(fromStatus, toStatus) {
   return normalizeStatus(fromStatus) !== CONTACTED_STATUS
 }
 
-/** Fold the retired status name onto its canonical replacement. */
+/** Fold legacy and display-capitalized status names onto their canonical values. */
 export function normalizeStatus(status) {
-  return status === LEGACY_CONTACTED_STATUS ? CONTACTED_STATUS : status
+  if (status === LEGACY_CONTACTED_STATUS) return CONTACTED_STATUS
+  if (status === CONTACT_ATTEMPTED_DISPLAY_STATUS) {
+    return CONTACT_ATTEMPTED_STATUS
+  }
+  return status
 }
 
 /** Fields the Log a reach dialog renders. Required flags mirror the server contract. */
@@ -275,7 +282,7 @@ export function canLogDial(values = {}, action = LOG_A_DIAL) {
  * Kanban board call this to decide whether to open Log a dial instead of writing the status.
  */
 export function requiresDial(status) {
-  return status === CONTACT_ATTEMPTED_STATUS
+  return normalizeStatus(status) === CONTACT_ATTEMPTED_STATUS
 }
 
 /**

@@ -19,6 +19,7 @@ describe('requiresDial — the Contact attempted gate', () => {
   it('guards a move into Contact attempted', () => {
     expect(requiresDial(CONTACT_ATTEMPTED_STATUS)).toBe(true)
     expect(requiresDial('Contact attempted')).toBe(true)
+    expect(requiresDial('Contact Attempted')).toBe(true)
   })
 
   it('leaves every other status unguarded', () => {
@@ -26,6 +27,8 @@ describe('requiresDial — the Contact attempted gate', () => {
     expect(requiresDial('Contacted')).toBe(false)
     expect(requiresDial('Nurture')).toBe(false)
     expect(requiresDial('Lost')).toBe(false)
+    expect(requiresDial('CONTACT ATTEMPTED')).toBe(false)
+    expect(requiresDial(' Contact attempted ')).toBe(false)
     expect(requiresDial(undefined)).toBe(false)
   })
 })

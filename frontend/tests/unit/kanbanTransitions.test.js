@@ -235,6 +235,15 @@ describe('requestKanbanTransition — Lead drop into Contact attempted (Log a di
     expect(createDialog).not.toHaveBeenCalled()
   })
 
+  it('opens Log a dial for the capitalized Contact Attempted staging column', async () => {
+    logADial.mockResolvedValue({ status: 'Contact attempted' })
+
+    await requestKanbanTransition({ ...dialCtx, to: 'Contact Attempted' })
+
+    expect(logADial).toHaveBeenCalledOnce()
+    expect(createDialog).not.toHaveBeenCalled()
+  })
+
   it('marks the transition already saved after log_a_dial succeeds', async () => {
     logADial.mockResolvedValue({ status: 'Contact attempted' })
 
