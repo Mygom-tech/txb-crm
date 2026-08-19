@@ -64,6 +64,7 @@ import LoadingIndicator from '@/components/Icons/LoadingIndicator.vue'
 import { usersStore } from '@/stores/users'
 import { useDocument } from '@/data/document'
 import { isMobileView } from '@/composables/settings'
+import { applyPipelineTabsLayout } from '@/utils/pipelineLayout'
 import { ref, watch, getCurrentInstance } from 'vue'
 
 const props = defineProps({
@@ -87,6 +88,13 @@ const tabs = createResource({
   cache: ['DataFields', props.doctype],
   params: { doctype: props.doctype, type: 'Data Fields' },
   auto: true,
+  // The Opportunity Data tab renders this fetched layout directly through FieldLayout, so
+  // apply the shared pipeline visibility authority (TXB-135) here before it renders — the
+  // same matrix Deal.vue applies to the side panel. Presentation-only: it composes
+  // visibility onto depends_on and never clears a stored Opportunity value. Scoped to CRM
+  // Deal, the only doctype with a pipeline_type.
+  transform: (data) =>
+    props.doctype === 'CRM Deal' ? applyPipelineTabsLayout(data) : data,
 })
 
 function saveChanges() {

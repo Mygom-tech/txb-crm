@@ -30,6 +30,7 @@ import {
   PIPELINE_VISIBILITY_RULES,
   restrictDependsOn,
   applyPipelineVisibility,
+  applyPipelineTabsLayout,
 } from '@/utils/pipelineLayout'
 import { evaluateDependsOnValue } from '@/utils/expressions'
 import {
@@ -722,6 +723,184 @@ describe('applyPipelineVisibility', () => {
     // The section rule gates the inner field, which is what collapses the section.
     expect(sectionVisibleFor(section, PIPELINE_WORKSHOP)).toBe(false)
     expect(sectionVisibleFor(section, PIPELINE_DELIVERING_COACHING)).toBe(true)
+  })
+})
+
+// TXB-169: the Opportunity Data tab (Activities/DataFields.vue) loads its own `Data Fields`
+// layout and hands it straight to FieldLayout, which renders tabs -> sections -> columns ->
+// fields and evaluates each field's depends_on reactively (the same evaluator the side panel
+// uses). PR #31 gated only Deal.vue's side-panel sections and only their first column, so a
+// Workshop deal (e.g. CRM-DEAL-2026-00422) still rendered Sessions and Individual Session
+// Details on the Data tab. applyPipelineTabsLayout drives the same shared matrix over the
+// real tab/section/all-column shape. These tests would fail against PR #31's implementation.
+
+// A parsed Data Fields tab layout shaped like get_fields_layout output. Deliberately places
+// the gated fields in a *second* column (columns[1]) — the exact case PR #31's columns[0]-only
+// traversal skipped.
+function makeDataFieldsTabs() {
+  return [
+    {
+      name: 'data_tab',
+      label: 'Data',
+      sections: [
+        {
+          name: 'individual_session_details_section',
+          label: 'Individual Session Details',
+          columns: [
+            { fields: [{ fieldname: 'custom_session_notes' }] },
+            { fields: [{ fieldname: 'custom_session_owner' }] },
+          ],
+        },
+        {
+          name: 'sessions_section',
+          label: 'Sessions',
+          columns: [{ fields: [{ fieldname: 'custom_sessions' }] }],
+        },
+        {
+          name: 'program_section',
+          label: 'Program',
+          columns: [
+            { fields: [{ fieldname: 'deal_value' }] },
+            { fields: [{ fieldname: PROGRAM_TYPE_FIELDNAME, label: 'Program Type' }] },
+          ],
+        },
+        {
+          name: 'contacts_section',
+          label: 'Contacts',
+          columns: [{ fields: [{ fieldname: 'organization' }] }],
+        },
+      ],
+    },
+  ]
+}
+
+// FieldLayout renders every column of a section; a field disappears when its depends_on
+// evaluates false, and a section collapses once none of its fields (in any column) remain
+// visible. This mirrors that: a section is visible when any field across all columns is.
+function tabSectionVisibleFor(section, pipeline) {
+  if (section.name === 'contacts_section') return true
+  const columns = section.columns || []
+  return columns.some((column) =>
+    (column.fields || []).some((field) => isVisibleFor(field.depends_on, pipeline)),
+  )
+}
+
+function tabSectionByLabel(tabs, label) {
+  for (const tab of tabs) {
+    const section = (tab.sections || []).find((s) => s.label === label)
+    if (section) return section
+  }
+  return undefined
+}
+
+function tabFieldByName(tabs, fieldname) {
+  for (const tab of tabs) {
+    for (const section of tab.sections || []) {
+      for (const column of section.columns || []) {
+        const field = (column.fields || []).find((f) => f.fieldname === fieldname)
+        if (field) return field
+      }
+    }
+  }
+  return undefined
+}
+
+describe('applyPipelineTabsLayout (TXB-169 Data tab caller regression)', () => {
+  it('mutates and returns the same tabs array; tolerates malformed input', () => {
+    const tabs = makeDataFieldsTabs()
+    expect(applyPipelineTabsLayout(tabs)).toBe(tabs)
+    expect(applyPipelineTabsLayout(undefined)).toBeUndefined()
+    expect(applyPipelineTabsLayout([])).toEqual([])
+    expect(applyPipelineTabsLayout([null])).toEqual([null])
+    expect(applyPipelineTabsLayout([{ name: 't' }])).toEqual([{ name: 't' }])
+  })
+
+  // The regression PR #31 could not have passed: on the untouched Data Fields layout the
+  // gated fields carry no depends_on, so a Workshop deal renders them. Only after the Data
+  // tab caller runs the shared matrix do they hide.
+  it('a Workshop Data tab renders Sessions/Individual Session Details/Program Type until the matrix is applied', () => {
+    const before = makeDataFieldsTabs()
+    expect(tabSectionVisibleFor(tabSectionByLabel(before, 'Individual Session Details'), PIPELINE_WORKSHOP)).toBe(true)
+    expect(tabSectionVisibleFor(tabSectionByLabel(before, 'Sessions'), PIPELINE_WORKSHOP)).toBe(true)
+    expect(isVisibleFor(tabFieldByName(before, PROGRAM_TYPE_FIELDNAME).depends_on, PIPELINE_WORKSHOP)).toBe(true)
+  })
+
+  // ─── AC-1: for the reported CRM-DEAL-2026-00422 Workshop deal, the Data tab hides
+  //          Sessions, Individual Session Details, and Program Type. ───
+  it('hides Sessions, Individual Session Details and Program Type on a Workshop Data tab', () => {
+    const tabs = applyPipelineTabsLayout(makeDataFieldsTabs())
+    const isd = tabSectionByLabel(tabs, 'Individual Session Details')
+    const sessions = tabSectionByLabel(tabs, 'Sessions')
+
+    // The Individual Session Details field lives in columns[1]; a columns[0]-only walk (PR
+    // #31) would have left it ungated and the section visible on Workshop.
+    expect(isd.columns[1].fields[0].fieldname).toBe('custom_session_owner')
+    expect(isVisibleFor(isd.columns[1].fields[0].depends_on, PIPELINE_WORKSHOP)).toBe(false)
+
+    expect(tabSectionVisibleFor(isd, PIPELINE_WORKSHOP)).toBe(false)
+    expect(tabSectionVisibleFor(sessions, PIPELINE_WORKSHOP)).toBe(false)
+    expect(isVisibleFor(tabFieldByName(tabs, PROGRAM_TYPE_FIELDNAME).depends_on, PIPELINE_WORKSHOP)).toBe(false)
+  })
+
+  // ─── AC-2: Program Type hides on Individual Session & Selling Training, stays on
+  //          Delivering Coaching (TXB-103); unrelated fields/sections untouched. ───
+  it('gates Program Type per pipeline and leaves unrelated fields intact', () => {
+    const tabs = applyPipelineTabsLayout(makeDataFieldsTabs())
+    const programType = tabFieldByName(tabs, PROGRAM_TYPE_FIELDNAME)
+    expect(isVisibleFor(programType.depends_on, PIPELINE_INDIVIDUAL_SESSION)).toBe(false)
+    expect(isVisibleFor(programType.depends_on, PIPELINE_SELLING_TRAINING)).toBe(false)
+    expect(isVisibleFor(programType.depends_on, PIPELINE_DELIVERING_COACHING)).toBe(true)
+
+    // Sessions / Individual Session Details remain visible on every non-Workshop pipeline.
+    for (const pipeline of TXB135_ALL_PIPELINES.filter((p) => p !== PIPELINE_WORKSHOP)) {
+      expect(tabSectionVisibleFor(tabSectionByLabel(tabs, 'Sessions'), pipeline)).toBe(true)
+      expect(tabSectionVisibleFor(tabSectionByLabel(tabs, 'Individual Session Details'), pipeline)).toBe(true)
+    }
+
+    // deal_value shares the Program section but is not named by the matrix — untouched.
+    const dealValue = tabFieldByName(tabs, 'deal_value')
+    expect(dealValue.depends_on).toBeUndefined()
+    expect(tabFieldByName(tabs, 'organization').depends_on).toBeUndefined()
+  })
+
+  // ─── AC-3: presentation-only — no field or stored value is removed. ───
+  it('never deletes a field, only gates visibility', () => {
+    const tabs = applyPipelineTabsLayout(makeDataFieldsTabs())
+    expect(tabFieldByName(tabs, PROGRAM_TYPE_FIELDNAME)).toBeDefined()
+    expect(tabFieldByName(tabs, 'custom_session_owner')).toBeDefined()
+    expect(tabFieldByName(tabs, 'custom_sessions')).toBeDefined()
+    const program = tabSectionByLabel(tabs, 'Program')
+    expect(program.columns).toHaveLength(2)
+    expect(program.columns[1].fields).toHaveLength(1)
+  })
+
+  // Composes onto an existing depends_on rather than replacing it (TXB-148 correction and any
+  // native condition survive), proven through the same evaluator FieldLayout uses.
+  it('preserves an existing depends_on by composing the pipeline constraint onto it', () => {
+    const tabs = applyPipelineTabsLayout([
+      {
+        name: 'data_tab',
+        sections: [
+          {
+            name: 'sessions_section',
+            label: 'Sessions',
+            columns: [
+              {
+                fields: [
+                  { fieldname: 'custom_sessions', depends_on: 'eval:doc.status != "Lost"' },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ])
+    const field = tabFieldByName(tabs, 'custom_sessions')
+    // Non-Workshop + not Lost -> visible; the native condition still applies.
+    expect(evaluateDependsOnValue(field.depends_on, { pipeline_type: PIPELINE_INDIVIDUAL_SESSION, status: 'Open' })).toBeTruthy()
+    expect(evaluateDependsOnValue(field.depends_on, { pipeline_type: PIPELINE_INDIVIDUAL_SESSION, status: 'Lost' })).toBeFalsy()
+    // Workshop -> hidden regardless of status.
+    expect(evaluateDependsOnValue(field.depends_on, { pipeline_type: PIPELINE_WORKSHOP, status: 'Open' })).toBeFalsy()
   })
 })
 
