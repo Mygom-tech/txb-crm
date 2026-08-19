@@ -27,7 +27,10 @@ import {
   correctPipelineTypeCondition,
   applyPipelineDependencies,
   PROGRAM_TYPE_FIELDNAME,
-  PIPELINE_VISIBILITY_RULES,
+  SECTION_GROUPS,
+  PIPELINE_OWNERSHIP,
+  PIPELINE_TAB_POLICY,
+  resolveVisibleTabs,
   restrictDependsOn,
   applyPipelineVisibility,
   applyPipelineTabsLayout,
@@ -462,11 +465,14 @@ describe('applyPipelineDependencies', () => {
   })
 })
 
-// TXB-135: the pipeline presentation matrix. Each Opportunity pipeline shows only the
-// approved fields/sections; hiding tightens depends_on (applyPipelineVisibility, applied in
-// Deal.vue getParsedSections after the TXB-148 correction) so SidePanelLayout re-evaluates
-// it reactively and never deletes a stored value. Verified end-to-end through
-// evaluateDependsOnValue — the same evaluator SidePanelLayout uses.
+// TXB-135 / TXB-170: the pipeline presentation matrix. Each Opportunity pipeline shows only
+// the semantic groups it *owns*; every other pipeline hides them, and shared/unclassified
+// sections stay visible. Hiding only tightens depends_on (applyPipelineVisibility for the
+// side panel, applyPipelineTabsLayout for the Data tab) so the reactive evaluator that
+// SidePanelLayout / FieldLayout use recomputes visibility and never deletes a stored value.
+// Ownership lives in a registry (SECTION_GROUPS) plus a matrix (PIPELINE_OWNERSHIP), so a
+// future change is a data edit here rather than a renderer condition. Verified end-to-end
+// through evaluateDependsOnValue — the same evaluator both renderers use.
 const TXB135_ALL_PIPELINES = [
   PIPELINE_INDIVIDUAL_SESSION,
   PIPELINE_WORKSHOP,
@@ -474,38 +480,45 @@ const TXB135_ALL_PIPELINES = [
   PIPELINE_DELIVERING_COACHING,
 ]
 
-// A parsed side-panel layout shaped like get_sidepanel_sections output: sections with a
-// `label`/`name` and a first column of `fields`. Program Type sits as a field so we can
-// assert its per-pipeline visibility.
+// The pipeline each owned group must appear on. Declared here independently of the module's
+// own derivation so the assertion is a genuine cross-check of the matrix, not a tautology.
+const OWNER_OF_GROUP = {
+  [SECTION_GROUPS.SESSIONS.id]: PIPELINE_INDIVIDUAL_SESSION,
+  [SECTION_GROUPS.INDIVIDUAL_SESSION_DETAILS.id]: PIPELINE_INDIVIDUAL_SESSION,
+  [SECTION_GROUPS.BAP_SHEET.id]: PIPELINE_INDIVIDUAL_SESSION,
+  [SECTION_GROUPS.VCS_SHEET.id]: PIPELINE_WORKSHOP,
+  [SECTION_GROUPS.TRAINING_SHEET.id]: PIPELINE_SELLING_TRAINING,
+  [SECTION_GROUPS.DELIVERY_SHEET.id]: PIPELINE_DELIVERING_COACHING,
+  [SECTION_GROUPS.PROGRAM_TYPE.id]: PIPELINE_DELIVERING_COACHING,
+}
+
+const field = (fieldname, label, depends_on) => ({ fieldname, label, depends_on })
+
+// A parsed side-panel layout shaped like get_sidepanel_sections output. Each section carries
+// a human `label` but is stored under a random `section_<id>` name (mirroring site data, so
+// the runtime name is never used to classify). One section per owned group, plus a shared
+// "Details" section that also holds the field-scoped Program Type field beside a neighbour.
+// BAP carries a native depends_on so we can prove the matrix ANDs onto it, never replaces it.
 function makeDealLayout() {
   return [
+    { name: 'section_a1', label: 'Sessions', columns: [{ fields: [field('custom_sessions', 'Sessions')] }] },
+    { name: 'section_b2', label: 'Individual Session Details', columns: [{ fields: [field('custom_session_owner', 'Owner')] }] },
+    { name: 'section_c3', label: 'BAP Sheet', columns: [{ fields: [field('custom_bap_score', 'BAP Score', 'eval:doc.bap_ready')] }] },
+    { name: 'section_d4', label: 'VCS Sheet', columns: [{ fields: [field('custom_vcs_score', 'VCS Score')] }] },
+    { name: 'section_e5', label: 'Training Sheet', columns: [{ fields: [field('custom_training_topic', 'Topic')] }] },
+    { name: 'section_f6', label: 'Delivery Sheet', columns: [{ fields: [field('custom_delivery_date', 'Delivery Date')] }] },
     {
-      name: 'individual_session_details_section',
-      label: 'Individual Session Details',
-      columns: [{ fields: [{ fieldname: 'custom_session_owner' }] }],
-    },
-    {
-      name: 'sessions_section',
-      label: 'Sessions',
-      columns: [{ fields: [{ fieldname: 'custom_sessions' }] }],
-    },
-    {
-      name: 'program_section',
-      label: 'Program',
+      name: 'section_g7',
+      label: 'Details',
       columns: [
         {
           fields: [
-            { fieldname: PROGRAM_TYPE_FIELDNAME, label: 'Program Type' },
-            { fieldname: 'deal_value' },
+            field('organization', 'Organization'),
+            field(PROGRAM_TYPE_FIELDNAME, 'Program Type'),
+            field('deal_value', 'Deal Value'),
           ],
         },
       ],
-    },
-    // Unrelated section the matrix must leave completely alone.
-    {
-      name: 'contacts_section',
-      label: 'Contacts',
-      columns: [{ fields: [{ fieldname: 'organization' }] }],
     },
   ]
 }
@@ -520,47 +533,75 @@ function sectionByLabel(sections, label) {
   return sections.find((s) => s.label === label)
 }
 
-function programTypeField(sections) {
+// Find a field across all sections/columns (both shapes lay fields over multiple columns).
+function fieldByName(sections, fieldname) {
   for (const section of sections) {
-    const field = section.columns?.[0]?.fields?.find(
-      (f) => f.fieldname === PROGRAM_TYPE_FIELDNAME,
-    )
-    if (field) return field
+    for (const column of section.columns || []) {
+      const f = (column.fields || []).find((x) => x.fieldname === fieldname)
+      if (f) return f
+    }
   }
   return undefined
 }
 
-// Mirror SidePanelLayout.parsedSection exactly: a section is visible for the contacts
-// section, or when at least one of its fields is visible. It never consults
-// section.depends_on — so the only way the matrix can hide a section is by gating every
-// field it holds. This is the adversarial check the Agent QA blocker demanded.
+// Mirror SidePanelLayout.parsedSection: a section is visible for the contacts section, or
+// when at least one of its fields (in any column) is visible. It never consults
+// section.depends_on — so the only way the matrix can hide a section is by gating every field
+// it holds. This is the adversarial check the Agent QA blocker demanded.
 function sectionVisibleFor(section, pipeline) {
   if (section.name === 'contacts_section') return true
-  const fields = section.columns?.[0]?.fields || []
-  return fields.some((field) => isVisibleFor(field.depends_on, pipeline))
+  const columns = section.columns || []
+  return columns.some((c) => (c.fields || []).some((f) => isVisibleFor(f.depends_on, pipeline)))
 }
 
-describe('PIPELINE_VISIBILITY_RULES (TXB-135 presentation matrix)', () => {
-  it('names Program Type by its committed fieldname', () => {
+// The fieldname that identifies each owned group's section in the fixtures above, so a single
+// loop can assert every group across every pipeline_type value.
+const GROUP_PROBE_FIELD = {
+  [SECTION_GROUPS.SESSIONS.id]: 'custom_sessions',
+  [SECTION_GROUPS.INDIVIDUAL_SESSION_DETAILS.id]: 'custom_session_owner',
+  [SECTION_GROUPS.BAP_SHEET.id]: 'custom_bap_score',
+  [SECTION_GROUPS.VCS_SHEET.id]: 'custom_vcs_score',
+  [SECTION_GROUPS.TRAINING_SHEET.id]: 'custom_training_topic',
+  [SECTION_GROUPS.DELIVERY_SHEET.id]: 'custom_delivery_date',
+  [SECTION_GROUPS.PROGRAM_TYPE.id]: PROGRAM_TYPE_FIELDNAME,
+}
+
+describe('SECTION_GROUPS + PIPELINE_OWNERSHIP (TXB-170 registry & matrix)', () => {
+  it('names Program Type by its committed fieldname signature', () => {
     expect(PROGRAM_TYPE_FIELDNAME).toBe('custom_program_type')
+    expect(SECTION_GROUPS.PROGRAM_TYPE.fieldnames).toContain(PROGRAM_TYPE_FIELDNAME)
+    expect(SECTION_GROUPS.PROGRAM_TYPE.scope).toBe('field')
   })
 
-  it('hides the individual-session sections on Workshop only', () => {
-    const rule = PIPELINE_VISIBILITY_RULES.find((r) =>
-      r.labels?.includes('Sessions'),
-    )
-    expect(rule.labels).toContain('Individual Session Details')
-    expect(rule.keepVisibleWhen).toBe(
-      `doc.pipeline_type != "${PIPELINE_WORKSHOP}"`,
+  it('declares exactly the seven expected semantic groups', () => {
+    expect(new Set(Object.values(SECTION_GROUPS).map((g) => g.id))).toEqual(
+      new Set([
+        'SESSIONS',
+        'INDIVIDUAL_SESSION_DETAILS',
+        'BAP_SHEET',
+        'VCS_SHEET',
+        'TRAINING_SHEET',
+        'DELIVERY_SHEET',
+        'PROGRAM_TYPE',
+      ]),
     )
   })
 
-  it('keeps Program Type only on Delivering Coaching', () => {
-    const rule = PIPELINE_VISIBILITY_RULES.find((r) =>
-      r.fieldnames?.includes(PROGRAM_TYPE_FIELDNAME),
+  it('owns every group exactly once, matching the backend module split', () => {
+    const owned = Object.values(PIPELINE_OWNERSHIP).flat()
+    for (const group of Object.values(SECTION_GROUPS)) {
+      expect(owned.filter((id) => id === group.id)).toHaveLength(1)
+      expect(OWNER_OF_GROUP[group.id]).toBeDefined()
+    }
+    // BAP -> Individual Session, VCS -> Workshop (backend pipeline modules); Program Type ->
+    // Delivering Coaching (TXB-103).
+    expect(PIPELINE_OWNERSHIP[PIPELINE_INDIVIDUAL_SESSION]).toEqual(
+      expect.arrayContaining(['SESSIONS', 'INDIVIDUAL_SESSION_DETAILS', 'BAP_SHEET']),
     )
-    expect(rule.keepVisibleWhen).toBe(
-      `doc.pipeline_type == "${PIPELINE_DELIVERING_COACHING}"`,
+    expect(PIPELINE_OWNERSHIP[PIPELINE_WORKSHOP]).toEqual(['VCS_SHEET'])
+    expect(PIPELINE_OWNERSHIP[PIPELINE_SELLING_TRAINING]).toEqual(['TRAINING_SHEET'])
+    expect(PIPELINE_OWNERSHIP[PIPELINE_DELIVERING_COACHING]).toEqual(
+      expect.arrayContaining(['DELIVERY_SHEET', 'PROGRAM_TYPE']),
     )
   })
 })
@@ -622,107 +663,118 @@ describe('restrictDependsOn', () => {
       }),
     ).toBeFalsy()
   })
-})
 
-describe('applyPipelineVisibility', () => {
-  it('mutates and returns the same array', () => {
-    const sections = makeDealLayout()
-    expect(applyPipelineVisibility(sections)).toBe(sections)
+  it('is idempotent for the same condition — no nested duplicate on re-apply', () => {
+    const first = restrictDependsOn('eval:doc.x', 'doc.pipeline_type == "Workshop"')
+    const second = restrictDependsOn(first, 'doc.pipeline_type == "Workshop"')
+    expect(second).toBe(first)
   })
 
-  it('tolerates a missing or malformed layout', () => {
+  it('returns the input unchanged when there is no condition to add', () => {
+    expect(restrictDependsOn('eval:doc.x', '')).toBe('eval:doc.x')
+    expect(restrictDependsOn(undefined, '')).toBeUndefined()
+  })
+})
+
+describe('applyPipelineVisibility enforces the ownership matrix (ac-1)', () => {
+  it('mutates and returns the same array; tolerates a malformed layout', () => {
+    const sections = makeDealLayout()
+    expect(applyPipelineVisibility(sections)).toBe(sections)
     expect(applyPipelineVisibility(undefined)).toBeUndefined()
     expect(applyPipelineVisibility([])).toEqual([])
     expect(applyPipelineVisibility([{ name: 'x' }])).toEqual([{ name: 'x' }])
     expect(applyPipelineVisibility([null])).toEqual([null])
   })
 
-  it('leaves sections/fields the matrix does not name untouched', () => {
-    const sections = applyPipelineVisibility(makeDealLayout())
-    const contacts = sectionByLabel(sections, 'Contacts')
-    expect(contacts.depends_on).toBeUndefined()
-    const dealValue = sectionByLabel(sections, 'Program').columns[0].fields[1]
-    expect(dealValue.fieldname).toBe('deal_value')
-    expect(dealValue.depends_on).toBeUndefined()
-  })
+  // The core matrix assertion: for every one of the four exact pipeline_type values, each
+  // owned group is visible on its owner alone and hidden everywhere else, while shared and
+  // unclassified fields stay visible.
+  it.each(TXB135_ALL_PIPELINES)(
+    'shows only the groups %s owns and keeps shared content visible',
+    (pipeline) => {
+      const sections = applyPipelineVisibility(makeDealLayout())
+      for (const [groupId, probe] of Object.entries(GROUP_PROBE_FIELD)) {
+        const doc = { pipeline_type: pipeline, bap_ready: 1 }
+        const visible = Boolean(
+          evaluateDependsOnValue(fieldByName(sections, probe).depends_on, doc),
+        )
+        expect(visible).toBe(pipeline === OWNER_OF_GROUP[groupId])
+      }
+      // Shared neighbour + unclassified field always visible, on every pipeline.
+      expect(isVisibleFor(fieldByName(sections, 'organization').depends_on, pipeline)).toBe(true)
+      expect(fieldByName(sections, 'deal_value').depends_on).toBeUndefined()
+    },
+  )
 
-  // ─── AC-1: Workshop hides Individual Session Details, Sessions, and Program Type ───
-  it('hides Individual Session Details, Sessions and Program Type on Workshop', () => {
+  it('hides a whole owned section by gating every one of its fields', () => {
     const sections = applyPipelineVisibility(makeDealLayout())
-    const isd = sectionByLabel(sections, 'Individual Session Details')
-    const sess = sectionByLabel(sections, 'Sessions')
-    const programType = programTypeField(sections)
-
-    // Sections hide only because their fields are gated (SidePanelLayout derives section
-    // visibility from visible-field count, not section.depends_on).
-    expect(isVisibleFor(isd.columns[0].fields[0].depends_on, PIPELINE_WORKSHOP)).toBe(
-      false,
-    )
-    expect(
-      isVisibleFor(sess.columns[0].fields[0].depends_on, PIPELINE_WORKSHOP),
-    ).toBe(false)
-    expect(sectionVisibleFor(isd, PIPELINE_WORKSHOP)).toBe(false)
-    expect(sectionVisibleFor(sess, PIPELINE_WORKSHOP)).toBe(false)
-    expect(isVisibleFor(programType.depends_on, PIPELINE_WORKSHOP)).toBe(false)
-  })
-
-  // ─── AC-2: Individual Session & Selling Training hide Program Type; ───
-  //          Delivering Coaching keeps it (TXB-103).
-  it('hides Program Type on Individual Session and Selling Training', () => {
-    const sections = applyPipelineVisibility(makeDealLayout())
-    const programType = programTypeField(sections)
-    expect(isVisibleFor(programType.depends_on, PIPELINE_INDIVIDUAL_SESSION)).toBe(
-      false,
-    )
-    expect(isVisibleFor(programType.depends_on, PIPELINE_SELLING_TRAINING)).toBe(
-      false,
-    )
-  })
-
-  it('keeps Program Type on Delivering Coaching (TXB-103 placement)', () => {
-    const sections = applyPipelineVisibility(makeDealLayout())
-    const programType = programTypeField(sections)
-    expect(
-      isVisibleFor(programType.depends_on, PIPELINE_DELIVERING_COACHING),
-    ).toBe(true)
-  })
-
-  it('keeps Individual Session Details and Sessions on every non-Workshop pipeline', () => {
-    const sections = applyPipelineVisibility(makeDealLayout())
-    const isd = sectionByLabel(sections, 'Individual Session Details')
-    const sess = sectionByLabel(sections, 'Sessions')
-    for (const pipeline of TXB135_ALL_PIPELINES.filter(
-      (p) => p !== PIPELINE_WORKSHOP,
-    )) {
-      expect(sectionVisibleFor(isd, pipeline)).toBe(true)
-      expect(sectionVisibleFor(sess, pipeline)).toBe(true)
+    const vcs = sectionByLabel(sections, 'VCS Sheet') // owned by Workshop
+    expect(sectionVisibleFor(vcs, PIPELINE_WORKSHOP)).toBe(true)
+    for (const p of TXB135_ALL_PIPELINES.filter((p) => p !== PIPELINE_WORKSHOP)) {
+      expect(sectionVisibleFor(vcs, p)).toBe(false)
     }
   })
 
-  // ─── AC-3: hiding is presentation-only — the field/value is never removed ───
-  it('never deletes fields or values, only gates visibility', () => {
+  it('preserves a native depends_on by ANDing (never replacing) it', () => {
     const sections = applyPipelineVisibility(makeDealLayout())
-    // The Program Type field still exists in the layout on Workshop; it is only hidden.
-    const programType = programTypeField(sections)
-    expect(programType).toBeDefined()
-    expect(programType.fieldname).toBe(PROGRAM_TYPE_FIELDNAME)
-    // Every section and field remains present; only depends_on was added.
-    expect(sections).toHaveLength(4)
-    expect(sectionByLabel(sections, 'Sessions').columns[0].fields).toHaveLength(1)
+    const bap = fieldByName(sections, 'custom_bap_score')
+    // Owned by Individual Session AND still gated by its native bap_ready condition.
+    expect(evaluateDependsOnValue(bap.depends_on, { pipeline_type: PIPELINE_INDIVIDUAL_SESSION, bap_ready: 1 })).toBeTruthy()
+    expect(evaluateDependsOnValue(bap.depends_on, { pipeline_type: PIPELINE_INDIVIDUAL_SESSION, bap_ready: 0 })).toBeFalsy()
+    expect(evaluateDependsOnValue(bap.depends_on, { pipeline_type: PIPELINE_WORKSHOP, bap_ready: 1 })).toBeFalsy()
   })
 
-  it('matches Program Type by label when it is a standalone section', () => {
+  it('keeps Program Type only on Delivering Coaching (TXB-103) without touching its neighbour', () => {
+    const sections = applyPipelineVisibility(makeDealLayout())
+    const programType = fieldByName(sections, PROGRAM_TYPE_FIELDNAME)
+    expect(isVisibleFor(programType.depends_on, PIPELINE_DELIVERING_COACHING)).toBe(true)
+    for (const p of TXB135_ALL_PIPELINES.filter((p) => p !== PIPELINE_DELIVERING_COACHING)) {
+      expect(isVisibleFor(programType.depends_on, p)).toBe(false)
+    }
+    // organization shares the section but is unnamed by the matrix — untouched.
+    expect(fieldByName(sections, 'organization').depends_on).toBeUndefined()
+  })
+
+  it('resolves Program Type by fieldname signature even when its label differs', () => {
     const sections = applyPipelineVisibility([
       {
-        name: 'program_type_section',
-        label: 'Program Type',
-        columns: [{ fields: [{ fieldname: 'custom_program_type_note' }] }],
+        name: 'section_x',
+        label: 'Misc',
+        columns: [{ fields: [field('keep_me', 'Neighbour'), field(PROGRAM_TYPE_FIELDNAME, 'Renamed Field')] }],
       },
     ])
-    const section = sectionByLabel(sections, 'Program Type')
-    // The section rule gates the inner field, which is what collapses the section.
-    expect(sectionVisibleFor(section, PIPELINE_WORKSHOP)).toBe(false)
-    expect(sectionVisibleFor(section, PIPELINE_DELIVERING_COACHING)).toBe(true)
+    const pt = fieldByName(sections, PROGRAM_TYPE_FIELDNAME)
+    expect(isVisibleFor(pt.depends_on, PIPELINE_DELIVERING_COACHING)).toBe(true)
+    expect(isVisibleFor(pt.depends_on, PIPELINE_WORKSHOP)).toBe(false)
+    expect(fieldByName(sections, 'keep_me').depends_on).toBeUndefined()
+  })
+
+  it('matches an owned section by its normalized label alias (case/space-insensitive)', () => {
+    const sections = applyPipelineVisibility([
+      { name: 'section_rand', label: '  training sheet ', columns: [{ fields: [field('some_random_field', 'X')] }] },
+    ])
+    const f = fieldByName(sections, 'some_random_field')
+    expect(isVisibleFor(f.depends_on, PIPELINE_SELLING_TRAINING)).toBe(true)
+    expect(isVisibleFor(f.depends_on, PIPELINE_WORKSHOP)).toBe(false)
+  })
+
+  it('is idempotent — a repeated transform never nests a duplicate expression', () => {
+    const sections = applyPipelineVisibility(makeDealLayout())
+    const once = fieldByName(sections, 'custom_vcs_score').depends_on
+    applyPipelineVisibility(sections)
+    expect(fieldByName(sections, 'custom_vcs_score').depends_on).toBe(once)
+  })
+
+  // Presentation-only — no field or stored value is removed.
+  it('never deletes a field or clears a stored value', () => {
+    const sections = makeDealLayout()
+    const doc = { pipeline_type: PIPELINE_WORKSHOP, custom_bap_score: 42 }
+    applyPipelineVisibility(sections)
+    expect(fieldByName(sections, 'custom_bap_score')).toBeDefined()
+    expect(fieldByName(sections, PROGRAM_TYPE_FIELDNAME)).toBeDefined()
+    expect(sections).toHaveLength(7)
+    // Hiding BAP on Workshop does not touch the stored value.
+    expect(doc.custom_bap_score).toBe(42)
   })
 })
 
@@ -734,40 +786,43 @@ describe('applyPipelineVisibility', () => {
 // Details on the Data tab. applyPipelineTabsLayout drives the same shared matrix over the
 // real tab/section/all-column shape. These tests would fail against PR #31's implementation.
 
-// A parsed Data Fields tab layout shaped like get_fields_layout output. Deliberately places
-// the gated fields in a *second* column (columns[1]) — the exact case PR #31's columns[0]-only
-// traversal skipped.
+// A parsed Data Fields tab layout shaped like get_fields_layout output. One section per owned
+// group, and the BAP section deliberately lays its fields over a *second* column (columns[1])
+// so the resolver is proven to walk every column, not just the first. A shared "Contact"
+// section holds neighbours (Email) plus the field-scoped Program Type.
 function makeDataFieldsTabs() {
   return [
     {
       name: 'data_tab',
       label: 'Data',
       sections: [
+        { name: 'section_t1', label: 'Sessions', columns: [{ fields: [field('custom_sessions', 'Sessions')] }] },
         {
-          name: 'individual_session_details_section',
+          name: 'section_t2',
           label: 'Individual Session Details',
           columns: [
-            { fields: [{ fieldname: 'custom_session_notes' }] },
-            { fields: [{ fieldname: 'custom_session_owner' }] },
+            { fields: [field('custom_session_notes', 'Notes')] },
+            { fields: [field('custom_session_owner', 'Owner')] },
           ],
         },
         {
-          name: 'sessions_section',
-          label: 'Sessions',
-          columns: [{ fields: [{ fieldname: 'custom_sessions' }] }],
-        },
-        {
-          name: 'program_section',
-          label: 'Program',
+          name: 'section_t3',
+          label: 'BAP Sheet',
           columns: [
-            { fields: [{ fieldname: 'deal_value' }] },
-            { fields: [{ fieldname: PROGRAM_TYPE_FIELDNAME, label: 'Program Type' }] },
+            { fields: [field('custom_bap_score', 'BAP Score')] },
+            { fields: [field('custom_bap_reviewer', 'BAP Reviewer')] },
           ],
         },
+        { name: 'section_t4', label: 'VCS Sheet', columns: [{ fields: [field('custom_vcs_score', 'VCS Score')] }] },
+        { name: 'section_t5', label: 'Training Sheet', columns: [{ fields: [field('custom_training_topic', 'Topic')] }] },
+        { name: 'section_t6', label: 'Delivery Sheet', columns: [{ fields: [field('custom_delivery_date', 'Delivery Date')] }] },
         {
-          name: 'contacts_section',
-          label: 'Contacts',
-          columns: [{ fields: [{ fieldname: 'organization' }] }],
+          name: 'section_t7',
+          label: 'Contact',
+          columns: [
+            { fields: [field('email', 'Email')] },
+            { fields: [field(PROGRAM_TYPE_FIELDNAME, 'Program Type'), field('deal_value', 'Deal Value')] },
+          ],
         },
       ],
     },
@@ -805,7 +860,7 @@ function tabFieldByName(tabs, fieldname) {
   return undefined
 }
 
-describe('applyPipelineTabsLayout (TXB-169 Data tab caller regression)', () => {
+describe('applyPipelineTabsLayout drives the same matrix on the Data tab (ac-1/ac-2)', () => {
   it('mutates and returns the same tabs array; tolerates malformed input', () => {
     const tabs = makeDataFieldsTabs()
     expect(applyPipelineTabsLayout(tabs)).toBe(tabs)
@@ -815,63 +870,55 @@ describe('applyPipelineTabsLayout (TXB-169 Data tab caller regression)', () => {
     expect(applyPipelineTabsLayout([{ name: 't' }])).toEqual([{ name: 't' }])
   })
 
-  // The regression PR #31 could not have passed: on the untouched Data Fields layout the
-  // gated fields carry no depends_on, so a Workshop deal renders them. Only after the Data
+  // The regression the earlier PRs could not have passed: on the untouched Data Fields layout
+  // the gated fields carry no depends_on, so a Workshop deal renders them. Only after the Data
   // tab caller runs the shared matrix do they hide.
-  it('a Workshop Data tab renders Sessions/Individual Session Details/Program Type until the matrix is applied', () => {
+  it('renders owned sections on the Data tab until the matrix is applied', () => {
     const before = makeDataFieldsTabs()
-    expect(tabSectionVisibleFor(tabSectionByLabel(before, 'Individual Session Details'), PIPELINE_WORKSHOP)).toBe(true)
-    expect(tabSectionVisibleFor(tabSectionByLabel(before, 'Sessions'), PIPELINE_WORKSHOP)).toBe(true)
+    for (const label of ['Sessions', 'Individual Session Details', 'BAP Sheet', 'Training Sheet', 'Delivery Sheet']) {
+      expect(tabSectionVisibleFor(tabSectionByLabel(before, label), PIPELINE_WORKSHOP)).toBe(true)
+    }
     expect(isVisibleFor(tabFieldByName(before, PROGRAM_TYPE_FIELDNAME).depends_on, PIPELINE_WORKSHOP)).toBe(true)
   })
 
-  // ─── AC-1: for the reported CRM-DEAL-2026-00422 Workshop deal, the Data tab hides
-  //          Sessions, Individual Session Details, and Program Type. ───
-  it('hides Sessions, Individual Session Details and Program Type on a Workshop Data tab', () => {
+  // The same matrix assertion as the side panel, over the tab shape, for all four pipelines:
+  // an owned section is visible on its owner alone, across every column.
+  it.each(TXB135_ALL_PIPELINES)('gates all sheet sections across every column for %s', (pipeline) => {
     const tabs = applyPipelineTabsLayout(makeDataFieldsTabs())
-    const isd = tabSectionByLabel(tabs, 'Individual Session Details')
-    const sessions = tabSectionByLabel(tabs, 'Sessions')
-
-    // The Individual Session Details field lives in columns[1]; a columns[0]-only walk (PR
-    // #31) would have left it ungated and the section visible on Workshop.
-    expect(isd.columns[1].fields[0].fieldname).toBe('custom_session_owner')
-    expect(isVisibleFor(isd.columns[1].fields[0].depends_on, PIPELINE_WORKSHOP)).toBe(false)
-
-    expect(tabSectionVisibleFor(isd, PIPELINE_WORKSHOP)).toBe(false)
-    expect(tabSectionVisibleFor(sessions, PIPELINE_WORKSHOP)).toBe(false)
-    expect(isVisibleFor(tabFieldByName(tabs, PROGRAM_TYPE_FIELDNAME).depends_on, PIPELINE_WORKSHOP)).toBe(false)
-  })
-
-  // ─── AC-2: Program Type hides on Individual Session & Selling Training, stays on
-  //          Delivering Coaching (TXB-103); unrelated fields/sections untouched. ───
-  it('gates Program Type per pipeline and leaves unrelated fields intact', () => {
-    const tabs = applyPipelineTabsLayout(makeDataFieldsTabs())
-    const programType = tabFieldByName(tabs, PROGRAM_TYPE_FIELDNAME)
-    expect(isVisibleFor(programType.depends_on, PIPELINE_INDIVIDUAL_SESSION)).toBe(false)
-    expect(isVisibleFor(programType.depends_on, PIPELINE_SELLING_TRAINING)).toBe(false)
-    expect(isVisibleFor(programType.depends_on, PIPELINE_DELIVERING_COACHING)).toBe(true)
-
-    // Sessions / Individual Session Details remain visible on every non-Workshop pipeline.
-    for (const pipeline of TXB135_ALL_PIPELINES.filter((p) => p !== PIPELINE_WORKSHOP)) {
-      expect(tabSectionVisibleFor(tabSectionByLabel(tabs, 'Sessions'), pipeline)).toBe(true)
-      expect(tabSectionVisibleFor(tabSectionByLabel(tabs, 'Individual Session Details'), pipeline)).toBe(true)
+    const expectations = [
+      ['Sessions', PIPELINE_INDIVIDUAL_SESSION],
+      ['Individual Session Details', PIPELINE_INDIVIDUAL_SESSION],
+      ['BAP Sheet', PIPELINE_INDIVIDUAL_SESSION],
+      ['VCS Sheet', PIPELINE_WORKSHOP],
+      ['Training Sheet', PIPELINE_SELLING_TRAINING],
+      ['Delivery Sheet', PIPELINE_DELIVERING_COACHING],
+    ]
+    for (const [label, owner] of expectations) {
+      expect(tabSectionVisibleFor(tabSectionByLabel(tabs, label), pipeline)).toBe(pipeline === owner)
     }
-
-    // deal_value shares the Program section but is not named by the matrix — untouched.
-    const dealValue = tabFieldByName(tabs, 'deal_value')
-    expect(dealValue.depends_on).toBeUndefined()
-    expect(tabFieldByName(tabs, 'organization').depends_on).toBeUndefined()
+    // BAP's second column is gated too (the exact case a columns[0]-only walk skipped).
+    expect(tabFieldByName(tabs, 'custom_bap_reviewer').depends_on).toBeTruthy()
+    expect(isVisibleFor(tabFieldByName(tabs, 'custom_bap_reviewer').depends_on, pipeline)).toBe(
+      pipeline === PIPELINE_INDIVIDUAL_SESSION,
+    )
+    // Program Type (field-scoped) — Delivering Coaching only (TXB-103).
+    expect(isVisibleFor(tabFieldByName(tabs, PROGRAM_TYPE_FIELDNAME).depends_on, pipeline)).toBe(
+      pipeline === PIPELINE_DELIVERING_COACHING,
+    )
+    // Shared tab field (Email) and unnamed neighbour (deal_value) stay visible everywhere.
+    expect(isVisibleFor(tabFieldByName(tabs, 'email').depends_on, pipeline)).toBe(true)
+    expect(tabFieldByName(tabs, 'deal_value').depends_on).toBeUndefined()
   })
 
-  // ─── AC-3: presentation-only — no field or stored value is removed. ───
+  // Presentation-only — no field or stored value is removed.
   it('never deletes a field, only gates visibility', () => {
     const tabs = applyPipelineTabsLayout(makeDataFieldsTabs())
     expect(tabFieldByName(tabs, PROGRAM_TYPE_FIELDNAME)).toBeDefined()
     expect(tabFieldByName(tabs, 'custom_session_owner')).toBeDefined()
-    expect(tabFieldByName(tabs, 'custom_sessions')).toBeDefined()
-    const program = tabSectionByLabel(tabs, 'Program')
-    expect(program.columns).toHaveLength(2)
-    expect(program.columns[1].fields).toHaveLength(1)
+    expect(tabFieldByName(tabs, 'custom_bap_reviewer')).toBeDefined()
+    const contact = tabSectionByLabel(tabs, 'Contact')
+    expect(contact.columns).toHaveLength(2)
+    expect(contact.columns[1].fields).toHaveLength(2)
   })
 
   // Composes onto an existing depends_on rather than replacing it (TXB-148 correction and any
@@ -885,22 +932,43 @@ describe('applyPipelineTabsLayout (TXB-169 Data tab caller regression)', () => {
             name: 'sessions_section',
             label: 'Sessions',
             columns: [
-              {
-                fields: [
-                  { fieldname: 'custom_sessions', depends_on: 'eval:doc.status != "Lost"' },
-                ],
-              },
+              { fields: [{ fieldname: 'custom_sessions', depends_on: 'eval:doc.status != "Lost"' }] },
             ],
           },
         ],
       },
     ])
-    const field = tabFieldByName(tabs, 'custom_sessions')
-    // Non-Workshop + not Lost -> visible; the native condition still applies.
-    expect(evaluateDependsOnValue(field.depends_on, { pipeline_type: PIPELINE_INDIVIDUAL_SESSION, status: 'Open' })).toBeTruthy()
-    expect(evaluateDependsOnValue(field.depends_on, { pipeline_type: PIPELINE_INDIVIDUAL_SESSION, status: 'Lost' })).toBeFalsy()
+    const f = tabFieldByName(tabs, 'custom_sessions')
+    // Individual Session (owner) + not Lost -> visible; the native condition still applies.
+    expect(evaluateDependsOnValue(f.depends_on, { pipeline_type: PIPELINE_INDIVIDUAL_SESSION, status: 'Open' })).toBeTruthy()
+    expect(evaluateDependsOnValue(f.depends_on, { pipeline_type: PIPELINE_INDIVIDUAL_SESSION, status: 'Lost' })).toBeFalsy()
     // Workshop -> hidden regardless of status.
-    expect(evaluateDependsOnValue(field.depends_on, { pipeline_type: PIPELINE_WORKSHOP, status: 'Open' })).toBeFalsy()
+    expect(evaluateDependsOnValue(f.depends_on, { pipeline_type: PIPELINE_WORKSHOP, status: 'Open' })).toBeFalsy()
+  })
+})
+
+// TXB-170: the tab-policy extension point is declared but empty in this correction — no
+// current activity/Email/Calls tab is removed. resolveVisibleTabs is a pure no-op until the
+// policy names something, so tab-ownership changes are a matrix edit, not a renderer change.
+describe('resolveVisibleTabs (declared tab-policy extension point)', () => {
+  it('ships an empty policy and leaves current activity/Email/Calls tabs unchanged', () => {
+    expect(PIPELINE_TAB_POLICY).toEqual({})
+    const tabs = [{ label: 'Activity' }, { label: 'Emails' }, { label: 'Calls' }, { label: 'Data' }]
+    for (const pipeline of TXB135_ALL_PIPELINES) {
+      expect(resolveVisibleTabs(tabs, pipeline)).toEqual(tabs)
+    }
+  })
+
+  it('would filter tabs a policy names, without mutating the input', () => {
+    // Simulate a future policy locally to prove the extension point is wired (the shipped
+    // PIPELINE_TAB_POLICY stays empty).
+    const tabs = [{ label: 'Delivery' }, { label: 'Data' }]
+    const policy = { [PIPELINE_WORKSHOP]: ['Delivery'] }
+    const hidden = policy[PIPELINE_WORKSHOP].map((l) => l.toLowerCase())
+    const kept = tabs.filter((t) => !hidden.includes(t.label.toLowerCase()))
+    expect(kept).toEqual([{ label: 'Data' }])
+    // The shipped resolver with the empty policy keeps everything.
+    expect(resolveVisibleTabs(tabs, PIPELINE_WORKSHOP)).toEqual(tabs)
   })
 })
 
