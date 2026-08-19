@@ -3,11 +3,15 @@
 
 """TXB-110: the transition graph derived from the action registry."""
 
+from unittest.mock import patch
+
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from crm.txb.constants import (
 	ADMIN_ROLE,
+	FIELD_DELIVERY_DEAL,
+	FIELD_SALES_SOURCE_DEAL,
 	FIELD_WORKSHOP_SCHEDULED_AT,
 	PIPELINE_DELIVERING_COACHING,
 	PIPELINE_INDIVIDUAL_SESSION,
@@ -874,3 +878,227 @@ class TestLogReachNote(FrappeTestCase):
 		self.assertEqual(self.linked_notes(lead.name), [])
 		self.assertEqual(self.info_comment_count(lead.name), 0)
 		self.assertEqual(frappe.db.get_value("CRM Lead", lead.name, "status"), "New")
+
+
+class TestCoachingHandover(FrappeTestCase):
+	"""TXB-126: a Won sales Opportunity hands over to one linked Delivering Coaching deal.
+
+	These cover the whole idempotent handover service (crm.txb.pipelines.common):
+
+	- both source pipelines (Individual Session via run_bap, Workshop via workshop_won)
+	  create one Submitted delivery deal carrying Organization, Contacts/primary flags, the
+	  source owner, handover notes and the durable sales-source reference, with both deals
+	  linked to each other;
+	- a repeated Won reuses that one delivery deal (sequential retry) and a lost duplicate-key
+	  race recovers the winner instead of spawning a second;
+	- the insert and both links share the caller's transaction;
+	- Workshop QR attendee candidates keep their own records and are neither consumed nor
+	  overwritten by the aggregate handover.
+	"""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		cls.skip = not frappe.get_meta("CRM Deal").has_field(FIELD_SALES_SOURCE_DEAL)
+
+	def setUp(self):
+		if self.skip:
+			self.skipTest(f"{FIELD_SALES_SOURCE_DEAL} is not installed on this site")
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+		frappe.flags.txb_action = None
+		frappe.db.rollback()
+
+	# ── helpers ──────────────────────────────────────────────────────────────────────
+
+	def make_contact(self, first_name):
+		return frappe.get_doc(
+			{"doctype": "Contact", "first_name": first_name}
+		).insert(ignore_permissions=True)
+
+	def make_source(self, pipeline, status, *, owner="Administrator"):
+		"""A source Opportunity with an Organization and two Contacts, one primary."""
+		organization = frappe.get_doc(
+			{"doctype": "CRM Organization", "organization_name": frappe.generate_hash("Org", 8)}
+		).insert(ignore_permissions=True)
+
+		primary = self.make_contact("Primary")
+		secondary = self.make_contact("Secondary")
+
+		deal = frappe.get_doc(
+			{
+				"doctype": "CRM Deal",
+				"pipeline_type": pipeline,
+				"status": status,
+				"organization": organization.name,
+				"deal_owner": owner,
+				"contacts": [
+					{"contact": primary.name, "is_primary": 1},
+					{"contact": secondary.name, "is_primary": 0},
+				],
+			}
+		)
+		return deal.insert(ignore_permissions=True)
+
+	def delivery_deals(self, source_name):
+		return frappe.get_all(
+			"CRM Deal",
+			filters={FIELD_SALES_SOURCE_DEAL: source_name},
+			fields=["name", "status", "pipeline_type", "organization", "deal_owner"],
+		)
+
+	# ── one linked delivery deal per Won source ──────────────────────────────────────
+
+	def test_won_individual_session_creates_one_linked_delivery_deal(self):
+		from crm.txb.pipelines.individual_session import run_bap
+
+		source = self.make_source(PIPELINE_INDIVIDUAL_SESSION, "Session Run")
+		run_bap(source, {"outcome": "Won - proceed to coaching"})
+		source.save(ignore_permissions=True)
+
+		created = self.delivery_deals(source.name)
+		self.assertEqual(len(created), 1)
+		delivery = frappe.get_doc("CRM Deal", created[0].name)
+
+		self.assertEqual(delivery.pipeline_type, PIPELINE_DELIVERING_COACHING)
+		self.assertEqual(delivery.status, "Submitted")
+		self.assertEqual(delivery.organization, source.organization)
+		self.assertEqual(delivery.deal_owner, source.deal_owner)
+		self.assertEqual(delivery.get(FIELD_SALES_SOURCE_DEAL), source.name)
+		self.assertIn(source.name, delivery.custom_delivery_notes)
+
+		# Contacts carried across with their primary flags preserved.
+		self.assertEqual(len(delivery.contacts), 2)
+		primary = [c.contact for c in delivery.contacts if c.is_primary]
+		self.assertEqual(len(primary), 1)
+
+		# Both deals navigate to each other.
+		self.assertEqual(
+			frappe.db.get_value("CRM Deal", source.name, FIELD_DELIVERY_DEAL), delivery.name
+		)
+
+	def test_won_workshop_creates_one_linked_delivery_deal(self):
+		from crm.txb.pipelines.workshop import workshop_won
+
+		source = self.make_source(PIPELINE_WORKSHOP, "Workshop ran")
+		workshop_won(source, {"coaching_notes": "Ready for delivery"})
+		source.save(ignore_permissions=True)
+
+		created = self.delivery_deals(source.name)
+		self.assertEqual(len(created), 1)
+		delivery = frappe.get_doc("CRM Deal", created[0].name)
+		self.assertEqual(delivery.status, "Submitted")
+		self.assertEqual(delivery.get(FIELD_SALES_SOURCE_DEAL), source.name)
+		self.assertIn("Ready for delivery", delivery.custom_delivery_notes)
+		self.assertEqual(
+			frappe.db.get_value("CRM Deal", source.name, FIELD_DELIVERY_DEAL), delivery.name
+		)
+
+	# ── idempotency: retries and races reuse the one delivery deal ───────────────────
+
+	def test_sequential_retry_reuses_the_same_delivery_deal(self):
+		from crm.txb.pipelines.common import create_coaching_deal
+
+		source = self.make_source(PIPELINE_INDIVIDUAL_SESSION, "Session Run")
+
+		first = create_coaching_deal(source)
+		second = create_coaching_deal(source)
+
+		self.assertEqual(first, second)
+		self.assertEqual(len(self.delivery_deals(source.name)), 1)
+
+	def test_duplicate_key_race_recovers_and_reuses_the_winner(self):
+		"""Force the query-before-insert to miss so the insert path runs against an existing
+		aggregate: the unique sales-source constraint raises, and the service recovers the
+		winner instead of creating a second delivery deal or surfacing the conflict."""
+		from crm.txb.pipelines import common
+
+		source = self.make_source(PIPELINE_INDIVIDUAL_SESSION, "Session Run")
+
+		winner = common.insert_coaching_deal(source, "")  # the concurrent writer's deal
+
+		# First call (pre-insert check) sees nothing and forces our insert; the recovery call
+		# inside the except clause then finds the winner the unique constraint pointed us at.
+		with patch.object(common, "find_coaching_deal", side_effect=[None, winner]) as finder:
+			result = common.create_coaching_deal(source)
+
+		self.assertEqual(result, winner)
+		self.assertEqual(finder.call_count, 2)
+		self.assertEqual(len(self.delivery_deals(source.name)), 1)
+
+	def test_reverse_link_is_repaired_when_missing(self):
+		"""An existing forward handover whose reverse link was lost self-heals on the next run
+		without creating a second delivery deal."""
+		from crm.txb.pipelines.common import create_coaching_deal
+
+		source = self.make_source(PIPELINE_INDIVIDUAL_SESSION, "Session Run")
+
+		existing = create_coaching_deal(source)
+		source.db_set(FIELD_DELIVERY_DEAL, None)
+		source.reload()
+
+		result = create_coaching_deal(source)
+		source.save(ignore_permissions=True)
+
+		self.assertEqual(result, existing)
+		self.assertEqual(len(self.delivery_deals(source.name)), 1)
+		self.assertEqual(
+			frappe.db.get_value("CRM Deal", source.name, FIELD_DELIVERY_DEAL), existing
+		)
+
+	# ── transaction safety ───────────────────────────────────────────────────────────
+
+	def test_insert_and_links_share_the_callers_transaction(self):
+		"""The handover writes inside the caller's action transaction: a rollback of that
+		transaction takes the delivery deal and the reverse link with it, leaving nothing
+		half-applied."""
+		from crm.txb.pipelines.common import create_coaching_deal
+
+		source = self.make_source(PIPELINE_INDIVIDUAL_SESSION, "Session Run")
+
+		frappe.db.savepoint("txb_test_txn")
+		create_coaching_deal(source)
+		source.save(ignore_permissions=True)
+		self.assertEqual(len(self.delivery_deals(source.name)), 1)
+
+		frappe.db.rollback(save_point="txb_test_txn")
+
+		self.assertEqual(len(self.delivery_deals(source.name)), 0)
+		self.assertIsNone(
+			frappe.db.get_value("CRM Deal", source.name, FIELD_DELIVERY_DEAL)
+		)
+
+	# ── Workshop QR coexistence ──────────────────────────────────────────────────────
+
+	def test_workshop_qr_candidate_coexists_with_the_aggregate_handover(self):
+		"""A registration attendee candidate uses `custom_source_deal`, not the dedicated
+		sales-source link, so the aggregate Won handover neither finds, consumes nor
+		overwrites it -- both records survive independently."""
+		from crm.txb.pipelines.common import create_coaching_deal
+
+		source = self.make_source(PIPELINE_WORKSHOP, "Workshop ran")
+
+		candidate = frappe.get_doc(
+			{
+				"doctype": "CRM Deal",
+				"pipeline_type": PIPELINE_DELIVERING_COACHING,
+				"status": "Waiting on Review",
+				"custom_source_deal": source.name,
+				"first_name": "Attendee",
+			}
+		).insert(ignore_permissions=True)
+
+		delivery = create_coaching_deal(source)
+
+		# The candidate is untouched: same status, never adopted as the aggregate.
+		self.assertNotEqual(delivery, candidate.name)
+		row = frappe.db.get_value(
+			"CRM Deal", candidate.name, ["status", FIELD_SALES_SOURCE_DEAL], as_dict=True
+		)
+		self.assertEqual(row.status, "Waiting on Review")
+		self.assertIsNone(row.get(FIELD_SALES_SOURCE_DEAL))
+
+		# Exactly one aggregate handover exists, and it is not the candidate.
+		created = self.delivery_deals(source.name)
+		self.assertEqual([c.name for c in created], [delivery])
