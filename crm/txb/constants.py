@@ -101,11 +101,10 @@ CONVERSION_PIPELINE_INITIAL_STATUS = {
 # browser's requiresDial() check cannot drift.
 LEAD_STATUS_CONTACT_ATTEMPTED = "Contact attempted"
 
-# The CRM Call Log status a dial attempt records. A dial that only reaches Contact attempted
-# is, by definition, one that went unanswered -- a connected call is a different outcome and a
-# different status -- so the result is fixed and never taken from the caller. This is a member
-# of the CRM Call Log `status` Select ("...,No Answer,...").
-DIAL_RESULT_NO_ANSWER = "No Answer"
+# Final CRM Call Log statuses a user may select when manually logging a completed dial attempt.
+# Transient telephony states (Initiated, Ringing, In Progress, Queued) are intentionally excluded:
+# Log a dial records what happened after the attempt, not a live provider lifecycle state.
+DIAL_RESULTS = ("Completed", "Failed", "Busy", "No Answer", "Canceled")
 
 # The Lead status a booked discovery meeting rests at before it is run. "Run Discovery Meeting"
 # (crm.txb.lead_actions.run_discovery_meeting) is a guarded action available only from here:

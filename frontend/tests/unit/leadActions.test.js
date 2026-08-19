@@ -34,15 +34,17 @@ describe('requiresDial — the Contact attempted gate', () => {
 })
 
 describe('the dial payload the server receives', () => {
-  it('asks only for the writable required field, never the fixed result', () => {
-    // dial_result is read-only/server-fixed, so the user is never asked for it even though the
-    // contract marks a value required.
-    expect(requiredDialFields()).toEqual(['dialed_at'])
+  it('requires both the timestamp and a selected result', () => {
+    expect(requiredDialFields()).toEqual(['dialed_at', 'dial_result'])
   })
 
-  it('re-asserts the fixed "No answer" result even when a client drops it', () => {
-    const payload = dialPayload({ dialed_at: '2026-08-18T09:00:00', notes: 'ring ring' })
-    expect(payload.dial_result).toBe('No answer')
+  it('preserves the result selected by the user', () => {
+    const payload = dialPayload({
+      dialed_at: '2026-08-18T09:00:00',
+      dial_result: 'Busy',
+      notes: 'ring ring',
+    })
+    expect(payload.dial_result).toBe('Busy')
     expect(payload.dialed_at).toBe('2026-08-18T09:00:00')
     expect(payload.notes).toBe('ring ring')
   })
@@ -52,9 +54,14 @@ describe('the dial payload the server receives', () => {
     expect(payload).not.toHaveProperty('status')
   })
 
-  it('forces the fixed result even when a client tries to override it', () => {
-    const payload = dialPayload({ dialed_at: '2026-08-18T09:00:00', dial_result: 'Answered' })
-    expect(payload.dial_result).toBe('No answer')
+  it('renders Result as an enabled Select with the approved final outcomes', () => {
+    const result = dialFields(LOG_A_DIAL, '2026-08-18T09:00:00').find(
+      (field) => field.fieldname === 'dial_result',
+    )
+    expect(result.fieldtype).toBe('Select')
+    expect(result.read_only).toBeUndefined()
+    expect(result.reqd).toBe(1)
+    expect(result.options).toBe('Completed\nFailed\nBusy\nNo Answer\nCanceled')
   })
 })
 
@@ -66,15 +73,16 @@ describe('dial dialog seeding and validation', () => {
     expect(dialedAt.default).toBe(now)
   })
 
-  it('seeds the reactive doc with the fixed result and resolved dialed_at', () => {
+  it('seeds the reactive doc with the default result and resolved dialed_at', () => {
     const defaults = dialDefaults(LOG_A_DIAL, now)
     expect(defaults.dialed_at).toBe(now)
-    expect(defaults.dial_result).toBe('No answer')
+    expect(defaults.dial_result).toBe('No Answer')
   })
 
-  it('blocks submit until the required dialed_at is filled', () => {
+  it('blocks submit until both dialed_at and dial_result are filled', () => {
     expect(canLogDial({})).toBe(false)
-    expect(canLogDial({ dialed_at: '' })).toBe(false)
-    expect(canLogDial({ dialed_at: now })).toBe(true)
+    expect(canLogDial({ dialed_at: now })).toBe(false)
+    expect(canLogDial({ dialed_at: '', dial_result: 'No Answer' })).toBe(false)
+    expect(canLogDial({ dialed_at: now, dial_result: 'Busy' })).toBe(true)
   })
 })

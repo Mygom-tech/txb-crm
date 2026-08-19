@@ -9,7 +9,7 @@ This module is the single place that owns the rule, mirroring the Deal arrangeme
 `crm.txb.api.actions`:
 
 * `log_a_dial` is the only way in. It records a canonical dial-attempt activity (an outgoing
-  CRM Call Log with a fixed "No Answer" result, its timestamp, the authenticated caller, and
+  CRM Call Log with the selected final result, its timestamp, the authenticated caller, and
   optional notes and follow-up) **and** advances the Lead's status, in one transaction, so a
   failure part-way leaves neither a stray activity nor a moved Lead.
 
@@ -32,7 +32,7 @@ from frappe.utils import now_datetime
 
 from crm.txb.constants import (
 	CONVERSION_PIPELINE_INITIAL_STATUS,
-	DIAL_RESULT_NO_ANSWER,
+	DIAL_RESULTS,
 	DISCOVERY_STATUS_OUTCOMES,
 	DISCOVERY_TERMINAL_OUTCOMES,
 	LEAD_STATUS_CONTACT_ATTEMPTED,
@@ -57,8 +57,8 @@ DIAL_TELEPHONY_MEDIUM = "Manual"
 DIAL_FLAG = "logged_dial"
 
 # The Lead action contract, kept in step with the browser's copy in
-# frontend/src/utils/leadActions.js. The result is a read-only, server-fixed field so a client
-# cannot re-point it at a connected outcome.
+# frontend/src/utils/leadActions.js. The result is required and constrained to final manual-call
+# outcomes; the server applies the same allow-list before writing the Call Log.
 LOG_A_DIAL = {
 	"name": "log_a_dial",
 	"label": "Log a dial",
@@ -75,9 +75,10 @@ LOG_A_DIAL = {
 		{
 			"fieldname": "dial_result",
 			"label": "Result",
-			"fieldtype": "Data",
-			"read_only": 1,
-			"default": "No answer",
+			"fieldtype": "Select",
+			"reqd": 1,
+			"options": "\n".join(DIAL_RESULTS),
+			"default": "No Answer",
 		},
 		{"fieldname": "notes", "label": "Notes", "fieldtype": "Small Text"},
 		{
@@ -87,6 +88,21 @@ LOG_A_DIAL = {
 		},
 	],
 }
+
+
+def dial_results() -> tuple:
+	"""Approved final outcomes for a manually logged dial, in display order."""
+	return DIAL_RESULTS
+
+
+def require_dial_result(result: str | None) -> str:
+	"""Return an approved result or refuse the request before any write occurs."""
+	if result not in DIAL_RESULTS:
+		frappe.throw(
+			_("Choose one of the approved dial results."),
+			title=_("Result Required"),
+		)
+	return str(result)
 
 
 def discovery_outcomes() -> tuple:
@@ -183,7 +199,7 @@ def log_a_dial(
 	dial_result: str | None = None,
 	data: str | dict | None = None,
 ) -> dict:
-	"""Record a No-answer dial and advance the Lead to Contact attempted, atomically.
+	"""Record the selected dial result and advance the Lead to Contact attempted, atomically.
 
 	The activity and the status move are applied to the request's single transaction: the
 	call log is inserted, then the Lead is saved through its normal validation with a flag that
@@ -191,8 +207,8 @@ def log_a_dial(
 	error -- the whole request rolls back and nothing is left behind.
 
 	`data` accepts the field dict the browser dialog collects; explicit keyword arguments win
-	so a direct API caller can pass them by name. The result is never taken from the caller: a
-	dial that only reaches Contact attempted is a No Answer by definition.
+	so a direct API caller can pass them by name. The result must be one of the approved final
+	manual-call outcomes. Every approved result still completes the requested Lead move.
 	"""
 	frappe.has_permission(LEAD_DOCTYPE, "write", lead, throw=True)
 
@@ -200,6 +216,9 @@ def log_a_dial(
 	dialed_at = dialed_at or payload.get("dialed_at") or now_datetime()
 	notes = notes if notes is not None else payload.get("notes")
 	follow_up_date = follow_up_date or payload.get("follow_up_date")
+	dial_result = require_dial_result(
+		dial_result if dial_result is not None else payload.get("dial_result")
+	)
 
 	doc = frappe.get_doc(LEAD_DOCTYPE, lead)
 	actor = frappe.session.user
@@ -212,9 +231,7 @@ def log_a_dial(
 			# insert has nothing to name the record by.
 			"id": f"dial-{frappe.generate_hash(length=12)}",
 			"type": DIAL_CALL_TYPE,
-			# Fixed outcome -- never the caller's `dial_result`, which is a read-only display
-			# field on the form and would be a side door to a connected status.
-			"status": DIAL_RESULT_NO_ANSWER,
+			"status": dial_result,
 			"start_time": dialed_at,
 			"caller": actor,
 			"telephony_medium": DIAL_TELEPHONY_MEDIUM,
