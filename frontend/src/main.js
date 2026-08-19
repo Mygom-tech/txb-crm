@@ -3,6 +3,7 @@ import './index.css'
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import { createDialog } from './utils/dialogs'
+import { installDialogBackdropGuard } from './utils/dialogBackdropGuard'
 import { initSocket } from './socket'
 import router from './router'
 import translationPlugin from './translation'
@@ -57,6 +58,12 @@ for (let key in globalComponents) {
 app.use(telemetryPlugin, { app_name: 'crm' })
 
 app.config.globalProperties.$dialog = createDialog
+
+// Prevent accidental backdrop/outside clicks from dismissing any CRM modal.
+// Applied once at the shared Dialog integration so it covers both the globally
+// registered declarative `<Dialog>` above and the programmatic `$dialog` flow;
+// Escape and the visible X close control stay operational.
+installDialogBackdropGuard()
 
 let socket
 if (import.meta.env.DEV) {
