@@ -34,8 +34,8 @@ describe('requiresDial — the Contact attempted gate', () => {
 })
 
 describe('the dial payload the server receives', () => {
-  it('requires both the timestamp and a selected result', () => {
-    expect(requiredDialFields()).toEqual(['dialed_at', 'dial_result'])
+  it('requires the timestamp, selected result, and notes', () => {
+    expect(requiredDialFields()).toEqual(['dialed_at', 'dial_result', 'notes'])
   })
 
   it('preserves the result selected by the user', () => {
@@ -79,10 +79,13 @@ describe('dial dialog seeding and validation', () => {
     expect(defaults.dial_result).toBe('No Answer')
   })
 
-  it('blocks submit until both dialed_at and dial_result are filled', () => {
+  it('blocks submit until dialed_at, dial_result, and notes are filled', () => {
     expect(canLogDial({})).toBe(false)
     expect(canLogDial({ dialed_at: now })).toBe(false)
     expect(canLogDial({ dialed_at: '', dial_result: 'No Answer' })).toBe(false)
-    expect(canLogDial({ dialed_at: now, dial_result: 'Busy' })).toBe(true)
+    expect(canLogDial({ dialed_at: now, dial_result: 'Busy' })).toBe(false)
+    expect(canLogDial({ dialed_at: now, dial_result: 'Busy', notes: 'Call back tomorrow' })).toBe(
+      true,
+    )
   })
 })

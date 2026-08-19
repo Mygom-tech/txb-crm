@@ -10,8 +10,8 @@ This module is the single place that owns the rule, mirroring the Deal arrangeme
 
 * `log_a_dial` is the only way in. It records a canonical dial-attempt activity (an outgoing
   CRM Call Log with the selected final result, its timestamp, the authenticated caller, and
-  optional notes and follow-up) **and** advances the Lead's status, in one transaction, so a
-  failure part-way leaves neither a stray activity nor a moved Lead.
+  required notes and optional follow-up) **and** advances the Lead's status, in one transaction,
+  so a failure part-way leaves neither a stray activity nor a moved Lead.
 
 * `guard_contact_attempted` is bound to the Lead's `validate` and rejects any other write that
   lands the status on Contact attempted. It is the enforcement boundary: a crafted API call, a
@@ -28,7 +28,7 @@ import json
 
 import frappe
 from frappe import _
-from frappe.utils import now_datetime
+from frappe.utils import escape_html, now_datetime
 
 from crm.txb.constants import (
 	CONVERSION_PIPELINE_INITIAL_STATUS,
@@ -80,7 +80,7 @@ LOG_A_DIAL = {
 			"options": "\n".join(DIAL_RESULTS),
 			"default": "No Answer",
 		},
-		{"fieldname": "notes", "label": "Notes", "fieldtype": "Small Text"},
+		{"fieldname": "notes", "label": "Notes", "fieldtype": "Small Text", "reqd": 1},
 		{
 			"fieldname": "follow_up_date",
 			"label": "Follow-up Date",
@@ -103,6 +103,14 @@ def require_dial_result(result: str | None) -> str:
 			title=_("Result Required"),
 		)
 	return str(result)
+
+
+def require_dial_notes(notes: str | None) -> str:
+	"""Return trimmed dial notes or refuse the request before any artifact is written."""
+	text = (notes or "").strip()
+	if not text:
+		frappe.throw(_("Enter notes for this dial."), title=_("Notes Required"))
+	return text
 
 
 def discovery_outcomes() -> tuple:
@@ -219,6 +227,7 @@ def log_a_dial(
 	dial_result = require_dial_result(
 		dial_result if dial_result is not None else payload.get("dial_result")
 	)
+	notes = require_dial_notes(notes)
 
 	doc = frappe.get_doc(LEAD_DOCTYPE, lead)
 	actor = frappe.session.user
@@ -239,9 +248,8 @@ def log_a_dial(
 			"reference_docname": doc.name,
 		}
 	)
-	note_name = _attach_dial_note(notes)
-	if note_name:
-		call.note = note_name
+	note_name = _attach_dial_note(doc, notes, dialed_at, dial_result)
+	call.note = note_name
 	call.insert(ignore_permissions=True)
 
 	# The flag authorises the one guarded status; the guard rejects the same write from any
@@ -419,21 +427,23 @@ def _coerce_payload(data) -> dict:
 	return data
 
 
-def _attach_dial_note(notes) -> str | None:
-	"""Store optional dial notes as an FCRM Note linked to the call log.
+def _attach_dial_note(lead, notes: str, dialed_at: str, dial_result: str) -> str:
+	"""Create one Lead-linked note containing the submitted dial details.
 
-	The CRM Call Log `note` field is a Link to FCRM Note, so the text lives in a note the call
-	carries rather than a plain column. Returns the note name, or None when no notes were given.
+	The Lead reference makes the note visible in its Notes/timeline. The returned name is also
+	stored on CRM Call Log.note so both records identify the same artifact.
 	"""
-	text = (notes or "").strip()
-	if not text:
-		return None
-
 	note = frappe.new_doc(NOTE_DOCTYPE)
 	note.update(
 		{
-			"title": _("Dial attempt"),
-			"content": text,
+			"title": _("Dial attempt - {0}").format(dial_result),
+			"content": (
+				f"<p><strong>{_('Dialed At')}:</strong> {escape_html(str(dialed_at))}</p>"
+				f"<p><strong>{_('Result')}:</strong> {escape_html(dial_result)}</p>"
+				f"<p><strong>{_('Notes')}:</strong><br>{escape_html(notes)}</p>"
+			),
+			"reference_doctype": LEAD_DOCTYPE,
+			"reference_docname": lead.name,
 		}
 	)
 	note.insert(ignore_permissions=True)
