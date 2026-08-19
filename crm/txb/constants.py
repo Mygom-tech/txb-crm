@@ -113,6 +113,16 @@ DIAL_RESULTS = ("Completed", "Failed", "Busy", "No Answer", "Canceled")
 # from-state, the seeded status, and the browser's requiresDiscovery() check cannot drift.
 LEAD_STATUS_DISCOVERY_MEETING_SET = "Discovery meeting set"
 
+# The guarded trigger status that exposes Run Discovery Meeting on every Lead status surface.
+# Ordered immediately after Discovery meeting set, it is a transition trigger, never a durable
+# resting state: selecting it (dropdown, Kanban drop, mobile control, detail action) routes
+# through run_discovery_meeting, which records notes and applies one of six outcomes atomically,
+# so the lead lands on an outcome status or a converted Opportunity -- never here.
+# crm.txb.lead_actions.guard_discovery_meeting_run refuses any direct write that would strand a
+# lead in this status. Named once so the seeded status, the browser's requiresDiscoveryRun()
+# gate, and the guard cannot drift.
+LEAD_STATUS_DISCOVERY_MEETING_RUN = "Discovery meeting run"
+
 # The three non-conversion outcomes of a discovery meeting, each a resting Lead status.
 LEAD_STATUS_NURTURE = "Nurture"
 LEAD_STATUS_NOT_INTERESTED = "Not interested"

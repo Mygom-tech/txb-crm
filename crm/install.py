@@ -82,15 +82,26 @@ def add_default_lead_statuses():
 			"type": "Ongoing",
 			"position": 9,
 		},
+		# The guarded trigger status that exposes Run Discovery Meeting on every status surface.
+		# Ordered immediately after Discovery meeting set; it is never a durable resting state --
+		# a move into it routes through crm.txb.lead_actions.run_discovery_meeting and lands on an
+		# outcome, and crm.txb.lead_actions.guard_discovery_meeting_run refuses any bare write that
+		# would strand a lead here. Seeded idempotently so installs that already carry the status
+		# keep their own configuration.
+		"Discovery meeting run": {
+			"color": "orange",
+			"type": "Ongoing",
+			"position": 10,
+		},
 		"Not interested": {
 			"color": "red",
 			"type": "Lost",
-			"position": 10,
+			"position": 11,
 		},
 		"Disqualified": {
 			"color": "red",
 			"type": "Lost",
-			"position": 11,
+			"position": 12,
 		},
 		"Qualified": {
 			"color": "green",

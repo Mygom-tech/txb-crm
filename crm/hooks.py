@@ -190,6 +190,10 @@ doc_events = {
 			# A terminal discovery outcome (Not interested, Disqualified) may only be reopened
 			# by an Admin; every other user's attempt to move the status out is refused here.
 			"crm.txb.lead_actions.guard_discovery_outcome",
+			# Discovery meeting run is a guarded trigger, never a resting state: every write
+			# that would strand a lead there is refused so the flow can only go through
+			# run_discovery_meeting.
+			"crm.txb.lead_actions.guard_discovery_meeting_run",
 		],
 	},
 	"CRM Call Log": {
