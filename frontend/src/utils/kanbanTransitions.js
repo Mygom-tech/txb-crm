@@ -3,11 +3,11 @@ import { candidateActions, prefillFor } from '@/utils/dealTransitions'
 import { runAction } from '@/utils/takeAction'
 import {
   logReach,
-  requiresReach,
   logADial,
-  requiresDial,
   logDiscovery,
-  requiresDiscoverySchedule,
+  resolveLeadStatusTransition,
+  LEAD_TRANSITION_SAVED,
+  LEAD_TRANSITION_FAILED,
 } from '@/utils/leadActions'
 
 const DEAL_DOCTYPE = 'CRM Deal'
@@ -41,15 +41,10 @@ export async function requestKanbanTransition(ctx) {
   }
 
   if (ctx.doctype === LEAD_DOCTYPE && ctx.fieldname === 'status') {
-    if (requiresReach(ctx.from, ctx.to)) {
-      return leadGuardedTransition(ctx, () => logReach(ctx.itemName))
-    }
-    if (requiresDial(ctx.to)) {
-      return leadGuardedTransition(ctx, () => logADial(ctx.itemName))
-    }
-    if (requiresDiscoverySchedule(ctx.from, ctx.to)) {
-      return leadGuardedTransition(ctx, () => logDiscovery(ctx.itemName))
-    }
+    const routed = await resolveLeadStatusTransition(ctx.from, ctx.to, ctx.itemName, {
+      actions: { logReach, logADial, logDiscovery },
+    })
+    if (routed.guarded) return applyGuardedTransition(ctx, routed)
   }
 
   const proceed = await confirmKanbanTransition(ctx)
@@ -57,25 +52,23 @@ export async function requestKanbanTransition(ctx) {
 }
 
 /**
- * Route a guarded Lead drop through its required action instead of the generic confirm plus a
- * direct status write the backend guard rejects. The same shape drives all three guarded
- * statuses — Log a reach (Contacted), Log a dial (Contact attempted), Schedule Discovery
- * meeting (Discovery meeting set) — each the exact path the Lead detail header and sidebar use.
+ * Map the shared Lead transition authority's outcome onto the board's transition shape, so a
+ * guarded Lead drop routes through its required action -- Log a reach (Contacted), Log a dial
+ * (Contact attempted) or Schedule Discovery meeting (Discovery meeting set) -- exactly as the
+ * Lead detail header and sidebar do, never a bare status write the backend guard rejects.
  *
- * `runGuardedAction` opens the action's modal and resolves the server response on an atomic
- * success, or null on cancel, dismissal, or an incomplete submit the dialog kept out; each of
- * those leaves the status untouched (nothing is posted), so we refuse and the caller reverts
- * the moved card, preserving the prior status. An action API failure throws out of the action,
- * which the caller's catch turns into the same revert. Only a success returns a response, and
- * only then is the transition already saved — the caller must not issue a second set_value.
+ * A saved outcome is the only one that already wrote the status, so it is the only one that
+ * reports `alreadySaved` and lets the card rest on the dropped column; the caller must not
+ * issue a second set_value. A cancelled or incomplete outcome posted nothing, so we refuse and
+ * the caller reverts the moved card to its prior status. A failed outcome is re-thrown so the
+ * caller's catch reverts the card the same way, preserving the board's existing contract.
  */
-async function leadGuardedTransition(ctx, runGuardedAction) {
-  const refused = { proceed: false, alreadySaved: false, finalStatus: ctx.from }
-
-  const result = await runGuardedAction()
-  if (!result) return refused
-
-  return { proceed: true, alreadySaved: true, finalStatus: ctx.to }
+function applyGuardedTransition(ctx, routed) {
+  if (routed.outcome === LEAD_TRANSITION_FAILED) throw routed.error
+  if (routed.outcome === LEAD_TRANSITION_SAVED) {
+    return { proceed: true, alreadySaved: true, finalStatus: ctx.to }
+  }
+  return { proceed: false, alreadySaved: false, finalStatus: ctx.from }
 }
 
 async function dealStatusTransition(ctx) {

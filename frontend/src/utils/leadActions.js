@@ -476,6 +476,112 @@ export function requiresDiscoverySchedule(fromStatus, toStatus) {
   return normalizeStatus(fromStatus) !== DISCOVERY_STATUS
 }
 
+// -----------------------------------------------------------------------------------------
+// Guarded Lead status transition authority (TXB-166)
+// -----------------------------------------------------------------------------------------
+
+/**
+ * The four outcomes a guarded existing-Lead transition can end in. Every surface that lets a
+ * user move a Lead's status -- the desktop header dropdown and side panel, the responsive
+ * MobileLead header and Details/Data controls, and the Lead Kanban board -- routes through
+ * {@link resolveLeadStatusTransition} and maps these outcomes to its own refresh, so no caller
+ * re-implements the reach/dial/discovery decision or writes a guarded status behind the guard.
+ *
+ *   - `saved`      the guarded action ran and the server atomically applied the new status;
+ *                  the caller must not issue a second status write.
+ *   - `cancelled`  the user dismissed the action's modal, or left it incomplete, so nothing was
+ *                  posted; the prior status is preserved.
+ *   - `failed`     the guarded action's server call threw; nothing landed and the prior status
+ *                  is preserved. The attached `error` lets the caller surface it.
+ *   - `plain-save` the move is unguarded; the caller performs its ordinary status save.
+ */
+export const LEAD_TRANSITION_SAVED = 'saved'
+export const LEAD_TRANSITION_CANCELLED = 'cancelled'
+export const LEAD_TRANSITION_FAILED = 'failed'
+export const LEAD_TRANSITION_PLAIN = 'plain-save'
+
+/**
+ * Whether moving from `fromStatus` to `toStatus` is one of the three guarded Lead transitions:
+ * entering Contacted (Log a reach), Contact attempted (Log a dial) or Discovery meeting set
+ * (Schedule Discovery meeting). A caller whose in-memory status has already been mutated
+ * optimistically (the side-panel / Details controls) passes `fromStatus` as undefined; the
+ * target-only gates -- the dial, and entering Contacted or Discovery from anywhere -- still fire.
+ */
+export function isGuardedLeadTransition(fromStatus, toStatus) {
+  return (
+    requiresReach(fromStatus, toStatus) ||
+    requiresDial(toStatus) ||
+    requiresDiscoverySchedule(fromStatus, toStatus)
+  )
+}
+
+/**
+ * The single authority every existing-Lead status caller delegates to before persistence.
+ *
+ * It picks the guarded action the transition requires -- Log a reach, Log a dial or Schedule
+ * Discovery meeting -- runs it, and classifies the result into one of the four
+ * {@link LEAD_TRANSITION_SAVED}/CANCELLED/FAILED/PLAIN outcomes. The guarded action stays the
+ * sole owner of the atomic activity-plus-status write; this function never writes a status
+ * itself, so a cancelled or failed action leaves the Lead exactly where it was.
+ *
+ * The action runners are injectable via `options.actions` so callers (and their tests) can
+ * substitute stubs; unset, they default to the module's real logReach/logADial/logDiscovery.
+ * `actor`, `now` and `defaults` are forwarded to whichever action fires.
+ *
+ * @param {string} fromStatus - prior status, or undefined for a target-only (optimistic) caller
+ * @param {string} toStatus - the status the user is moving to
+ * @param {string} lead - Lead docname
+ * @param {Object} [options]
+ * @param {string} [options.actor]
+ * @param {string} [options.now]
+ * @param {Object} [options.defaults]
+ * @param {Object} [options.actions] - { logReach, logADial, logDiscovery } overrides
+ * @returns {Promise<{outcome: string, guarded: boolean, status: string, result?: any, error?: any}>}
+ */
+export async function resolveLeadStatusTransition(
+  fromStatus,
+  toStatus,
+  lead,
+  { actor, now, defaults, actions } = {},
+) {
+  const run = { logReach, logADial, logDiscovery, ...(actions || {}) }
+
+  let invoke = null
+  if (requiresReach(fromStatus, toStatus)) {
+    invoke = () => run.logReach(lead, { actor, now })
+  } else if (requiresDial(toStatus)) {
+    invoke = () => run.logADial(lead, { now, defaults })
+  } else if (requiresDiscoverySchedule(fromStatus, toStatus)) {
+    invoke = () => run.logDiscovery(lead, { actor, now })
+  }
+
+  // Unguarded: the caller owns the ordinary status save (including the Lost-reason path).
+  if (!invoke) {
+    return { outcome: LEAD_TRANSITION_PLAIN, guarded: false, status: toStatus, result: null }
+  }
+
+  try {
+    const result = await invoke()
+    // A null result means the modal was cancelled, dismissed, or kept open on an incomplete
+    // submit -- nothing was posted, so the prior status stands.
+    if (!result) {
+      return {
+        outcome: LEAD_TRANSITION_CANCELLED,
+        guarded: true,
+        status: fromStatus,
+        result: null,
+      }
+    }
+    // The server atomically recorded the activity and moved the status; the caller must not
+    // issue a second write.
+    return { outcome: LEAD_TRANSITION_SAVED, guarded: true, status: toStatus, result }
+  } catch (error) {
+    // The action's server call threw: nothing landed, the prior status is preserved, and the
+    // caller decides whether to surface or re-throw the error.
+    return { outcome: LEAD_TRANSITION_FAILED, guarded: true, status: fromStatus, error }
+  }
+}
+
 /**
  * Fields the Schedule Discovery meeting dialog renders. Date, time and type are always
  * required; the manual link is required (and shown) only for a Virtual meeting, the address
