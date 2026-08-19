@@ -161,7 +161,9 @@ describe('requestKanbanTransition — Lead drop into Contacted (Log a reach)', (
     await requestKanbanTransition(ctx)
 
     expect(logReach).toHaveBeenCalledOnce()
-    expect(logReach).toHaveBeenCalledWith('CRM-LEAD-01')
+    // The board delegates to the shared authority, which forwards the Lead docname (and a
+    // normalized options object) to the injected action.
+    expect(logReach).toHaveBeenCalledWith('CRM-LEAD-01', expect.anything())
     // No generic confirm dialog and no caller-issued status write path.
     expect(createDialog).not.toHaveBeenCalled()
   })
@@ -229,7 +231,7 @@ describe('requestKanbanTransition — Lead drop into Contact attempted (Log a di
     await requestKanbanTransition(dialCtx)
 
     expect(logADial).toHaveBeenCalledOnce()
-    expect(logADial).toHaveBeenCalledWith('CRM-LEAD-01')
+    expect(logADial).toHaveBeenCalledWith('CRM-LEAD-01', expect.anything())
     expect(createDialog).not.toHaveBeenCalled()
   })
 
@@ -281,7 +283,7 @@ describe('requestKanbanTransition — Lead drop into Discovery meeting set', () 
     await requestKanbanTransition(discoveryCtx)
 
     expect(logDiscovery).toHaveBeenCalledOnce()
-    expect(logDiscovery).toHaveBeenCalledWith('CRM-LEAD-01')
+    expect(logDiscovery).toHaveBeenCalledWith('CRM-LEAD-01', expect.anything())
     // No generic confirm dialog and no caller-issued status write path.
     expect(createDialog).not.toHaveBeenCalled()
   })

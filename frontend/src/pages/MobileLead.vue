@@ -165,7 +165,12 @@ import {
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import ConvertToDealModal from '@/components/Modals/ConvertToDealModal.vue'
-import { requiresDial, logADial } from '@/utils/leadActions'
+import {
+  resolveLeadStatusTransition,
+  isGuardedLeadTransition,
+  LEAD_TRANSITION_SAVED,
+  LEAD_TRANSITION_FAILED,
+} from '@/utils/leadActions'
 
 const { brand } = getSettings()
 const { $dialog, $socket } = globalStore()
@@ -380,34 +385,32 @@ function statusLabel(status) {
 }
 
 async function triggerStatusChange(value) {
-  // Contact attempted is server-guarded: it is reachable only through a logged dial. Open the
-  // Log a dial form instead of writing the status, and let the server move it atomically. The
-  // status is not touched first, so a cancelled dial leaves the lead exactly where it was.
-  if (requiresDial(value)) {
-    await logDialForStatus()
+  // Every guarded existing-Lead transition -- entering Contacted (Log a reach), Contact
+  // attempted (Log a dial) or Discovery meeting set (Schedule Discovery meeting) -- is routed
+  // through the one shared authority the desktop header/side panel and the Kanban board use, so
+  // mobile cannot drift back into a bare status write the backend guard rejects. The status is
+  // not touched first, so a cancelled or failed action leaves the lead exactly where it was.
+  const routed = await resolveLeadStatusTransition(doc.value?.status, value, props.leadId)
+  if (routed.guarded) {
+    applyGuardedTransition(routed)
     return
   }
   await triggerOnChange('status', value)
   setLostReason()
 }
 
-// Prompt for the dial, then let the server save the call log and the Contact attempted status
-// atomically. On cancel nothing was sent, so the status is left exactly as it was; on success the
-// document, side panel sections and activities are reloaded so every surface catches up. This is
-// the same routing the desktop header/side panel and the Kanban board use, so mobile cannot drift
-// back into a bare status write the backend guard rejects.
-async function logDialForStatus() {
-  try {
-    const result = await logADial(props.leadId)
-    // Cancel resolves null: nothing was sent, the status is unchanged, so there is nothing to
-    // refresh.
-    if (!result) return
-
-    document.reload?.()
+// Map the shared authority's outcome onto mobile's refresh. A cancelled or failed transition
+// posted nothing, so reloading the document discards any optimistic status change and restores
+// the prior status; a saved one atomically applied the new status server-side, so it also
+// refreshes the side-panel sections. A failure is surfaced as a toast.
+function applyGuardedTransition(routed) {
+  if (routed.outcome === LEAD_TRANSITION_FAILED) {
+    toast.error(routed.error?.messages?.[0] || __('Could not update the lead status'))
+  }
+  document.reload?.()
+  if (routed.outcome === LEAD_TRANSITION_SAVED) {
     reload.value = true
     sections.reload()
-  } catch (error) {
-    toast.error(error.messages?.[0] || __('Could not log the dial'))
   }
 }
 
@@ -427,19 +430,19 @@ function setLostReason() {
 }
 
 function beforeStatusChange(data) {
+  const hasStatus = Object.hasOwn(data ?? {}, 'status')
   // The Details/Data status control and the activity feed are guarded the same way as the header
-  // dropdown: moving to Contact attempted requires a logged dial. The control has set the value
-  // locally but it is not persisted here -- the dial performs the atomic move -- so reload
-  // afterwards to either reflect the server state or discard the optimistic change when the dial
-  // was cancelled, failed, or was submitted incomplete.
-  if (Object.hasOwn(data ?? {}, 'status') && requiresDial(data.status)) {
-    logDialForStatus().finally(() => document.reload?.())
+  // dropdown. They set the value locally but do not persist it here, so route the target through
+  // the shared authority (prior status is already overwritten, so it is passed as undefined and
+  // the target-only gates still fire). applyGuardedTransition reloads afterwards to reflect the
+  // server state or discard the optimistic change on cancel/failure.
+  if (hasStatus && isGuardedLeadTransition(undefined, data.status)) {
+    resolveLeadStatusTransition(undefined, data.status, props.leadId).then(
+      applyGuardedTransition,
+    )
     return
   }
-  if (
-    Object.hasOwn(data ?? {}, 'status') &&
-    getLeadStatus(data.status).type == 'Lost'
-  ) {
+  if (hasStatus && getLeadStatus(data.status).type == 'Lost') {
     setLostReason()
   } else {
     document.save.submit(null, {

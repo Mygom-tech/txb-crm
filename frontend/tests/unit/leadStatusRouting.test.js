@@ -1,79 +1,220 @@
-import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+
+import { describe, it, expect, vi } from 'vitest'
 
 import {
   CONTACT_ATTEMPTED_STATUS,
   CONTACTED_STATUS,
-  requiresDial,
-  requiresReach,
+  DISCOVERY_STATUS,
+  isGuardedLeadTransition,
+  resolveLeadStatusTransition,
+  LEAD_TRANSITION_SAVED,
+  LEAD_TRANSITION_CANCELLED,
+  LEAD_TRANSITION_FAILED,
+  LEAD_TRANSITION_PLAIN,
 } from '@/utils/leadActions'
 
 /**
- * The guarded Lead status-routing contract, shared by every existing-Lead entry point:
+ * TXB-166: one production authority owns the guarded existing-Lead status routing, and every
+ * existing-Lead status caller delegates to it:
  *
  *   - desktop Lead.vue header dropdown        (triggerStatusChange)
  *   - desktop Lead.vue side-panel/activities  (beforeStatusChange)
  *   - responsive MobileLead.vue header         (triggerStatusChange)
  *   - responsive MobileLead.vue Details/Data   (beforeStatusChange)
- *   - Lead Kanban board                        (requestKanbanTransition)
+ *   - Lead Kanban board                        (requestKanbanTransition -> the authority)
  *
- * Each surface decides the same way: a move into "Contact attempted" is refused a bare status
- * write and routed through Log a dial instead, while entering "Contacted" routes through Log a
- * reach and everything else (including Lost) keeps its ordinary save. These tests assert the
- * decision each entry point makes, so desktop and mobile cannot drift apart or regress the guard.
+ * These tests exercise the real {@link resolveLeadStatusTransition} (no re-implemented routing)
+ * with injected action stubs, and read the caller source so a surface cannot drift apart, skip
+ * the authority, or write a guarded status behind the backend guard.
  */
 
-// The exact predicates the header dropdowns evaluate before touching status.
-function headerRoute(fromStatus, toStatus) {
-  if (requiresReach(fromStatus, toStatus)) return 'log-a-reach'
-  if (requiresDial(toStatus)) return 'log-a-dial'
-  return 'plain-save'
+const LEAD = 'CRM-LEAD-01'
+
+// Injected action stubs: the authority calls exactly one of these, never the real dialogs.
+function stubActions(overrides = {}) {
+  return {
+    logReach: vi.fn().mockResolvedValue({ status: CONTACTED_STATUS }),
+    logADial: vi.fn().mockResolvedValue({ status: CONTACT_ATTEMPTED_STATUS }),
+    logDiscovery: vi.fn().mockResolvedValue({ status: DISCOVERY_STATUS }),
+    ...overrides,
+  }
 }
 
-// The exact predicate the editable Details/Data + activity status controls evaluate. The dial
-// gate is checked first, matching beforeStatusChange on both desktop and mobile.
-function dataFieldRoute(toStatus) {
-  if (requiresDial(toStatus)) return 'log-a-dial'
-  return 'plain-save'
+function readSource(relativePath) {
+  return readFileSync(new URL(relativePath, import.meta.url), 'utf-8')
 }
 
-describe('responsive/mobile header status dropdown', () => {
-  it('routes Contact attempted through Log a dial before any status mutation', () => {
-    expect(headerRoute('Open', CONTACT_ATTEMPTED_STATUS)).toBe('log-a-dial')
+describe('resolveLeadStatusTransition — the one guarded routing authority', () => {
+  it('routes entering Contacted through Log a reach, never Log a dial', async () => {
+    const actions = stubActions()
+    const routed = await resolveLeadStatusTransition('Open', CONTACTED_STATUS, LEAD, { actions })
+
+    expect(actions.logReach).toHaveBeenCalledOnce()
+    expect(actions.logReach).toHaveBeenCalledWith(LEAD, expect.anything())
+    expect(actions.logADial).not.toHaveBeenCalled()
+    expect(actions.logDiscovery).not.toHaveBeenCalled()
+    expect(routed).toMatchObject({
+      outcome: LEAD_TRANSITION_SAVED,
+      guarded: true,
+      status: CONTACTED_STATUS,
+    })
   })
 
-  it('keeps an unguarded move on the plain status save', () => {
-    expect(headerRoute('Contacted', 'Nurture')).toBe('plain-save')
+  it('routes Contact attempted through Log a dial before any status write', async () => {
+    const actions = stubActions()
+    const routed = await resolveLeadStatusTransition(
+      'Open',
+      CONTACT_ATTEMPTED_STATUS,
+      LEAD,
+      { actions },
+    )
+
+    expect(actions.logADial).toHaveBeenCalledOnce()
+    expect(actions.logReach).not.toHaveBeenCalled()
+    expect(actions.logDiscovery).not.toHaveBeenCalled()
+    expect(routed.outcome).toBe(LEAD_TRANSITION_SAVED)
+    expect(routed.status).toBe(CONTACT_ATTEMPTED_STATUS)
   })
 
-  it('keeps a Lost move on the plain (Lost-reason) path, not Log a dial', () => {
-    expect(headerRoute('Open', 'Lost')).toBe('plain-save')
+  it('routes entering Discovery meeting set through Schedule Discovery meeting', async () => {
+    const actions = stubActions()
+    const routed = await resolveLeadStatusTransition('Contacted', DISCOVERY_STATUS, LEAD, {
+      actions,
+    })
+
+    expect(actions.logDiscovery).toHaveBeenCalledOnce()
+    expect(actions.logReach).not.toHaveBeenCalled()
+    expect(actions.logADial).not.toHaveBeenCalled()
+    expect(routed.outcome).toBe(LEAD_TRANSITION_SAVED)
+  })
+
+  it('gates a target-only caller (optimistic from) into the same guarded action', async () => {
+    // The side-panel / Details controls overwrite the in-memory status first, so they pass
+    // `from` as undefined; entering Contacted / Discovery, and any dial, must still gate.
+    expect(isGuardedLeadTransition(undefined, CONTACTED_STATUS)).toBe(true)
+    expect(isGuardedLeadTransition(undefined, DISCOVERY_STATUS)).toBe(true)
+    expect(isGuardedLeadTransition(undefined, CONTACT_ATTEMPTED_STATUS)).toBe(true)
+
+    const actions = stubActions()
+    const routed = await resolveLeadStatusTransition(undefined, CONTACTED_STATUS, LEAD, {
+      actions,
+    })
+    expect(actions.logReach).toHaveBeenCalledOnce()
+    expect(routed.outcome).toBe(LEAD_TRANSITION_SAVED)
   })
 })
 
-describe('responsive/mobile Details/Data editable status control', () => {
-  it('routes Contact attempted through the same Log a dial action', () => {
-    expect(dataFieldRoute(CONTACT_ATTEMPTED_STATUS)).toBe('log-a-dial')
+describe('Log a dial owns exactly one dial/status mutation (ac-2)', () => {
+  it('performs one successful dial-plus-status mutation and reports saved', async () => {
+    const actions = stubActions()
+    const routed = await resolveLeadStatusTransition(
+      'Open',
+      CONTACT_ATTEMPTED_STATUS,
+      LEAD,
+      { actions },
+    )
+
+    // Exactly one mutation, owned by Log a dial; the authority never issues a second status write.
+    expect(actions.logADial).toHaveBeenCalledTimes(1)
+    expect(routed.outcome).toBe(LEAD_TRANSITION_SAVED)
+    expect(routed.result).toEqual({ status: CONTACT_ATTEMPTED_STATUS })
   })
 
-  it('leaves every other status on the plain save', () => {
-    expect(dataFieldRoute('Nurture')).toBe('plain-save')
-    expect(dataFieldRoute('Lost')).toBe('plain-save')
-    expect(dataFieldRoute(CONTACTED_STATUS)).toBe('plain-save')
+  it('returns a non-persisting cancelled outcome with the prior status preserved', async () => {
+    const actions = stubActions({ logADial: vi.fn().mockResolvedValue(null) })
+    const routed = await resolveLeadStatusTransition(
+      'Nurture',
+      CONTACT_ATTEMPTED_STATUS,
+      LEAD,
+      { actions },
+    )
+
+    expect(routed.outcome).toBe(LEAD_TRANSITION_CANCELLED)
+    expect(routed.status).toBe('Nurture')
+    expect(routed.result).toBeNull()
+  })
+
+  it('returns a non-persisting failed outcome with the prior status preserved', async () => {
+    const failure = new Error('log_a_dial failed')
+    const actions = stubActions({ logADial: vi.fn().mockRejectedValue(failure) })
+    const routed = await resolveLeadStatusTransition(
+      'Nurture',
+      CONTACT_ATTEMPTED_STATUS,
+      LEAD,
+      { actions },
+    )
+
+    expect(routed.outcome).toBe(LEAD_TRANSITION_FAILED)
+    expect(routed.status).toBe('Nurture')
+    expect(routed.error).toBe(failure)
   })
 })
 
-describe('desktop entry points keep their existing guarded routing', () => {
-  it('still routes Contact attempted through Log a dial from the header', () => {
-    expect(headerRoute('Open', CONTACT_ATTEMPTED_STATUS)).toBe('log-a-dial')
+describe('unguarded and ordinary transitions keep their contracts (ac-3)', () => {
+  it('leaves entering Contacted on Log a reach, not Log a dial', async () => {
+    const actions = stubActions()
+    const routed = await resolveLeadStatusTransition('Open', CONTACTED_STATUS, LEAD, { actions })
+    expect(actions.logADial).not.toHaveBeenCalled()
+    expect(routed.status).toBe(CONTACTED_STATUS)
   })
 
-  it('still routes entering Contacted through Log a reach, never Log a dial', () => {
-    expect(headerRoute('Open', CONTACTED_STATUS)).toBe('log-a-reach')
-    expect(requiresDial(CONTACTED_STATUS)).toBe(false)
+  it('does not re-gate a Lead already resting in a guarded status when moving onward', async () => {
+    const actions = stubActions()
+    const routed = await resolveLeadStatusTransition(
+      CONTACT_ATTEMPTED_STATUS,
+      'Nurture',
+      LEAD,
+      { actions },
+    )
+    expect(actions.logADial).not.toHaveBeenCalled()
+    expect(routed.outcome).toBe(LEAD_TRANSITION_PLAIN)
+    expect(routed.guarded).toBe(false)
   })
 
-  it('does not re-gate a Lead already resting in Contact attempted onward move', () => {
-    // Leaving Contact attempted is unguarded; only entering it opens Log a dial.
-    expect(headerRoute(CONTACT_ATTEMPTED_STATUS, 'Nurture')).toBe('plain-save')
+  it('keeps a Lost move on the plain (Lost-reason) path, never a guarded action', async () => {
+    expect(isGuardedLeadTransition('Open', 'Lost')).toBe(false)
+    const actions = stubActions()
+    const routed = await resolveLeadStatusTransition('Open', 'Lost', LEAD, { actions })
+    expect(actions.logReach).not.toHaveBeenCalled()
+    expect(actions.logADial).not.toHaveBeenCalled()
+    expect(actions.logDiscovery).not.toHaveBeenCalled()
+    expect(routed.outcome).toBe(LEAD_TRANSITION_PLAIN)
+  })
+
+  it('keeps an ordinary move on the plain status save', async () => {
+    const actions = stubActions()
+    const routed = await resolveLeadStatusTransition('Contacted', 'Nurture', LEAD, { actions })
+    expect(routed.outcome).toBe(LEAD_TRANSITION_PLAIN)
+    expect(routed.guarded).toBe(false)
+    expect(routed.status).toBe('Nurture')
+  })
+})
+
+describe('every existing-Lead status caller imports and invokes the authority (ac-1)', () => {
+  const callers = [
+    ['desktop Lead.vue', '../../src/pages/Lead.vue'],
+    ['responsive MobileLead.vue', '../../src/pages/MobileLead.vue'],
+    ['Lead Kanban board', '../../src/utils/kanbanTransitions.js'],
+  ]
+
+  it.each(callers)('%s imports resolveLeadStatusTransition from leadActions', (_label, path) => {
+    const source = readSource(path)
+    expect(source).toMatch(/from ['"]@\/utils\/leadActions['"]/)
+    expect(source).toContain('resolveLeadStatusTransition')
+  })
+
+  it.each(callers)('%s invokes the authority before persisting a status', (_label, path) => {
+    const source = readSource(path)
+    expect(source).toMatch(/resolveLeadStatusTransition\s*\(/)
+  })
+
+  it.each(callers)('%s no longer re-implements the guarded routing decision', (_label, path) => {
+    const source = readSource(path)
+    // The old per-surface predicates (requiresReach / requiresDial / requiresDiscoverySchedule)
+    // must not be called directly by a caller anymore; the authority owns that decision.
+    expect(source).not.toMatch(/requiresReach\s*\(/)
+    expect(source).not.toMatch(/requiresDial\s*\(/)
+    expect(source).not.toMatch(/requiresDiscoverySchedule\s*\(/)
   })
 })

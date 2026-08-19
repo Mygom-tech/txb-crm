@@ -314,16 +314,12 @@ import {
   PENDING_REVIEW,
 } from '@/utils/leadReasonPrompt'
 import {
-  CONTACTED_STATUS,
-  logReach,
-  requiresReach,
-  requiresDial,
-  logADial,
   requiresDiscovery,
   runDiscoveryMeeting,
-  requiresDiscoverySchedule,
-  logDiscovery,
-  DISCOVERY_STATUS,
+  resolveLeadStatusTransition,
+  isGuardedLeadTransition,
+  LEAD_TRANSITION_SAVED,
+  LEAD_TRANSITION_FAILED,
 } from '@/utils/leadActions'
 import { sessionStore } from '@/stores/session'
 import { getSettings } from '@/stores/settings'
@@ -551,74 +547,36 @@ const sections = createResource({
 })
 
 async function triggerStatusChange(value) {
-  // TXB-128: entering Contacted is gated on a Log a reach. Short-circuit before
-  // triggerOnChange so the in-memory status stays put until the reach is saved; cancelling
-  // then leaves the status exactly as it was.
-  if (requiresReach(doc.value?.status, value)) {
-    await enterContactedWithReach()
-    return
-  }
-  // TXB-129: entering Discovery meeting set is gated on scheduling a discovery meeting.
-  // Short-circuit before triggerOnChange so the in-memory status stays put until the schedule
-  // is saved; cancelling then leaves the status exactly as it was.
-  if (requiresDiscoverySchedule(doc.value?.status, value)) {
-    await enterDiscoveryWithSchedule()
-    return
-  }
-  // Contact attempted is server-guarded: it is reachable only through a logged dial. Open the
-  // Log a dial form instead of writing the status, and let the server move it atomically. The
-  // status is not touched first, so a cancelled dial leaves the lead exactly where it was.
-  if (requiresDial(value)) {
-    await logDialForStatus()
+  // Every guarded existing-Lead transition -- entering Contacted (Log a reach), Contact
+  // attempted (Log a dial) or Discovery meeting set (Schedule Discovery meeting) -- is routed
+  // through the one shared authority instead of a bare status write the backend guard rejects.
+  // The in-memory status is not touched first, so a cancelled or failed action leaves the lead
+  // exactly where it was.
+  const routed = await resolveLeadStatusTransition(doc.value?.status, value, props.leadId, {
+    actor: sessionUser,
+  })
+  if (routed.guarded) {
+    applyGuardedTransition(routed)
     return
   }
   await triggerOnChange('status', value)
   setLostReason()
 }
 
-// Prompt for the canonical reach, then let the server save the activity and the Contacted
-// status atomically. On success (or cancel) the document is reloaded from the server: on
-// cancel nothing was written, so this discards any optimistic status change and leaves the
-// status unchanged; on success it reflects the server-applied Contacted status.
-async function enterContactedWithReach() {
-  const result = await logReach(props.leadId, { actor: sessionUser })
+// Map the shared authority's outcome onto the desktop Lead surfaces' refresh. A cancelled or
+// failed transition posted nothing, so reloading the document discards any optimistic status
+// change and restores the prior status; a saved one atomically applied the new status server-
+// side, so it additionally refreshes the side-panel sections and the activity feed (TXB-164:
+// the reach/dial land as native FCRM Notes). A failure is surfaced as a toast.
+function applyGuardedTransition(routed) {
+  if (routed.outcome === LEAD_TRANSITION_FAILED) {
+    toast.error(routed.error?.messages?.[0] || __('Could not update the lead status'))
+  }
   document.reload?.()
-  if (result) {
+  if (routed.outcome === LEAD_TRANSITION_SAVED) {
+    reload.value = true
     sections.reload()
-    // TXB-164: the reach is now saved as a native FCRM Note, so refresh the activities
-    // resource too -- otherwise the new card only appears under Notes after a manual reload.
     activities.value?.all_activities?.reload()
-  }
-}
-
-// TXB-129: prompt for the discovery details, then let the server save the scheduling activity
-// and the Discovery meeting set status atomically. On success (or cancel) the document is
-// reloaded: on cancel nothing was written, so this discards any optimistic status change and
-// leaves the status unchanged; on success it reflects the server-applied status.
-async function enterDiscoveryWithSchedule() {
-  const result = await logDiscovery(props.leadId, { actor: sessionUser })
-  document.reload?.()
-  if (result) {
-    reload.value = true
-    sections.reload()
-  }
-}
-
-async function logDialForStatus() {
-  try {
-    const result = await logADial(props.leadId)
-    // Cancel resolves null: nothing was sent, the status is unchanged, so there is nothing to
-    // refresh.
-    if (!result) return
-
-    // The dial wrote the status, a call log, and optionally a note and follow-up task. Refresh
-    // the document so the header status control catches up, the activity feed, and the side
-    // panel sections.
-    document.reload?.()
-    reload.value = true
-    sections.reload()
-  } catch (error) {
-    toast.error(error.messages?.[0] || __('Could not log the dial'))
   }
 }
 
@@ -716,33 +674,19 @@ function setLostReason() {
 }
 
 function beforeStatusChange(data) {
-  // The side panel status control is guarded the same way as the header dropdown: moving to
-  // Contact attempted requires a logged dial. The panel has set the value locally but it is
-  // not persisted here -- the dial performs the atomic move -- so reload afterwards to either
-  // reflect the server state or discard the optimistic change when the dial was cancelled.
-  if (Object.hasOwn(data ?? {}, 'status') && requiresDial(data.status)) {
-    logDialForStatus().finally(() => document.reload?.())
+  const hasStatus = Object.hasOwn(data ?? {}, 'status')
+  // The side panel and activity status controls are guarded the same way as the header
+  // dropdown. They mutate the in-memory status optimistically but do not persist it here, so
+  // route the target through the shared authority (prior status is already overwritten, so it
+  // is passed as undefined and the target-only gates still fire). applyGuardedTransition reloads
+  // afterwards to reflect the server state or discard the optimistic change on cancel/failure.
+  if (hasStatus && isGuardedLeadTransition(undefined, data.status)) {
+    resolveLeadStatusTransition(undefined, data.status, props.leadId, {
+      actor: sessionUser,
+    }).then(applyGuardedTransition)
     return
   }
-  if (
-    Object.hasOwn(data ?? {}, 'status') &&
-    data.status === CONTACTED_STATUS
-  ) {
-    // The sidebar/activity control already mutated the in-memory status to Contacted but
-    // has not saved it. Require the reach before persisting; enterContactedWithReach
-    // reloads on cancel, reverting that optimistic change so the status is left unchanged.
-    enterContactedWithReach()
-  } else if (
-    Object.hasOwn(data ?? {}, 'status') &&
-    data.status === DISCOVERY_STATUS
-  ) {
-    // Same gate as the header dropdown: require the discovery schedule before persisting.
-    // enterDiscoveryWithSchedule reloads on cancel, reverting the optimistic status change.
-    enterDiscoveryWithSchedule()
-  } else if (
-    Object.hasOwn(data ?? {}, 'status') &&
-    getLeadStatus(data.status).type == 'Lost'
-  ) {
+  if (hasStatus && getLeadStatus(data.status).type == 'Lost') {
     setLostReason()
   } else {
     document.save.submit(null, {
