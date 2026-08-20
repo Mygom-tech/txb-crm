@@ -78,7 +78,21 @@
                         class="grid min-h-[28px] flex-1 items-center overflow-hidden text-base"
                       >
                         <div
-                          v-if="
+                          v-if="isDealNavLink(field, doc[field.fieldname])"
+                          class="flex h-7 items-center px-2 py-1"
+                        >
+                          <Tooltip :text="__(field.tooltip)">
+                            <button
+                              type="button"
+                              class="truncate text-ink-blue-link hover:underline"
+                              @click="navigateToDeal(router, doc[field.fieldname])"
+                            >
+                              {{ doc[field.fieldname] }}
+                            </button>
+                          </Tooltip>
+                        </div>
+                        <div
+                          v-else-if="
                             field.read_only &&
                             ![
                               'Int',
@@ -439,6 +453,7 @@ import UserAvatar from '@/components/UserAvatar.vue'
 import SidePanelModal from '@/components/Modals/SidePanelModal.vue'
 import { getMeta } from '@/stores/meta'
 import { parseLinkFilters } from '@/utils/fieldTransforms'
+import { isDealNavLink, navigateToDeal } from '@/utils/dealHandoverLinks'
 import { usersStore } from '@/stores/users'
 import { statusesStore } from '@/stores/statuses'
 import { statusLinkFilters } from '@/utils/pipelineStatuses'
@@ -486,6 +501,7 @@ import {
   toast,
 } from 'frappe-ui'
 import { useDocument } from '@/data/document'
+import { useRouter } from 'vue-router'
 import { ref, computed, getCurrentInstance } from 'vue'
 
 const props = defineProps({
@@ -505,6 +521,8 @@ const emit = defineEmits([
 
 const { getFormattedPercent, getFormattedFloat, getFormattedCurrency } =
   getMeta(props.doctype)
+
+const router = useRouter()
 
 const { users, isManager, getUser } = usersStore()
 const { pipelineStatuses } = statusesStore()
