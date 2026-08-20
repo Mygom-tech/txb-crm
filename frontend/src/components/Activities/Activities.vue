@@ -1,5 +1,9 @@
 <template>
+  <!-- Read-only aggregate mode (Contact) suppresses every composer/"New" affordance: the
+       header is the entry point for emails, comments, notes, tasks, attachments, events and
+       WhatsApp, so it is not rendered at all rather than gated button-by-button. -->
   <ActivityHeader
+    v-if="!readOnly"
     v-model="tabIndex"
     v-model:showWhatsappTemplates="showWhatsappTemplates"
     v-model:showFilesUploader="showFilesUploader"
@@ -121,16 +125,23 @@
         />
       </div>
       <template v-else>
-        <div
-          v-for="(activity, i) in activities"
-          :key="activity.name"
-          class="activity px-3 sm:px-10"
-          :class="
-            ['Activity', 'Emails'].includes(title)
-              ? 'grid grid-cols-[30px_minmax(auto,_1fr)] gap-2 sm:gap-4'
-              : ''
-          "
-        >
+        <template v-for="(activity, i) in activities" :key="activity.name">
+          <!-- Aggregate Contact log: attribute each row to its archived Lead / linked
+               Opportunity source and pre/post-conversion phase above the entry. -->
+          <div
+            v-if="readOnly"
+            class="px-3 pt-3 sm:px-10"
+          >
+            <ActivitySourceBadge :activity="activity" :leadEmails="leadEmails" />
+          </div>
+          <div
+            class="activity px-3 sm:px-10"
+            :class="
+              ['Activity', 'Emails'].includes(title)
+                ? 'grid grid-cols-[30px_minmax(auto,_1fr)] gap-2 sm:gap-4'
+                : ''
+            "
+          >
           <div
             v-if="['Activity', 'Emails'].includes(title)"
             class="z-0 relative flex justify-center before:absolute before:left-[50%] before:-z-[1] before:top-0 before:border-l before:border-outline-elevation-2"
@@ -190,7 +201,11 @@
             v-if="activity.activity_type == 'communication'"
             class="pb-5 mt-px"
           >
-            <EmailArea :activity="activity" :emailBox="emailBox" />
+            <EmailArea
+              :activity="activity"
+              :emailBox="emailBox || {}"
+              :readOnly="readOnly"
+            />
           </div>
           <div
             v-else-if="activity.activity_type == 'comment'"
@@ -199,6 +214,7 @@
           >
             <CommentArea
               :activity="activity"
+              :readOnly="readOnly"
               @reload="all_activities.reload()"
             />
           </div>
@@ -383,6 +399,7 @@
             </div>
           </div>
         </div>
+        </template>
       </template>
     </div>
     <div v-else-if="title == 'Data'" class="h-full flex flex-col px-3 sm:px-10">
@@ -401,7 +418,7 @@
       :top="top"
     />
   </FadedScrollableDiv>
-  <div>
+  <div v-if="!readOnly">
     <CommunicationArea
       v-if="['Emails', 'Comments', 'Activity'].includes(title)"
       ref="emailBox"
@@ -421,12 +438,13 @@
     />
   </div>
   <WhatsappTemplateSelectorModal
-    v-if="whatsappEnabled"
+    v-if="whatsappEnabled && !readOnly"
     v-model="showWhatsappTemplates"
     :doctype="doctype"
     @send="(t) => sendTemplate(t)"
   />
   <AllModals
+    v-if="!readOnly"
     ref="modalRef"
     v-model="all_activities"
     :doctype="doctype"
@@ -434,6 +452,7 @@
     @refreshDocument="_document.reload()"
   />
   <FilesUploader
+    v-if="!readOnly"
     v-model="showFilesUploader"
     :doctype="doctype"
     :docname="docname"
@@ -484,6 +503,8 @@ import WhatsappTemplateSelectorModal from '@/components/Modals/WhatsappTemplateS
 import AllModals from '@/components/Activities/AllModals.vue'
 import FilesUploader from '@/components/FilesUploader/FilesUploader.vue'
 import TimelineTimestamp from '@/components/Activities/TimelineTimestamp.vue'
+import ActivitySourceBadge from '@/components/Activities/ActivitySourceBadge.vue'
+import { leadSourceNames } from '@/utils/contactActivity'
 import { startCase } from '@/utils'
 import { hideCallDuration } from '@/utils/dealPresentation'
 import { globalStore } from '@/stores/global'
@@ -515,6 +536,11 @@ const props = defineProps({
   doctype: { type: String, default: 'CRM Lead' },
   docname: { type: String, default: '' },
   tabs: { type: Array, default: () => [] },
+  // Read-only aggregate contract (Contact). When true the timeline renders the deduplicated
+  // cross-source history with per-row source/phase attribution and suppresses every
+  // Contact-side mutation control (composers, uploads, edits, deletes). Lead/Deal callers
+  // leave this false and keep their existing editable behavior unchanged.
+  readOnly: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['beforeSave', 'afterSave'])
@@ -550,6 +576,48 @@ const all_activities = createResource({
     return { versions, calls, notes, tasks, attachments }
   },
   onSuccess: () => nextTick(() => scroll()),
+})
+
+// Aggregate Contact log: distinct archived-Lead sources across every loaded stream, so the
+// per-row source badge can prefer a human email label over the immutable Lead docname.
+const leadSourceDocnames = computed(() => {
+  if (!props.readOnly || !all_activities.data) return []
+  const { versions, calls, notes, tasks, attachments } = all_activities.data
+  return leadSourceNames([
+    ...(versions || []),
+    ...(calls || []),
+    ...(notes || []),
+    ...(tasks || []),
+    ...(attachments || []),
+  ])
+})
+
+// Best-effort email resolution: a Lead the user cannot read simply keeps its docname label
+// (activitySource falls back), so a failed or partial lookup never breaks the read-only log.
+const leadEmailsResource = createResource({
+  url: 'frappe.client.get_list',
+  makeParams: () => ({
+    doctype: 'CRM Lead',
+    filters: [['name', 'in', leadSourceDocnames.value]],
+    fields: ['name', 'email'],
+    limit_page_length: 0,
+  }),
+})
+
+watch(
+  leadSourceDocnames,
+  (names) => {
+    if (names?.length) leadEmailsResource.reload()
+  },
+  { immediate: true },
+)
+
+const leadEmails = computed(() => {
+  const map = {}
+  for (const row of leadEmailsResource.data || []) {
+    if (row.email) map[row.name] = row.email
+  }
+  return map
 })
 
 const showWhatsappTemplates = ref(false)

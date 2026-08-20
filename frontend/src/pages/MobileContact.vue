@@ -137,6 +137,13 @@
             />
           </div>
         </div>
+        <Activities
+          v-else-if="tab.name === 'Activity'"
+          readOnly
+          doctype="Contact"
+          :docname="contactId"
+          :tabs="activityTabs"
+        />
         <DealsListView
           v-else-if="tab.label === 'Deals' && rows.length"
           class="mt-4"
@@ -166,7 +173,9 @@ import DetailsIcon from '@/components/Icons/DetailsIcon.vue'
 import PhoneIcon from '@/components/Icons/PhoneIcon.vue'
 import CameraIcon from '@/components/Icons/CameraIcon.vue'
 import DealsIcon from '@/components/Icons/DealsIcon.vue'
+import ActivityIcon from '@/components/Icons/ActivityIcon.vue'
 import DealsListView from '@/components/ListViews/DealsListView.vue'
+import Activities from '@/components/Activities/Activities.vue'
 import { validateIsImageFile } from '@/utils'
 import { useContactFields } from '@/composables/useContactFields'
 import { timestampCell } from '@/composables/useTimelinePreferences'
@@ -309,6 +318,21 @@ const tabs = [
     label: __('Deals'),
     icon: h(DealsIcon, { class: 'h-4 w-4' }),
     count: computed(() => deals.data?.length),
+  },
+  {
+    name: 'Activity',
+    label: __('Activity'),
+    icon: h(ActivityIcon, { class: 'h-4 w-4' }),
+  },
+]
+
+// Same read-only aggregate contract as desktop: a single unified Activity timeline so mobile
+// and desktop render identical person-level history.
+const activityTabs = [
+  {
+    name: 'Activity',
+    label: __('Activity'),
+    icon: ActivityIcon,
   },
 ]
 

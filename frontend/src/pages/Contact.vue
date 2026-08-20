@@ -146,6 +146,7 @@
           <component :is="tab.icon" v-if="tab.icon" class="h-5" />
           {{ __(tab.label) }}
           <Badge
+            v-if="tab.count !== undefined"
             class="group-hover:bg-surface-gray-10"
             :class="[selected ? 'bg-surface-gray-10' : 'bg-gray-600']"
             variant="solid"
@@ -157,14 +158,23 @@
         </button>
       </template>
       <template #tab-panel="{ tab }">
-        <DealsListView
-          v-if="tab.label === 'Deals' && rows.length"
-          class="mt-4"
-          :rows="rows"
-          :columns="columns"
-          :options="{ selectable: false, showTooltip: false }"
+        <Activities
+          v-if="tab.name === 'Activity'"
+          readOnly
+          doctype="Contact"
+          :docname="contactId"
+          :tabs="activityTabs"
         />
-        <EmptyState v-if="!rows.length" :icon="tab.icon" name="Deals" />
+        <template v-else>
+          <DealsListView
+            v-if="rows.length"
+            class="mt-4"
+            :rows="rows"
+            :columns="columns"
+            :options="{ selectable: false, showTooltip: false }"
+          />
+          <EmptyState v-if="!rows.length" :icon="tab.icon" name="Deals" />
+        </template>
       </template>
     </Tabs>
   </div>
@@ -209,7 +219,9 @@ import LayoutHeader from '@/components/LayoutHeader.vue'
 import PhoneIcon from '@/components/Icons/PhoneIcon.vue'
 import CameraIcon from '@/components/Icons/CameraIcon.vue'
 import DealsIcon from '@/components/Icons/DealsIcon.vue'
+import ActivityIcon from '@/components/Icons/ActivityIcon.vue'
 import DealsListView from '@/components/ListViews/DealsListView.vue'
+import Activities from '@/components/Activities/Activities.vue'
 import CustomActions from '@/components/CustomActions.vue'
 import RequestOwnershipModal from '@/components/Modals/RequestOwnershipModal.vue'
 import CreateDealFromContactModal from '@/components/Modals/CreateDealFromContactModal.vue'
@@ -350,9 +362,27 @@ function changeContactImage(file) {
 const tabIndex = ref(0)
 const tabs = [
   {
+    name: 'Deals',
     label: 'Deals',
     icon: DealsIcon,
     count: computed(() => deals.data?.length),
+  },
+  {
+    name: 'Activity',
+    label: 'Activity',
+    icon: ActivityIcon,
+  },
+]
+
+// The Contact Activity tab is a single read-only aggregate timeline: the deduplicated
+// person-level history across every archived Lead and linked Opportunity, in one chronological
+// stream. Activities keys its rendered category off tab name; a single 'Activity' tab yields
+// the unified log (no composer/category switcher, which stay Lead/Deal-only).
+const activityTabs = [
+  {
+    name: 'Activity',
+    label: __('Activity'),
+    icon: ActivityIcon,
   },
 ]
 
