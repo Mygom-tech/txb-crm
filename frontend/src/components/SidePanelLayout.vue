@@ -444,8 +444,8 @@ import { statusesStore } from '@/stores/statuses'
 import { statusLinkFilters } from '@/utils/pipelineStatuses'
 import {
   allowedTargets,
-  candidateActions,
   prefillFor,
+  refreshCandidateActions,
 } from '@/utils/dealTransitions'
 import { chooseAction } from '@/utils/kanbanTransitions'
 import { runAction } from '@/utils/takeAction'
@@ -479,6 +479,7 @@ import {
   TextInput,
   TimePicker,
   Tooltip,
+  call,
   createResource,
   toast,
 } from 'frappe-ui'
@@ -709,13 +710,16 @@ async function fieldChange(value, df) {
     df.fieldname === 'status' &&
     value !== doc.value?.status
   ) {
-    const candidates = candidateActions(
-      transitionMap.data?.transitions,
-      doc.value?.pipeline_type,
-      doc.value?.status,
-      value,
-      dealActions.data?.actions || [],
-    )
+    const candidates = await refreshCandidateActions({
+      transitions: transitionMap.data?.transitions,
+      pipeline: doc.value?.pipeline_type,
+      from: doc.value?.status,
+      to: value,
+      loadAvailable: () =>
+        call('crm.txb.api.actions.get_available_actions', {
+          deal: props.docname,
+        }),
+    })
 
     if (candidates.length) {
       const action = await chooseAction(candidates, value)
