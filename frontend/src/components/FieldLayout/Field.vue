@@ -18,8 +18,20 @@
         >*</span
       >
     </div>
+    <div
+      v-if="isDealNavLink(field, data[field.fieldname])"
+      class="form-control flex h-7 items-center px-2"
+    >
+      <button
+        type="button"
+        class="truncate text-ink-blue-link hover:underline"
+        @click="navigateToDeal(router, data[field.fieldname])"
+      >
+        {{ data[field.fieldname] }}
+      </button>
+    </div>
     <FormControl
-      v-if="
+      v-else-if="
         (field.read_only || field.fieldtype === 'Read Only') &&
         ![
           'Int',
@@ -336,9 +348,11 @@ import {
   parseLinkFilters,
   applyStateFieldOptions,
 } from '@/utils/fieldTransforms'
+import { isDealNavLink, navigateToDeal } from '@/utils/dealHandoverLinks'
 import { usersStore } from '@/stores/users'
 import { useDocument } from '@/data/document'
 import { timePickerAttrs } from '@/utils/timePicker'
+import { useRouter } from 'vue-router'
 
 import {
   Combobox,
@@ -352,6 +366,8 @@ import { computed, provide, inject, ref } from 'vue'
 const props = defineProps({
   field: { type: Object, required: true },
 })
+
+const router = useRouter()
 
 const data = inject('data')
 const doctype = inject('doctype')
