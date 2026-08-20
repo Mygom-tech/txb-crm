@@ -12,6 +12,19 @@ PIPELINE_DELIVERING_COACHING = "Delivering Coaching"
 # Deal statuses referenced by automation.
 STATUS_WORKSHOP_SET = "Workshop set"
 
+# The sales-terminal status each handover pipeline lands on when its coaching-handover
+# action runs -- Individual Session (`session_won`/`run_bap`) reaches "Won", Workshop
+# (`workshop_won`) reaches "Sold". Entering one of these bare -- even by an Admin, even
+# through a raw REST write, and from ANY prior status -- would skip the action that creates
+# the linked Delivering Coaching opportunity, which is the whole point of the handover. So
+# `guard_transition` refuses any write into them that the matching execute_action does not
+# own; the Admin recovery hatch does not open here (TXB-175). Pinned once so the guard, the
+# actions' `to_state` and the browser's fail-closed routing cannot drift.
+HANDOVER_TERMINAL_STATUSES = {
+	PIPELINE_INDIVIDUAL_SESSION: "Won",
+	PIPELINE_WORKSHOP: "Sold",
+}
+
 # The CRM calls this role "Admin" in Settings > Users; it maps to the Frappe role
 # System Manager (see frontend/src/components/Settings/Users.vue and stores/users.js).
 ADMIN_ROLE = "System Manager"

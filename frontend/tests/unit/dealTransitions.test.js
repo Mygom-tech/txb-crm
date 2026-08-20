@@ -1,10 +1,14 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   allowedTargets,
   candidateActions,
   canDropOn,
   prefillFor,
-  refreshCandidateActions,
+  resolveStatusChange,
+  refreshStatusResolution,
+  STATUS_CHANGE_ACTION,
+  STATUS_CHANGE_BLOCKED,
+  STATUS_CHANGE_UNOWNED,
 } from '@/utils/dealTransitions'
 
 const TRANSITIONS = {
@@ -85,26 +89,73 @@ describe('candidateActions', () => {
   })
 })
 
-describe('refreshCandidateActions', () => {
-  const terminalTransitions = {
-    'Individual Session': {
-      'Session Run': {
-        Won: [{ name: 'session_won', label: 'Won' }],
-      },
+const terminalTransitions = {
+  'Individual Session': {
+    'Session Run': {
+      Won: [{ name: 'session_won', label: 'Won' }],
     },
-    Workshop: {
-      'Workshop ran': {
-        Sold: [{ name: 'workshop_won', label: 'Sold' }],
-      },
+  },
+  Workshop: {
+    'Workshop ran': {
+      Sold: [{ name: 'workshop_won', label: 'Sold' }],
     },
-  }
+  },
+}
 
+describe('resolveStatusChange', () => {
+  it('runs the owning action when the server offers it', () => {
+    const resolution = resolveStatusChange(
+      terminalTransitions,
+      'Individual Session',
+      'Session Run',
+      'Won',
+      [{ name: 'session_won', label: 'Won', fields: [] }],
+    )
+
+    expect(resolution.kind).toBe(STATUS_CHANGE_ACTION)
+    expect(resolution.candidates.map((a) => a.name)).toEqual(['session_won'])
+  })
+
+  // The regression: an action-owned edge whose action is missing from the available list
+  // (empty, stale, role-filtered or unmatched) must NOT collapse to the empty list a caller
+  // reads as "write it bare". It fails closed as BLOCKED, keeping the Won/Sold modal
+  // mandatory (TXB-175).
+  it.each([
+    ['an empty available list', []],
+    ['an unmatched available list', [{ name: 'reschedule_bap', fields: [] }]],
+  ])('blocks an owned edge when the action is absent from %s', (_label, available) => {
+    const resolution = resolveStatusChange(
+      terminalTransitions,
+      'Workshop',
+      'Workshop ran',
+      'Sold',
+      available,
+    )
+
+    expect(resolution.kind).toBe(STATUS_CHANGE_BLOCKED)
+    expect(resolution.candidates).toBeUndefined()
+  })
+
+  it('reports an edge the graph does not describe as unowned', () => {
+    const resolution = resolveStatusChange(
+      terminalTransitions,
+      'Individual Session',
+      'Submitted',
+      'Won',
+      [{ name: 'session_won', label: 'Won', fields: [] }],
+    )
+
+    expect(resolution.kind).toBe(STATUS_CHANGE_UNOWNED)
+  })
+})
+
+describe('refreshStatusResolution', () => {
   it('uses freshly loaded actions when the cached list predates Session Run', async () => {
     const loadAvailable = async () => ({
       actions: [{ name: 'session_won', label: 'Won', fields: [] }],
     })
 
-    const found = await refreshCandidateActions({
+    const resolution = await refreshStatusResolution({
       transitions: terminalTransitions,
       pipeline: 'Individual Session',
       from: 'Session Run',
@@ -112,7 +163,10 @@ describe('refreshCandidateActions', () => {
       loadAvailable,
     })
 
-    expect(found.map((action) => action.name)).toEqual(['session_won'])
+    expect(resolution.kind).toBe(STATUS_CHANGE_ACTION)
+    expect(resolution.candidates.map((action) => action.name)).toEqual([
+      'session_won',
+    ])
   })
 
   it('loads the Workshop Sold action when the initial action cache is empty', async () => {
@@ -120,7 +174,7 @@ describe('refreshCandidateActions', () => {
       actions: [{ name: 'workshop_won', label: 'Sold', fields: [] }],
     })
 
-    const found = await refreshCandidateActions({
+    const resolution = await refreshStatusResolution({
       transitions: terminalTransitions,
       pipeline: 'Workshop',
       from: 'Workshop ran',
@@ -128,7 +182,10 @@ describe('refreshCandidateActions', () => {
       loadAvailable,
     })
 
-    expect(found.map((action) => action.name)).toEqual(['workshop_won'])
+    expect(resolution.kind).toBe(STATUS_CHANGE_ACTION)
+    expect(resolution.candidates.map((action) => action.name)).toEqual([
+      'workshop_won',
+    ])
   })
 
   it('rejects instead of treating a failed refresh as an actionless edge', async () => {
@@ -137,7 +194,7 @@ describe('refreshCandidateActions', () => {
     }
 
     await expect(
-      refreshCandidateActions({
+      refreshStatusResolution({
         transitions: terminalTransitions,
         pipeline: 'Individual Session',
         from: 'Session Run',
@@ -148,9 +205,9 @@ describe('refreshCandidateActions', () => {
   })
 
   // A 200 whose body is not the expected shape is "we could not find out", not "this edge
-  // has no action". If it resolved to [] the Won/Sold modal would be skipped and an Admin
-  // would write the terminal status bare, so every malformed-but-resolved payload must
-  // reject exactly like a refresh failure does.
+  // has no action". If it resolved to a bare-write path the Won/Sold modal would be skipped
+  // and an Admin would write the terminal status directly, so every malformed-but-resolved
+  // payload must reject exactly like a refresh failure does.
   it.each([
     ['a null body', null],
     ['an empty object', {}],
@@ -158,7 +215,7 @@ describe('refreshCandidateActions', () => {
     ['a non-array actions field', { actions: 'oops' }],
   ])('rejects rather than bypassing the action on %s', async (_label, body) => {
     await expect(
-      refreshCandidateActions({
+      refreshStatusResolution({
         transitions: terminalTransitions,
         pipeline: 'Workshop',
         from: 'Workshop ran',
@@ -168,11 +225,11 @@ describe('refreshCandidateActions', () => {
     ).rejects.toThrow('get_available_actions returned no actions array')
   })
 
-  // The genuine empty offer — server reached, role filtered everything out — is distinct
-  // from a malformed body: it resolves to [] candidates and lets the caller decide, it does
-  // not throw.
-  it('returns no candidates when the server offers an empty actions array', async () => {
-    const found = await refreshCandidateActions({
+  // The genuine empty offer — server reached, role filtered everything out — is an OWNED
+  // edge with no available action: it fails closed as BLOCKED, it does not fall through to a
+  // bare write.
+  it('blocks when the server offers an empty actions array for an owned edge', async () => {
+    const resolution = await refreshStatusResolution({
       transitions: terminalTransitions,
       pipeline: 'Workshop',
       from: 'Workshop ran',
@@ -180,7 +237,24 @@ describe('refreshCandidateActions', () => {
       loadAvailable: async () => ({ actions: [] }),
     })
 
-    expect(found).toEqual([])
+    expect(resolution.kind).toBe(STATUS_CHANGE_BLOCKED)
+  })
+
+  // An unowned edge is the Admin recovery hatch: there is no action to look up, so the
+  // loader is never called and a malformed/empty response cannot even arise.
+  it('resolves an unowned edge without loading available actions', async () => {
+    const loadAvailable = vi.fn(async () => ({ actions: [] }))
+
+    const resolution = await refreshStatusResolution({
+      transitions: terminalTransitions,
+      pipeline: 'Individual Session',
+      from: 'Submitted',
+      to: 'Won',
+      loadAvailable,
+    })
+
+    expect(resolution.kind).toBe(STATUS_CHANGE_UNOWNED)
+    expect(loadAvailable).not.toHaveBeenCalled()
   })
 })
 

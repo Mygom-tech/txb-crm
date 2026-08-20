@@ -12,6 +12,7 @@ from frappe import _
 from crm.txb.constants import (
 	ADMIN_ROLE,
 	FIELD_DELIVERY_COACH,
+	HANDOVER_TERMINAL_STATUSES,
 	PIPELINE_DELIVERING_COACHING,
 	STATUS_FIELDS,
 )
@@ -159,8 +160,12 @@ def guard_transition(doc, method=None):
 	   skips the handler, and a deal reaching "Session Set" with no BAP type, no date and
 	   no note is exactly the inconsistency this ticket exists to remove.
 
-	Admins are exempt from both. That is the documented recovery hatch (TXB-110 decision
-	2): without it, a mis-clicked "Not Interested" would need a database edit.
+	Admins normally hold a recovery hatch and are exempt from both (TXB-110 decision 2):
+	without it, a mis-clicked "Not Interested" would need a database edit. The one place the
+	hatch does NOT open is a handover terminal status (Individual Session "Won", Workshop
+	"Sold"): entering it bare -- Admin or raw REST, from any prior status -- would skip the
+	action that creates the linked Delivering Coaching opportunity, so only the matching
+	execute_action may persist it (TXB-175).
 
 	Inserts are exempt, as in `guard_status_change` -- won sessions and workshops spawn
 	Delivering Coaching deals, and blocking that breaks the handover.
@@ -176,7 +181,11 @@ def guard_transition(doc, method=None):
 	if not PIPELINE_ACTIONS.get(doc.pipeline_type):
 		return
 
-	if is_admin():
+	entering_handover_terminal = doc.status == HANDOVER_TERMINAL_STATUSES.get(doc.pipeline_type)
+
+	# The recovery hatch stays shut for the handover terminals; everywhere else an Admin is
+	# still exempt.
+	if is_admin() and not entering_handover_terminal:
 		return
 
 	previous = doc.get_doc_before_save()

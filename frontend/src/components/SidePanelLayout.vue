@@ -445,7 +445,9 @@ import { statusLinkFilters } from '@/utils/pipelineStatuses'
 import {
   allowedTargets,
   prefillFor,
-  refreshCandidateActions,
+  refreshStatusResolution,
+  STATUS_CHANGE_ACTION,
+  STATUS_CHANGE_BLOCKED,
 } from '@/utils/dealTransitions'
 import { chooseAction } from '@/utils/kanbanTransitions'
 import { runAction } from '@/utils/takeAction'
@@ -704,25 +706,37 @@ async function fieldChange(value, df) {
   // Changing a deal's status runs the action that owns the transition, exactly as a
   // kanban drop does — otherwise the same move records completely different data
   // depending on which control was used. This applies to Admins too: the hatch is for
-  // edges the state machine does not describe, not for skipping the form.
+  // UNOWNED edges the state machine does not describe, not for skipping the form. An
+  // action-owned edge with missing, stale or unmatched action metadata fails closed
+  // (BLOCKED) rather than becoming an Admin bare write (TXB-175).
   if (
     props.doctype === 'CRM Deal' &&
     df.fieldname === 'status' &&
     value !== doc.value?.status
   ) {
-    const candidates = await refreshCandidateActions({
-      transitions: transitionMap.data?.transitions,
-      pipeline: doc.value?.pipeline_type,
-      from: doc.value?.status,
-      to: value,
-      loadAvailable: () =>
-        call('crm.txb.api.actions.get_available_actions', {
-          deal: props.docname,
-        }),
-    })
+    let resolution
+    try {
+      resolution = await refreshStatusResolution({
+        transitions: transitionMap.data?.transitions,
+        pipeline: doc.value?.pipeline_type,
+        from: doc.value?.status,
+        to: value,
+        loadAvailable: () =>
+          call('crm.txb.api.actions.get_available_actions', {
+            deal: props.docname,
+          }),
+      })
+    } catch (e) {
+      toast.error(
+        __('Could not confirm how to move this opportunity to "{0}". Please try again.', [
+          __(value),
+        ]),
+      )
+      return
+    }
 
-    if (candidates.length) {
-      const action = await chooseAction(candidates, value)
+    if (resolution.kind === STATUS_CHANGE_ACTION) {
+      const action = await chooseAction(resolution.candidates, value)
       if (!action) return
 
       const result = await runAction(props.docname, action, {
@@ -738,7 +752,16 @@ async function fieldChange(value, df) {
       return
     }
 
-    // No action covers this edge. Only an Admin may write it bare.
+    if (resolution.kind === STATUS_CHANGE_BLOCKED) {
+      toast.error(
+        __('Change to "{0}" through Take Action, so the details that go with it are recorded.', [
+          __(value),
+        ]),
+      )
+      return
+    }
+
+    // UNOWNED: no action covers this edge. Only an Admin may write it bare.
     if (!isDealAdmin.value) {
       toast.error(
         __('"{0}" cannot be reached from "{1}".', [
