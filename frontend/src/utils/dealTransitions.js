@@ -60,6 +60,14 @@ export function candidateActions(transitions, pipeline, from, to, available) {
  * previous status can therefore make a real graph edge look actionless and send Admins down
  * the bare-write recovery path. The caller supplies an uncached loader so a status selection
  * never decides whether to bypass an action from stale or initial-empty data.
+ *
+ * The loader must resolve to a real get_available_actions response, which always carries an
+ * `actions` array — empty only when the server genuinely offers nothing here. A null body, an
+ * error object or any other malformed-but-resolved payload is "we could not find out", not
+ * "this edge has no action"; coercing it to [] would look actionless and silently drop an
+ * Admin onto the bare-write path, skipping a modal that in fact owns the edge. So a rejected
+ * loader AND a malformed success both throw, and the caller aborts the change rather than
+ * bypassing the action.
  */
 export async function refreshCandidateActions({
   transitions,
@@ -69,13 +77,12 @@ export async function refreshCandidateActions({
   loadAvailable,
 }) {
   const response = await loadAvailable()
-  return candidateActions(
-    transitions,
-    pipeline,
-    from,
-    to,
-    response?.actions || [],
-  )
+
+  if (!Array.isArray(response?.actions)) {
+    throw new Error('get_available_actions returned no actions array')
+  }
+
+  return candidateActions(transitions, pipeline, from, to, response.actions)
 }
 
 /**

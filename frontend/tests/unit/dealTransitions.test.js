@@ -146,6 +146,42 @@ describe('refreshCandidateActions', () => {
       }),
     ).rejects.toThrow('network unavailable')
   })
+
+  // A 200 whose body is not the expected shape is "we could not find out", not "this edge
+  // has no action". If it resolved to [] the Won/Sold modal would be skipped and an Admin
+  // would write the terminal status bare, so every malformed-but-resolved payload must
+  // reject exactly like a refresh failure does.
+  it.each([
+    ['a null body', null],
+    ['an empty object', {}],
+    ['a null actions field', { actions: null }],
+    ['a non-array actions field', { actions: 'oops' }],
+  ])('rejects rather than bypassing the action on %s', async (_label, body) => {
+    await expect(
+      refreshCandidateActions({
+        transitions: terminalTransitions,
+        pipeline: 'Workshop',
+        from: 'Workshop ran',
+        to: 'Sold',
+        loadAvailable: async () => body,
+      }),
+    ).rejects.toThrow('get_available_actions returned no actions array')
+  })
+
+  // The genuine empty offer — server reached, role filtered everything out — is distinct
+  // from a malformed body: it resolves to [] candidates and lets the caller decide, it does
+  // not throw.
+  it('returns no candidates when the server offers an empty actions array', async () => {
+    const found = await refreshCandidateActions({
+      transitions: terminalTransitions,
+      pipeline: 'Workshop',
+      from: 'Workshop ran',
+      to: 'Sold',
+      loadAvailable: async () => ({ actions: [] }),
+    })
+
+    expect(found).toEqual([])
+  })
 })
 
 describe('prefillFor', () => {
