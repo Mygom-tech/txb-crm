@@ -948,6 +948,14 @@ class TestCoachingHandover(FrappeTestCase):
 			fields=["name", "status", "pipeline_type", "organization", "deal_owner"],
 		)
 
+	def source_notes(self, source_name):
+		"""Every FCRM Note attached to the source deal, newest content included."""
+		return frappe.get_all(
+			"FCRM Note",
+			filters={"reference_doctype": "CRM Deal", "reference_docname": source_name},
+			fields=["title", "content"],
+		)
+
 	# ── one linked delivery deal per Won source ──────────────────────────────────────
 
 	def test_won_individual_session_creates_one_linked_delivery_deal(self):
@@ -994,6 +1002,80 @@ class TestCoachingHandover(FrappeTestCase):
 		self.assertEqual(
 			frappe.db.get_value("CRM Deal", source.name, FIELD_DELIVERY_DEAL), delivery.name
 		)
+
+	# ── canonical action/status surface: Won / Sold create and document the handover ──
+
+	def test_session_won_action_creates_and_documents_the_handover(self):
+		"""Completing an Individual Session as Won through the real action surface creates one
+		Submitted delivery deal and writes a source note carrying the submitted handover
+		information plus a navigable reference to that target."""
+		from crm.txb.api.actions import execute_action
+
+		source = self.make_source(PIPELINE_INDIVIDUAL_SESSION, "Session Run")
+
+		execute_action(
+			source.name,
+			"session_won",
+			{"won_notes": "Signed today", "coaching_notes": "Ready for delivery"},
+		)
+
+		self.assertEqual(frappe.db.get_value("CRM Deal", source.name, "status"), "Won")
+
+		created = self.delivery_deals(source.name)
+		self.assertEqual(len(created), 1)
+		self.assertEqual(created[0].status, "Submitted")
+
+		note = "\n".join(n.content for n in self.source_notes(source.name))
+		self.assertIn("Signed today", note)
+		self.assertIn("Ready for delivery", note)
+		# Navigable reference to the delivery target, not a bare identifier.
+		self.assertIn(f'/crm/deals/{created[0].name}', note)
+
+	def test_workshop_sold_action_creates_and_documents_the_handover(self):
+		"""Completing a Workshop as Sold through the real action surface (label "Sold",
+		to_state "Sold") creates one Submitted delivery deal and documents the handover with a
+		navigable reference on the source."""
+		from crm.txb.api.actions import execute_action
+		from crm.txb.pipelines.workshop import WORKSHOP_WON
+
+		# The action names the terminal sales status it lands on.
+		self.assertEqual(WORKSHOP_WON["label"], "Sold")
+		self.assertEqual(WORKSHOP_WON["to_state"], "Sold")
+
+		source = self.make_source(PIPELINE_WORKSHOP, "Workshop ran")
+
+		execute_action(source.name, "workshop_won", {"coaching_notes": "Ready for delivery"})
+
+		self.assertEqual(frappe.db.get_value("CRM Deal", source.name, "status"), "Sold")
+
+		created = self.delivery_deals(source.name)
+		self.assertEqual(len(created), 1)
+		self.assertEqual(created[0].status, "Submitted")
+
+		note = "\n".join(n.content for n in self.source_notes(source.name))
+		self.assertIn("Ready for delivery", note)
+		self.assertIn(f'/crm/deals/{created[0].name}', note)
+
+	def test_repeated_sold_action_write_reuses_the_one_delivery_deal(self):
+		"""A retried Sold handover -- re-running the handover authority after the action has
+		already landed -- reuses the one aggregate delivery deal instead of spawning a second,
+		and re-points the reverse link at the survivor."""
+		from crm.txb.api.actions import execute_action
+		from crm.txb.pipelines.common import create_coaching_deal
+
+		source = self.make_source(PIPELINE_WORKSHOP, "Workshop ran")
+
+		execute_action(source.name, "workshop_won", {"coaching_notes": "Ready for delivery"})
+		first = self.delivery_deals(source.name)
+		self.assertEqual(len(first), 1)
+
+		# A retry of the idempotent handover authority (double click / replayed request).
+		source.reload()
+		retry = create_coaching_deal(source)
+		source.save(ignore_permissions=True)
+
+		self.assertEqual(retry, first[0].name)
+		self.assertEqual(len(self.delivery_deals(source.name)), 1)
 
 	# ── idempotency: retries and races reuse the one delivery deal ───────────────────
 
@@ -1102,3 +1184,68 @@ class TestCoachingHandover(FrappeTestCase):
 		# Exactly one aggregate handover exists, and it is not the candidate.
 		created = self.delivery_deals(source.name)
 		self.assertEqual([c.name for c in created], [delivery])
+
+
+class TestHandoverLinkFieldsPatch(FrappeTestCase):
+	"""TXB-173: the sales <-> delivery handover links install through the standard Frappe patch
+	path, idempotently and even after a partial prior run, and land as navigable read-only Link
+	fields the existing Opportunity layout surfaces without manual site configuration.
+	"""
+
+	def test_the_patch_is_registered_in_the_standard_frappe_path(self):
+		"""A normal `bench migrate` runs it: it is listed in the app's patches.txt."""
+		patches = frappe.get_file_items(frappe.get_app_path("crm", "patches.txt"))
+		self.assertIn("crm.patches.v1_0.add_handover_link_custom_fields", patches)
+
+	def test_installed_links_are_navigable_read_only_fields(self):
+		"""Meta coverage: after migrate the Opportunity carries both links as read-only,
+		non-hidden Link(CRM Deal) fields -- clickable references, never editable relationships."""
+		meta = frappe.get_meta("CRM Deal")
+		for fieldname in (FIELD_SALES_SOURCE_DEAL, FIELD_DELIVERY_DEAL):
+			if not meta.has_field(fieldname):
+				self.skipTest(f"{fieldname} is not installed on this site")
+			df = meta.get_field(fieldname)
+			self.assertEqual(df.fieldtype, "Link")
+			self.assertEqual(df.options, "CRM Deal")
+			self.assertTrue(df.read_only)
+			self.assertFalse(df.hidden)
+
+	def test_only_the_missing_link_is_created_on_a_partial_site(self):
+		"""A site that already has the sales-source link but lost the reverse link installs just
+		the missing one -- the guard is per field, so migrate converges without erroring."""
+		from crm.patches.v1_0 import add_handover_link_custom_fields as handover_patch
+
+		class _Meta:
+			def __init__(self, present):
+				self._present = present
+
+			def has_field(self, fieldname):
+				return fieldname in self._present
+
+		with patch.object(
+			handover_patch.frappe, "get_meta", return_value=_Meta({FIELD_SALES_SOURCE_DEAL})
+		), patch.object(handover_patch, "create_custom_fields") as create, patch.object(
+			handover_patch.frappe, "clear_cache"
+		):
+			handover_patch.execute()
+
+		created = [f["fieldname"] for f in create.call_args.args[0]["CRM Deal"]]
+		self.assertEqual(created, [FIELD_DELIVERY_DEAL])
+
+	def test_a_fully_installed_site_is_a_clean_no_op(self):
+		"""Re-running the patch when both links exist creates nothing and clears no cache."""
+		from crm.patches.v1_0 import add_handover_link_custom_fields as handover_patch
+
+		class _Meta:
+			def has_field(self, fieldname):
+				return True
+
+		with patch.object(
+			handover_patch.frappe, "get_meta", return_value=_Meta()
+		), patch.object(handover_patch, "create_custom_fields") as create, patch.object(
+			handover_patch.frappe, "clear_cache"
+		) as clear:
+			handover_patch.execute()
+
+		create.assert_not_called()
+		clear.assert_not_called()

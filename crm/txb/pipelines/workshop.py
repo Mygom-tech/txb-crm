@@ -13,6 +13,7 @@ Two shapes appear here that Delivering Coaching did not have:
 
 from crm.txb.pipelines.common import (
 	YES_NO,
+	add_handover_note,
 	add_note,
 	add_task,
 	apply_deal_fields,
@@ -114,15 +115,26 @@ def run_workshop(deal, data):
 
 
 def workshop_won(deal, data):
-	if data.get("won_notes"):
-		add_note(deal, "Won", data["won_notes"])
+	"""Mark the Workshop Sold and hand it over, documenting where delivery continues.
 
-	create_coaching_deal(deal, data.get("coaching_notes") or "")
+	Sold is the Workshop pipeline's canonical terminal sales status (the action's `to_state`);
+	`create_coaching_deal` is the single idempotent handover authority, and its returned target
+	is retained so the source-side note carries a navigable reference to the one aggregate
+	delivery Opportunity alongside the submitted handover information.
+	"""
+	target = create_coaching_deal(deal, data.get("coaching_notes") or "")
+
+	add_handover_note(
+		deal,
+		target,
+		data.get("won_notes"),
+		f"Handover notes: {data['coaching_notes']}" if data.get("coaching_notes") else None,
+	)
 
 	add_task(
 		deal,
 		"Send contract approval email",
-		f"Workshop deal {deal.name} has been won. "
+		f"Workshop deal {deal.name} has been sold. "
 		"Please send the contract approval email to the client.",
 		assigned_to="Administrator",
 		priority="High",
@@ -291,7 +303,10 @@ RUN_WORKSHOP = {
 
 WORKSHOP_WON = {
 	"name": "workshop_won",
-	"label": "Won",
+	# Sold, not Won: the Workshop pipeline's terminal sales status is "Sold" (to_state), and
+	# the user-facing label must name the state the action lands on, not the Individual
+	# Session term. The action's internal name stays `workshop_won` for API stability.
+	"label": "Sold",
 	"from_states": ["Workshop ran"],
 	"to_state": "Sold",
 	"changes_status": True,

@@ -11,6 +11,7 @@ a dead menu entry, so it was dropped rather than ported as a no-op.
 """
 
 from crm.txb.pipelines.common import (
+	add_handover_note,
 	add_note,
 	add_task,
 	apply_deal_fields,
@@ -143,10 +144,20 @@ def not_interested(deal, data):
 
 
 def session_won(deal, data):
-	if data.get("won_notes"):
-		add_note(deal, "Won", data["won_notes"])
+	"""Close the session as Won and hand it over, documenting where delivery continues.
 
-	create_coaching_deal(deal, data.get("coaching_notes") or "")
+	`create_coaching_deal` is the single idempotent handover authority; its returned target is
+	retained so the source-side note carries a navigable reference to the one aggregate
+	delivery Opportunity alongside the submitted handover information.
+	"""
+	target = create_coaching_deal(deal, data.get("coaching_notes") or "")
+
+	add_handover_note(
+		deal,
+		target,
+		data.get("won_notes"),
+		f"Handover notes: {data['coaching_notes']}" if data.get("coaching_notes") else None,
+	)
 
 
 def reopen(deal, data: dict):
