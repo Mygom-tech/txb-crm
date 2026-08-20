@@ -60,6 +60,31 @@ def lines(*parts) -> str:
 	return "\n".join(part for part in parts if part)
 
 
+def deal_link(name: str) -> str:
+	"""A CRM-navigable anchor to a Deal, for embedding in note content.
+
+	The CRM renders FCRM Note content as HTML and routes deals at `/crm/deals/<name>`, so an
+	anchor surfaces the delivery target as a clickable reference on the source's timeline
+	rather than a bare, non-navigable identifier.
+	"""
+	return f'<a href="/crm/deals/{name}">{name}</a>'
+
+
+def add_handover_note(source, target: str, *info: str):
+	"""Record the completed Delivering Coaching handover on the source's timeline.
+
+	Carries the submitted handover information the user entered plus a navigable reference to
+	the one aggregate delivery Opportunity `create_coaching_deal` returned, so the sale
+	documents both what was handed over and where delivery continues. Empty parts are dropped
+	by `lines`, so the reference is always present even when no free-text notes were given.
+	"""
+	add_note(
+		source,
+		"Handover to Delivering Coaching",
+		lines(*info, f"Delivery Opportunity: {deal_link(target)}"),
+	)
+
+
 def apply_deal_fields(deal, action: dict, data: dict):
 	"""Copy answers onto the deal using each field's `deal_field`.
 
