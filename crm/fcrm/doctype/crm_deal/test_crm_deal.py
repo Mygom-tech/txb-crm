@@ -12,6 +12,11 @@ from crm.fcrm.doctype.crm_deal.crm_deal import (
 	remove_contact,
 	set_primary_contact,
 )
+from crm.txb.constants import (
+	FIELD_CONVERTED_AT,
+	FIELD_CONVERTED_CONTACT,
+	FIELD_CONVERTED_DEAL,
+)
 
 
 class TestCRMDeal(IntegrationTestCase):
@@ -419,6 +424,94 @@ class TestCRMDeal(IntegrationTestCase):
 
 		deal.reload()
 		self.assertEqual(deal.contacts[0].is_primary, 1)
+
+	def test_create_deal_retains_associated_archived_lead(self):
+		"""A later Opportunity may retain an archived Lead associated with its Contact (TXB-132).
+
+		The provenance is carried only through CRM Deal.lead, the Contact is always linked, and
+		the archived Lead's recorded conversion metadata is left untouched (never replayed).
+		"""
+		contact = create_test_contact(first_name="Prov", email="prov@example.com")
+		lead = create_test_converted_lead(
+			first_name="Prov", email="prov-lead@example.com", converted_contact=contact.name
+		)
+		before = frappe.db.get_value(
+			"CRM Lead",
+			lead.name,
+			[FIELD_CONVERTED_CONTACT, FIELD_CONVERTED_DEAL, FIELD_CONVERTED_AT],
+			as_dict=True,
+		)
+
+		deal_name = create_deal(
+			{
+				"organization_name": "Provenance Org",
+				"contact": contact.name,
+				"lead": lead.name,
+			}
+		)
+
+		deal = frappe.get_doc("CRM Deal", deal_name)
+		self.assertEqual(deal.lead, lead.name)
+		self.assertIn(contact.name, [c.contact for c in deal.contacts])
+
+		# The archived Lead's conversion metadata is unchanged: this is a later Opportunity,
+		# not a replayed conversion.
+		after = frappe.db.get_value(
+			"CRM Lead",
+			lead.name,
+			[FIELD_CONVERTED_CONTACT, FIELD_CONVERTED_DEAL, FIELD_CONVERTED_AT],
+			as_dict=True,
+		)
+		self.assertEqual(before, after)
+		self.assertEqual(frappe.db.get_value("CRM Lead", lead.name, "converted"), 1)
+
+	def test_create_deal_rejects_lead_from_other_contact(self):
+		"""An archived Lead not associated with this Contact cannot be retained as provenance."""
+		contact = create_test_contact(first_name="Owner", email="owner@example.com")
+		other = create_test_contact(first_name="Other", email="other@example.com")
+		lead = create_test_converted_lead(
+			first_name="Owner", email="owner-lead@example.com", converted_contact=other.name
+		)
+
+		with self.assertRaises(frappe.exceptions.ValidationError) as context:
+			create_deal(
+				{"organization_name": "Reject Org", "contact": contact.name, "lead": lead.name}
+			)
+		self.assertIn("not associated with this Contact", str(context.exception))
+
+	def test_create_deal_rejects_unconverted_lead(self):
+		"""Only an archived (converted) Lead may be retained as an Opportunity's source."""
+		contact = create_test_contact(first_name="Live", email="live@example.com")
+		lead = frappe.get_doc(
+			{"doctype": "CRM Lead", "first_name": "Live", "email": "live-lead@example.com"}
+		).insert(ignore_permissions=True)
+
+		with self.assertRaises(frappe.exceptions.ValidationError) as context:
+			create_deal(
+				{"organization_name": "Unconverted Org", "contact": contact.name, "lead": lead.name}
+			)
+		self.assertIn("archived", str(context.exception))
+
+	def test_create_deal_without_lead_is_plain_opportunity(self):
+		"""Retaining a source Lead stays optional: omitting it creates a normal Opportunity."""
+		contact = create_test_contact(first_name="Plain", email="plain@example.com")
+		deal_name = create_deal({"organization_name": "Plain Org", "contact": contact.name})
+		deal = frappe.get_doc("CRM Deal", deal_name)
+		self.assertFalse(deal.lead)
+		self.assertIn(contact.name, [c.contact for c in deal.contacts])
+
+
+def create_test_converted_lead(converted_contact=None, **kwargs):
+	"""Create a Lead already in the archived (converted) state for provenance tests.
+
+	Inserting it converted mirrors an import/seed and is exempt from the archived-write guard,
+	so the recorded conversion metadata can be set without replaying a conversion.
+	"""
+	data = {"doctype": "CRM Lead", "converted": 1}
+	data.update(kwargs)
+	if converted_contact:
+		data[FIELD_CONVERTED_CONTACT] = converted_contact
+	return frappe.get_doc(data).insert(ignore_permissions=True)
 
 
 def create_test_deal(**kwargs):

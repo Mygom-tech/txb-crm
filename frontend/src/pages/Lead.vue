@@ -8,56 +8,72 @@
       </Breadcrumbs>
     </template>
     <template v-if="!errorTitle" #right-header>
-      <CustomActions
-        v-if="document._actions?.length"
-        :actions="document._actions"
+      <!-- A converted Lead is archived: read-only, no mutation or reconversion controls
+           (TXB-132). The backend guard refuses the writes regardless; hiding the controls
+           keeps the page honestly read-only. -->
+      <Badge
+        v-if="isArchived"
+        variant="subtle"
+        theme="gray"
+        :label="__('Archived')"
       />
-      <CustomActions
-        v-if="document.actions?.length"
-        :actions="document.actions"
-      />
-      <EnrichFromWebsite
-        doctype="CRM Lead"
-        :docname="leadId"
-        :website="doc.website"
-        @done="onEnriched"
-      />
-      <Button
-        v-if="!userIsAdmin()"
-        :label="__('Request Ownership')"
-        @click="showRequestOwnership = true"
-      />
-      <AssignTo v-model="assignees.data" doctype="CRM Lead" :docname="leadId" />
-      <Dropdown
-        v-if="doc && document.statuses"
-        :options="statuses"
-        placement="right"
-      >
-        <template #default="{ open }">
-          <Button
-            v-if="doc.status"
-            :label="statusLabel(doc.status)"
-            :iconRight="open ? 'chevron-up' : 'chevron-down'"
-          >
-            <template #prefix>
-              <IndicatorIcon :class="getLeadStatus(doc.status).color" />
-            </template>
-          </Button>
-        </template>
-      </Dropdown>
-      <Button
-        v-if="requiresDiscovery(doc.status)"
-        :label="__('Run Discovery Meeting')"
-        variant="solid"
-        @click="runDiscovery"
-      />
-      <Button
-        :label="__('Convert to Deal')"
-        variant="solid"
-        @click="showConvertToDealModal = true"
-      />
+      <template v-else>
+        <CustomActions
+          v-if="document._actions?.length"
+          :actions="document._actions"
+        />
+        <CustomActions
+          v-if="document.actions?.length"
+          :actions="document.actions"
+        />
+        <EnrichFromWebsite
+          doctype="CRM Lead"
+          :docname="leadId"
+          :website="doc.website"
+          @done="onEnriched"
+        />
+        <Button
+          v-if="!userIsAdmin()"
+          :label="__('Request Ownership')"
+          @click="showRequestOwnership = true"
+        />
+        <AssignTo
+          v-model="assignees.data"
+          doctype="CRM Lead"
+          :docname="leadId"
+        />
+        <Dropdown
+          v-if="doc && document.statuses"
+          :options="statuses"
+          placement="right"
+        >
+          <template #default="{ open }">
+            <Button
+              v-if="doc.status"
+              :label="statusLabel(doc.status)"
+              :iconRight="open ? 'chevron-up' : 'chevron-down'"
+            >
+              <template #prefix>
+                <IndicatorIcon :class="getLeadStatus(doc.status).color" />
+              </template>
+            </Button>
+          </template>
+        </Dropdown>
+        <Button
+          v-if="requiresDiscovery(doc.status)"
+          :label="__('Run Discovery Meeting')"
+          variant="solid"
+          @click="runDiscovery"
+        />
+        <Button
+          :label="__('Convert to Deal')"
+          variant="solid"
+          @click="showConvertToDealModal = true"
+        />
+      </template>
     </template>
   </LayoutHeader>
+  <ArchivedLeadBanner v-if="isArchived && doc.name" :lead="doc" />
   <div v-if="doc.name" class="flex h-full overflow-hidden">
     <Tabs
       v-model="tabIndex"
@@ -298,6 +314,7 @@ import FilesUploader from '@/components/FilesUploader/FilesUploader.vue'
 import SidePanelLayout from '@/components/SidePanelLayout.vue'
 import SLASection from '@/components/SLASection.vue'
 import CustomActions from '@/components/CustomActions.vue'
+import ArchivedLeadBanner from '@/components/ArchivedLeadBanner.vue'
 import ConvertToDealModal from '@/components/Modals/ConvertToDealModal.vue'
 import RequestOwnershipModal from '@/components/Modals/RequestOwnershipModal.vue'
 import EnrichFromWebsite from '@/components/EnrichFromWebsite.vue'
@@ -336,6 +353,7 @@ import {
   Dropdown,
   Tooltip,
   Avatar,
+  Badge,
   Tabs,
   Breadcrumbs,
   call,
@@ -394,6 +412,10 @@ const {
 const canDelete = computed(() => permissions.data?.permissions?.delete || false)
 
 const doc = computed(() => document.doc || {})
+
+// A converted Lead is archived: the page becomes a read-only historical record whose
+// conversion result is surfaced instead of mutation/reconversion controls (TXB-132).
+const isArchived = computed(() => Boolean(doc.value.converted))
 
 onMounted(async () => {
   if (document.doc) await triggerOnRender()

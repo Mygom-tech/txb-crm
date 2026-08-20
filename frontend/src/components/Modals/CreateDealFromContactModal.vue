@@ -20,6 +20,25 @@
           />
         </div>
 
+        <!--
+          Optional provenance (TXB-132): this later Opportunity may retain one archived Lead
+          associated with this Contact, carried through the existing CRM Deal.lead link. The
+          filter enumerates only converted Leads whose recorded conversion Contact is this
+          Contact, and the server re-validates the choice. Leaving it blank is fully supported.
+        -->
+        <div class="flex flex-col gap-1.5">
+          <div class="text-sm text-ink-gray-5">{{ __('Source Lead') }}</div>
+          <Link
+            class="form-control"
+            size="md"
+            :value="sourceLead"
+            doctype="CRM Lead"
+            :filters="{ converted: 1, converted_contact: contact.name }"
+            :placeholder="__('Optional archived Lead...')"
+            @change="(value) => (sourceLead = value)"
+          />
+        </div>
+
         <div class="flex flex-col gap-1.5">
           <div class="text-sm text-ink-gray-5">
             {{ __('Pipeline Type') }}
@@ -84,6 +103,7 @@ const { pipelineStatuses } = statusesStore()
 const { doctypeMeta: dealMeta } = getMeta('CRM Deal')
 
 const organization = ref(props.contact.custom_organization_link || '')
+const sourceLead = ref('')
 const pipelineType = ref('')
 const status = ref('')
 const error = ref('')
@@ -139,6 +159,9 @@ async function create() {
           organization: organization.value || undefined,
           pipeline_type: pipelineType.value,
           status: status.value,
+          // Optional archived-Lead provenance, persisted via CRM Deal.lead and re-validated
+          // server-side; omitted when unset so a plain later Opportunity is created.
+          lead: sourceLead.value || undefined,
         },
       },
     )
