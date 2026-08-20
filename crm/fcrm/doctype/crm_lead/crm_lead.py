@@ -7,7 +7,7 @@ import frappe
 from frappe import _
 from frappe.desk.form.assign_to import _add as assign
 from frappe.model.document import Document
-from frappe.utils import validate_email_address
+from frappe.utils import now, validate_email_address
 
 from crm.fcrm.doctype.crm_service_level_agreement.utils import get_sla
 from crm.fcrm.doctype.crm_status_change_log.crm_status_change_log import (
@@ -16,9 +16,17 @@ from crm.fcrm.doctype.crm_status_change_log.crm_status_change_log import (
 from crm.fcrm.doctype.utils import add_or_remove_lost_reason_section_in_sidepanel
 from crm.txb.constants import (
 	CONVERSION_PIPELINE_INITIAL_STATUS,
+	FIELD_CONVERTED_AT,
+	FIELD_CONVERTED_CONTACT,
+	FIELD_CONVERTED_DEAL,
 	PIPELINE_INDIVIDUAL_SESSION,
 	STATUS_FIELDS,
 )
+
+# Savepoint the conversion body rolls back to on failure, so a partial conversion -- a Contact
+# or initial Opportunity inserted before a later step threw -- never survives. The row lock
+# serialises conversions; this savepoint makes each one all-or-nothing within its request.
+CONVERSION_SAVEPOINT = "txb_lead_conversion"
 
 # Deliberately empty. It used to carry lead_owner onto deal_owner, but TXB-106 gives the
 # new opportunity to whoever converted the lead -- a second salesman may legitimately open
@@ -562,16 +570,73 @@ def convert_to_deal(
 	deal = _enforce_conversion_pipeline(deal)
 
 	lead = frappe.get_cached_doc("CRM Lead", lead)
-	if frappe.db.exists("CRM Lead Status", "Qualified"):
-		lead.db_set("status", "Qualified")
-	lead.db_set("converted", 1)
-	if lead.sla and frappe.db.exists("CRM Communication Status", "Replied"):
-		lead.db_set("communication_status", "Replied")
-	# Resolve the organization first so a newly created contact can be linked to it.
-	organization = lead.create_organization(existing_organization)
-	contact = lead.create_contact(existing_contact, False, organization)
-	_deal = lead.create_deal(contact, organization, deal)
+
+	# Serialise conversion on the Lead and read the persisted result under the same lock. The
+	# SELECT ... FOR UPDATE holds a row lock until this request's transaction ends, so a
+	# concurrent or double-clicked conversion blocks here and, once the winner commits, reads
+	# its recorded Opportunity below instead of racing to insert a second one.
+	existing = _locked_conversion_result(lead.name)
+	prior_deal = existing.get(FIELD_CONVERTED_DEAL)
+	if prior_deal and frappe.db.exists("CRM Deal", prior_deal):
+		# The persisted initial Opportunity is the retry authority: a repeated request resolves
+		# to it (identifying the existing result) and never creates another. A recorded deal
+		# that no longer exists is treated as unconverted so the Lead can self-heal.
+		return prior_deal
+
+	# Flag scopes the archived-write guard's exemption to this Lead for this request, so the
+	# conversion's own writes pass while unrelated user edits to converted Leads stay refused.
+	frappe.flags.txb_conversion = lead.name
+	frappe.db.savepoint(CONVERSION_SAVEPOINT)
+	try:
+		if frappe.db.exists("CRM Lead Status", "Qualified"):
+			lead.db_set("status", "Qualified")
+		lead.db_set("converted", 1)
+		if lead.sla and frappe.db.exists("CRM Communication Status", "Replied"):
+			lead.db_set("communication_status", "Replied")
+		# Resolve the organization first so a newly created contact can be linked to it.
+		organization = lead.create_organization(existing_organization)
+		contact = lead.create_contact(existing_contact, False, organization)
+		_deal = lead.create_deal(contact, organization, deal)
+		# Record the outcome last, under the still-held lock, so it is the single durable
+		# authority for retries. Guarded on has_field so a site without the patch still converts.
+		_record_conversion_result(lead, contact, _deal)
+	except Exception:
+		# Undo every write above -- Contact, Organization, Opportunity, flags -- so a forced
+		# failure leaves the Lead unconverted with nothing partially persisted, then re-raise.
+		frappe.db.rollback(save_point=CONVERSION_SAVEPOINT)
+		raise
+	finally:
+		frappe.flags.txb_conversion = None
 	return _deal
+
+
+def _locked_conversion_result(lead_name):
+	"""Lock the Lead row and return its persisted conversion-result fields.
+
+	The row lock serialises conversion; the returned values are the retry authority. Only
+	fields the conversion-result patch has installed are read, so a site still pending that
+	patch locks and converts without erroring on an absent column.
+	"""
+	meta = frappe.get_meta("CRM Lead")
+	fields = [f for f in (FIELD_CONVERTED_DEAL, FIELD_CONVERTED_CONTACT) if meta.has_field(f)]
+	if not fields:
+		# Nothing persisted to read, but still take the lock so conversions serialise.
+		frappe.db.get_value("CRM Lead", lead_name, "name", for_update=True)
+		return {}
+	return frappe.db.get_value("CRM Lead", lead_name, fields, as_dict=True, for_update=True) or {}
+
+
+def _record_conversion_result(lead, contact, deal):
+	"""Persist the conversion outcome (Contact, initial Opportunity, timestamp) on the Lead."""
+	meta = lead.meta
+	values = {
+		FIELD_CONVERTED_CONTACT: contact,
+		FIELD_CONVERTED_DEAL: deal,
+		FIELD_CONVERTED_AT: now(),
+	}
+	for fieldname, value in values.items():
+		if meta.has_field(fieldname):
+			lead.db_set(fieldname, value)
 
 
 def _enforce_conversion_pipeline(deal):
