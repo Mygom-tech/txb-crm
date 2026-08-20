@@ -42,3 +42,4 @@ crm.patches.v1_0.disable_fix_time_picker_scripts
 crm.patches.v1_0.migrate_qualifying_call_to_contacted
 crm.patches.v1_0.seed_discovery_meeting_run_status
 crm.patches.v1_0.add_handover_link_custom_fields
+crm.patches.v1_0.add_conversion_result_fields

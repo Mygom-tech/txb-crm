@@ -1,6 +1,8 @@
 # Copyright (c) 2023, Frappe Technologies Pvt. Ltd. and Contributors
 # See license.txt
 
+from unittest.mock import patch
+
 import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 from frappe.desk.form.assign_to import add as assign_add
@@ -8,6 +10,12 @@ from frappe.desk.form.assign_to import remove as assign_remove
 from frappe.tests.utils import FrappeTestCase
 
 from crm.fcrm.doctype.crm_lead.crm_lead import CONTACT_ORGANIZATION_LINK_FIELD, convert_to_deal
+from crm.txb.constants import (
+	FIELD_CONVERTED_AT,
+	FIELD_CONVERTED_CONTACT,
+	FIELD_CONVERTED_DEAL,
+	PIPELINE_INDIVIDUAL_SESSION,
+)
 
 
 class TestCRMLead(FrappeTestCase):
@@ -707,6 +715,130 @@ class TestCRMLead(FrappeTestCase):
 
 		lead.reload()
 		self.assertEqual(lead.converted, 0)
+
+	# ── TXB-132: atomic, idempotent, auditable conversion ────────────────────────────────
+
+	def test_conversion_records_result_and_archives_lead(self):
+		"""One conversion creates the Contact + one initial Opportunity, records the result
+		fields, and archives the Lead."""
+		ensure_conversion_result_fields()
+		lead = create_lead(first_name="Audit", email="audit@convert.com", organization="Audit Co")
+
+		deal_name = lead.convert_to_deal()
+
+		lead.reload()
+		self.assertEqual(lead.converted, 1)
+		self.assertEqual(lead.get(FIELD_CONVERTED_DEAL), deal_name)
+		self.assertTrue(lead.get(FIELD_CONVERTED_AT))
+
+		deal = frappe.get_doc("CRM Deal", deal_name)
+		self.assertEqual(deal.lead, lead.name)
+		self.assertEqual(lead.get(FIELD_CONVERTED_CONTACT), deal.contacts[0].contact)
+
+		# Exactly one initial Opportunity for this Lead.
+		self.assertEqual(frappe.db.count("CRM Deal", {"lead": lead.name}), 1)
+
+	def test_forced_failure_leaves_nothing_persisted(self):
+		"""A failure mid-conversion rolls back every change: no Deal, no Contact, and the Lead
+		stays unconverted with no result recorded."""
+		ensure_conversion_result_fields()
+		lead = create_lead(first_name="Rollback", email="rollback@convert.com", organization="RB Co")
+
+		from crm.fcrm.doctype.crm_lead.crm_lead import CRMLead
+
+		with patch.object(CRMLead, "create_deal", side_effect=RuntimeError("boom")):
+			with self.assertRaises(RuntimeError):
+				lead.convert_to_deal()
+
+		lead.reload()
+		self.assertEqual(lead.converted, 0)
+		self.assertFalse(lead.get(FIELD_CONVERTED_DEAL))
+		self.assertFalse(lead.get(FIELD_CONVERTED_CONTACT))
+		self.assertEqual(frappe.db.count("CRM Deal", {"lead": lead.name}), 0)
+		# The Contact created before the failing step was rolled back with the savepoint.
+		self.assertFalse(frappe.db.exists("Contact Email", {"email_id": "rollback@convert.com"}))
+
+	def test_repeated_conversion_resolves_to_existing_result(self):
+		"""A repeated conversion request returns the already-recorded Opportunity and never
+		inserts a second one."""
+		ensure_conversion_result_fields()
+		lead = create_lead(first_name="Retry", email="retry@convert.com", organization="Retry Co")
+
+		first = lead.convert_to_deal()
+		second = convert_to_deal(lead=lead.name)
+
+		self.assertEqual(first, second)
+		self.assertEqual(frappe.db.count("CRM Deal", {"lead": lead.name}), 1)
+
+	def test_repeated_conversion_does_not_reinsert_when_result_authority_holds(self):
+		"""The persisted result is the retry authority: even if the create path is forced to
+		run again it must not be reached once a live Opportunity is already recorded."""
+		ensure_conversion_result_fields()
+		lead = create_lead(first_name="Once", email="once@convert.com", organization="Once Co")
+
+		first = lead.convert_to_deal()
+
+		from crm.fcrm.doctype.crm_lead.crm_lead import CRMLead
+
+		# A second attempt must short-circuit on the recorded result before create_deal.
+		with patch.object(CRMLead, "create_deal", side_effect=AssertionError("must not reinsert")):
+			second = convert_to_deal(lead=lead.name)
+
+		self.assertEqual(first, second)
+		self.assertEqual(frappe.db.count("CRM Deal", {"lead": lead.name}), 1)
+
+	def test_converted_lead_is_readable_but_rejects_user_edits(self):
+		"""An archived (converted) Lead can still be read, but a user-originated save is
+		refused."""
+		ensure_conversion_result_fields()
+		lead = create_lead(first_name="Archived", email="archived@convert.com", organization="Arc Co")
+		lead.convert_to_deal()
+
+		# Readable.
+		reloaded = frappe.get_doc("CRM Lead", lead.name)
+		self.assertEqual(reloaded.converted, 1)
+
+		# User-originated mutation is rejected.
+		reloaded.job_title = "Edited"
+		with self.assertRaises(frappe.exceptions.ValidationError) as ctx:
+			reloaded.save()
+		self.assertIn("converted", str(ctx.exception).lower())
+
+	def test_later_opportunity_may_reference_contact_and_archived_lead(self):
+		"""A later, independently created Opportunity may still reference both the conversion
+		Contact and the archived Lead -- CRM Deal.lead stays non-unique."""
+		ensure_conversion_result_fields()
+		ensure_deal_statuses()
+		lead = create_lead(first_name="Prov", email="prov@convert.com", organization="Prov Co")
+		lead.convert_to_deal()
+		lead.reload()
+
+		contact = lead.get(FIELD_CONVERTED_CONTACT)
+		later = frappe.get_doc(
+			{
+				"doctype": "CRM Deal",
+				"pipeline_type": PIPELINE_INDIVIDUAL_SESSION,
+				"status": "Submitted",
+				"lead": lead.name,
+				"contacts": [{"contact": contact}],
+			}
+		).insert(ignore_permissions=True)
+
+		self.assertEqual(later.lead, lead.name)
+		self.assertEqual(later.contacts[0].contact, contact)
+		# Two Opportunities now reference the one archived Lead.
+		self.assertEqual(frappe.db.count("CRM Deal", {"lead": lead.name}), 2)
+
+
+def ensure_conversion_result_fields():
+	"""Install the TXB-132 conversion-result fields, mirroring the registered patch.
+
+	The conversion code guards on `has_field`, so without these the result would be silently
+	skipped and the assertions would pass vacuously. Idempotent -- safe to call per test.
+	"""
+	from crm.patches.v1_0.add_conversion_result_fields import execute
+
+	execute()
 
 
 def ensure_deal_statuses():

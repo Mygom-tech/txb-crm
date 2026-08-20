@@ -104,6 +104,42 @@ def require_reach_for_contacted(doc, method=None):
 	)
 
 
+def guard_archived_lead(doc, method=None):
+	"""A converted Lead is archived: readable, but closed to user-originated edits (TXB-132).
+
+	Conversion is a single durable event that records the Contact, initial Opportunity and
+	timestamp on the Lead and marks it ``converted``. After that the Lead is a historical
+	record, so a later save -- a kanban drag, a field edit, a mobile status change, a crafted
+	REST write -- must be refused rather than silently mutate an archived conversion.
+
+	The check reads the *persisted* ``converted`` flag, so it fires only on writes to a Lead
+	that was already converted before this save, never on the conversion itself. Two writers
+	are exempt on purpose:
+
+	* the conversion authority, which sets ``converted`` and the result fields with ``db_set``
+	  (no validation) inside ``convert_to_deal`` and scopes ``frappe.flags.txb_conversion`` to
+	  this Lead so its narrowly bounded internal writes pass;
+	* inserts -- a Lead created directly as converted (an import or seed) is not a transition.
+
+	This is a backend-only immutability guard; it deliberately does not touch CRM Deal.lead,
+	which stays non-unique so later Opportunities may still reference the archived Lead.
+	"""
+	if doc.is_new():
+		return
+
+	if not frappe.db.get_value("CRM Lead", doc.name, "converted"):
+		return
+
+	if frappe.flags.get("txb_conversion") == doc.name:
+		return
+
+	frappe.throw(
+		_("This lead has been converted and can no longer be edited."),
+		frappe.ValidationError,
+		title=_("Lead Converted"),
+	)
+
+
 def default_disqualified_reason(doc, method=None):
 	"""A disqualified lead always carries a reason, so reporting never sees a blank."""
 	if doc.status == STATUS_DISQUALIFIED and not doc.lost_reason:

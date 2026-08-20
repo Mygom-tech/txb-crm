@@ -194,6 +194,20 @@ FIELD_DELIVERY_COACH_NAME = "custom_delivery_coach_name"
 FIELD_SALES_SOURCE_DEAL = "custom_sales_source_deal"
 FIELD_DELIVERY_DEAL = "custom_delivery_deal"
 
+# TXB-132 Lead-conversion result metadata. One conversion event records, on the archived
+# Lead itself, the Contact it created/reused, the initial Opportunity it created, and when.
+# These are the single-execution authority: `convert_to_deal` reads FIELD_CONVERTED_DEAL
+# under a row lock and, when it already resolves to a live Opportunity, returns it instead
+# of inserting a second one, so a retried or concurrent conversion is idempotent.
+#
+# Named without the `custom_` prefix, paired with the stock `converted` check they extend,
+# because they are the conversion outcome rather than a cross-linking convenience. Installed
+# by crm.patches.v1_0.add_conversion_result_fields; every consumer guards on `has_field` so
+# a site that has not yet run that patch still converts.
+FIELD_CONVERTED_CONTACT = "converted_contact"
+FIELD_CONVERTED_DEAL = "converted_deal"
+FIELD_CONVERTED_AT = "converted_at"
+
 # The field carrying commission-bearing ownership, per doctype.
 #
 # Single source of truth: `crm.permissions.org_hierarchy` scopes record visibility by the
