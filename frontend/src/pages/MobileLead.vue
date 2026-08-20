@@ -9,8 +9,15 @@
         </template>
       </Breadcrumbs>
       <div class="absolute right-0">
+        <!-- A converted Lead is archived: show its state, not a status control (TXB-132). -->
+        <Badge
+          v-if="isArchived"
+          variant="subtle"
+          theme="gray"
+          :label="__('Archived')"
+        />
         <Dropdown
-          v-if="doc"
+          v-else-if="doc"
           :options="
             statusOptions(
               'lead',
@@ -36,8 +43,9 @@
       </div>
     </header>
   </LayoutHeader>
+  <ArchivedLeadBanner v-if="isArchived && doc.name" :lead="doc" />
   <div
-    v-if="doc.name"
+    v-if="doc.name && !isArchived"
     class="flex h-12 items-center justify-between gap-2 border-b px-3 py-2.5"
   >
     <AssignTo v-model="assignees.data" doctype="CRM Lead" :docname="leadId" />
@@ -156,6 +164,7 @@ import { useActiveTabManager } from '@/composables/useActiveTabManager'
 import {
   createResource,
   Dropdown,
+  Badge,
   Tabs,
   Breadcrumbs,
   call,
@@ -164,6 +173,7 @@ import {
 } from 'frappe-ui'
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import ArchivedLeadBanner from '@/components/ArchivedLeadBanner.vue'
 import ConvertToDealModal from '@/components/Modals/ConvertToDealModal.vue'
 import {
   resolveLeadStatusTransition,
@@ -198,6 +208,9 @@ const {
 } = useDocument('CRM Lead', props.leadId)
 
 const doc = computed(() => document.doc || {})
+
+// A converted Lead is archived: read-only history, no status or reconversion controls (TXB-132).
+const isArchived = computed(() => Boolean(doc.value.converted))
 
 onMounted(async () => {
   if (document.doc) await triggerOnRender()

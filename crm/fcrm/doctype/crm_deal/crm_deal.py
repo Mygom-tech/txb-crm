@@ -10,6 +10,7 @@ from crm.api.exchange_rate import get_exchange_rate
 from crm.fcrm.doctype.crm_service_level_agreement.utils import get_sla
 from crm.fcrm.doctype.crm_status_change_log.crm_status_change_log import add_status_change_log
 from crm.fcrm.doctype.utils import add_or_remove_lost_reason_section_in_sidepanel
+from crm.txb.constants import FIELD_CONVERTED_CONTACT
 
 
 class CRMDeal(Document):
@@ -482,6 +483,12 @@ def create_deal(doc: dict):
 	):
 		contact = create_contact(doc)
 
+	# Provenance a later Opportunity may optionally retain (TXB-132): the source Lead is only
+	# honoured through the existing non-unique CRM Deal.lead link, after the server confirms it
+	# is an archived Lead genuinely associated with this Contact. Creating the Opportunity never
+	# replays conversion nor touches the Lead's recorded converted_contact/deal/at.
+	_validate_provenance_lead(doc.get("lead"), contact)
+
 	deal.update(
 		{
 			"organization": doc.get("organization") or create_organization(doc),
@@ -495,3 +502,39 @@ def create_deal(doc: dict):
 
 	deal.insert(ignore_permissions=True)
 	return deal.name
+
+
+def _validate_provenance_lead(lead: str | None, contact: str | None):
+	"""Reject a source Lead that is not archived provenance for this Contact.
+
+	Retaining provenance on a later Opportunity is optional, so an empty ``lead`` passes
+	untouched. When one is supplied it must be a converted (archived) Lead whose recorded
+	conversion Contact is exactly the Contact this Opportunity links, so the non-unique
+	CRM Deal.lead link can only carry genuine, Contact-scoped provenance and never an
+	arbitrary or unrelated Lead injected through a crafted payload.
+	"""
+	if not lead:
+		return
+
+	if not frappe.db.exists("CRM Lead", lead):
+		frappe.throw(_("The selected source Lead does not exist."), frappe.ValidationError)
+
+	# Provenance is expressed through the conversion-result field installed by TXB-132's patch.
+	# Without it we cannot confirm the association, so fail closed rather than trust the payload.
+	if not frappe.get_meta("CRM Lead").has_field(FIELD_CONVERTED_CONTACT):
+		frappe.throw(_("Lead provenance is not available on this site."), frappe.ValidationError)
+
+	converted, converted_contact = frappe.db.get_value(
+		"CRM Lead", lead, ["converted", FIELD_CONVERTED_CONTACT]
+	)
+	if not converted:
+		frappe.throw(
+			_("Only an archived (converted) Lead can be retained as the source of an Opportunity."),
+			frappe.ValidationError,
+		)
+
+	if not contact or converted_contact != contact:
+		frappe.throw(
+			_("The selected source Lead is not associated with this Contact."),
+			frappe.ValidationError,
+		)
