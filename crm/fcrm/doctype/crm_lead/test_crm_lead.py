@@ -9,6 +9,7 @@ from frappe.desk.form.assign_to import add as assign_add
 from frappe.desk.form.assign_to import remove as assign_remove
 from frappe.tests.utils import FrappeTestCase
 
+from crm.api import activities as activities_api
 from crm.fcrm.doctype.crm_lead.crm_lead import CONTACT_ORGANIZATION_LINK_FIELD, convert_to_deal
 from crm.txb.constants import (
 	FIELD_CONVERTED_AT,
@@ -909,3 +910,236 @@ def conversion_region_field(fieldname):
 		"insert_after": "source",
 		"label": "Conversion Region",
 	}
+
+
+def add_activity_note(doctype, name, title, content="body"):
+	return frappe.get_doc(
+		{
+			"doctype": "FCRM Note",
+			"title": title,
+			"content": content,
+			"reference_doctype": doctype,
+			"reference_docname": name,
+		}
+	).insert(ignore_permissions=True)
+
+
+def activity_note_titles(notes):
+	return [note.get("title") for note in notes]
+
+
+class TestContactActivities(FrappeTestCase):
+	"""Regression tests for the unified Contact Activity Log read model (TXB-132).
+
+	The aggregate spans every distinct archived Lead associated with a Contact (its
+	pre-conversion history) and every linked Opportunity (its post-conversion history). These
+	pin the three acceptance guarantees: deterministic, content-preserving chronology across
+	multiple Leads and Opportunities (ac-1); read-once-per-record dedup with source/route/phase
+	tagging even when several Opportunities reference the same Lead (ac-2); and a single
+	Contact-level authorization seam that leaves the direct Lead/Deal endpoints' own permission
+	checks intact (ac-3).
+	"""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		ensure_conversion_result_fields()
+		ensure_deal_statuses()
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+		frappe.db.rollback()
+
+	def _contact_of(self, lead):
+		return frappe.db.get_value("CRM Lead", lead.name, FIELD_CONVERTED_CONTACT)
+
+	# -- ac-1: multi-Lead / multi-Opportunity aggregate, chronology, preservation -----------
+
+	def test_contact_activities_aggregate_multiple_leads_and_opportunities(self):
+		"""A Contact with two archived Leads and two linked Opportunities returns every
+		source's pre- and post-conversion records, preserving original content and authors."""
+		lead_a = create_lead(first_name="Ann", email="ann@ex.com", organization="Ann Co")
+		add_activity_note("CRM Lead", lead_a.name, "Lead A note", content="reached out")
+		deal_a = lead_a.convert_to_deal()
+		contact = self._contact_of(lead_a)
+		self.assertTrue(contact)
+		add_activity_note("CRM Deal", deal_a, "Deal A note")
+
+		lead_b = create_lead(first_name="Ann", email="ann-b@ex.com", organization="Ann Co")
+		add_activity_note("CRM Lead", lead_b.name, "Lead B note")
+		deal_b = convert_to_deal(lead=lead_b.name, existing_contact=contact)
+
+		activities, calls, notes, tasks, attachments = activities_api.get_contact_activities(contact)
+
+		# Both archived Leads and both Opportunities contribute their notes, once each.
+		self.assertEqual(
+			sorted(activity_note_titles(notes)),
+			["Deal A note", "Lead A note", "Lead B note"],
+		)
+
+		# Every source produced its creation activity, tagged pre/post-conversion correctly.
+		lead_creations = [
+			a
+			for a in activities
+			if a["activity_type"] == "creation" and a["source_doctype"] == "CRM Lead"
+		]
+		deal_creations = [
+			a
+			for a in activities
+			if a["activity_type"] == "creation" and a["source_doctype"] == "CRM Deal"
+		]
+		self.assertEqual({a["source_docname"] for a in lead_creations}, {lead_a.name, lead_b.name})
+		self.assertEqual({a["source_docname"] for a in deal_creations}, {deal_a, deal_b})
+		self.assertTrue(all(a["phase"] == activities_api.PHASE_PRE_CONVERSION for a in lead_creations))
+		self.assertTrue(all(a["phase"] == activities_api.PHASE_POST_CONVERSION for a in deal_creations))
+
+		# Original content and author are preserved verbatim on the Lead note.
+		lead_a_note = next(n for n in notes if n["title"] == "Lead A note")
+		self.assertEqual(lead_a_note["content"], "reached out")
+		self.assertEqual(lead_a_note["owner"], "Administrator")
+		self.assertEqual(lead_a_note["source_docname"], lead_a.name)
+		self.assertEqual(lead_a_note["phase"], activities_api.PHASE_PRE_CONVERSION)
+
+	def test_contact_activities_chronology_is_deterministic_and_newest_first(self):
+		"""The feed is ordered newest-first and identical across repeated calls."""
+		lead = create_lead(first_name="Chr", email="chr@ex.com", organization="Chr Co")
+		add_activity_note("CRM Lead", lead.name, "n1")
+		deal = lead.convert_to_deal()
+		contact = self._contact_of(lead)
+		add_activity_note("CRM Deal", deal, "n2")
+
+		first = activities_api.get_contact_activities(contact)[0]
+		second = activities_api.get_contact_activities(contact)[0]
+
+		def identity(feed):
+			return [(a["activity_type"], a.get("source_docname"), str(a["creation"])) for a in feed]
+
+		# Deterministic: same identities in the same order on every call.
+		self.assertEqual(identity(first), identity(second))
+
+		# Non-increasing creation timestamps (newest first).
+		creations = [a["creation"] for a in first]
+		self.assertEqual(creations, sorted(creations, reverse=True))
+
+	# -- ac-2: dedup by stable identity + source/route/phase metadata -----------------------
+
+	def test_contact_activities_read_shared_lead_once_across_opportunities(self):
+		"""When several Opportunities reference the same archived Lead, each underlying record
+		appears exactly once."""
+		lead = create_lead(first_name="Dee", email="dee@ex.com", organization="Dee Co")
+		add_activity_note("CRM Lead", lead.name, "shared lead note")
+		deal_a = lead.convert_to_deal()
+		contact = self._contact_of(lead)
+
+		# A second, later Opportunity referencing the same Lead and Contact (CRM Deal.lead is
+		# non-unique). The Lead is now reachable three ways: converted_contact and two Deal.lead.
+		frappe.get_doc(
+			{
+				"doctype": "CRM Deal",
+				"pipeline_type": PIPELINE_INDIVIDUAL_SESSION,
+				"status": "Submitted",
+				"lead": lead.name,
+				"contacts": [{"contact": contact}],
+			}
+		).insert(ignore_permissions=True)
+
+		_, _, notes, _, _ = activities_api.get_contact_activities(contact)
+
+		# The Lead note appears once despite the Lead being reachable through both Opportunities.
+		self.assertEqual(activity_note_titles(notes).count("shared lead note"), 1)
+		# The Lead's own creation activity is likewise emitted once.
+		lead_creations = [
+			a
+			for a in activities_api.get_contact_activities(contact)[0]
+			if a["activity_type"] == "creation" and a["source_docname"] == lead.name
+		]
+		self.assertEqual(len(lead_creations), 1)
+
+	def test_contact_activities_identify_source_route_and_phase(self):
+		"""Every result identifies its source record, source route, source doctype, and
+		pre/post-conversion phase."""
+		lead = create_lead(first_name="Eve", email="eve@ex.com", organization="Eve Co")
+		add_activity_note("CRM Lead", lead.name, "lead note")
+		deal = lead.convert_to_deal()
+		contact = self._contact_of(lead)
+		add_activity_note("CRM Deal", deal, "deal note")
+
+		streams = activities_api.get_contact_activities(contact)
+		every_record = [r for stream in streams for r in stream if isinstance(r, dict)]
+
+		for record in every_record:
+			self.assertIn(record["source_doctype"], ("CRM Lead", "CRM Deal"))
+			self.assertIn(
+				record["phase"],
+				(activities_api.PHASE_PRE_CONVERSION, activities_api.PHASE_POST_CONVERSION),
+			)
+			prefix = "leads" if record["source_doctype"] == "CRM Lead" else "deals"
+			self.assertEqual(record["source_route"], f"{prefix}/{record['source_docname']}")
+
+		notes = streams[2]
+		lead_note = next(n for n in notes if n["title"] == "lead note")
+		deal_note = next(n for n in notes if n["title"] == "deal note")
+		self.assertEqual(lead_note["source_doctype"], "CRM Lead")
+		self.assertEqual(lead_note["source_docname"], lead.name)
+		self.assertEqual(lead_note["source_route"], f"leads/{lead.name}")
+		self.assertEqual(lead_note["phase"], activities_api.PHASE_PRE_CONVERSION)
+		self.assertEqual(deal_note["source_doctype"], "CRM Deal")
+		self.assertEqual(deal_note["source_docname"], deal)
+		self.assertEqual(deal_note["source_route"], f"deals/{deal}")
+		self.assertEqual(deal_note["phase"], activities_api.PHASE_POST_CONVERSION)
+
+	# -- ac-3: one centralized authorization seam; direct endpoints unchanged ----------------
+
+	def test_contact_activities_gated_only_by_contact_permission(self):
+		"""The aggregate is gated by the single Contact read seam."""
+		lead = create_lead(first_name="Fay", email="fay@ex.com", organization="Fay Co")
+		lead.convert_to_deal()
+		contact = self._contact_of(lead)
+
+		def deny_contact(doctype, ptype=None, doc=None, *a, **k):
+			return doctype != "Contact"
+
+		with patch("frappe.has_permission", side_effect=deny_contact):
+			with self.assertRaises(frappe.PermissionError):
+				activities_api.get_contact_activities(contact)
+
+	def test_contact_activities_not_filtered_by_source_permissions(self):
+		"""With Contact read allowed, the aggregate still surfaces Lead- and Deal-sourced
+		records even when the caller lacks direct Lead/Deal read -- source-level filtering is a
+		deliberate non-goal, so authorization stays centralized at the one Contact seam."""
+		lead = create_lead(first_name="Gus", email="gus@ex.com", organization="Gus Co")
+		add_activity_note("CRM Lead", lead.name, "lead note")
+		deal = lead.convert_to_deal()
+		contact = self._contact_of(lead)
+		add_activity_note("CRM Deal", deal, "deal note")
+
+		def only_contact(doctype, ptype=None, doc=None, *a, **k):
+			return doctype == "Contact"
+
+		with patch("frappe.has_permission", side_effect=only_contact):
+			_, _, notes, _, _ = activities_api.get_contact_activities(contact)
+
+		self.assertEqual(sorted(activity_note_titles(notes)), ["deal note", "lead note"])
+
+	def test_direct_lead_activities_endpoint_keeps_its_permission_check(self):
+		"""The centralized seam does not weaken the direct Lead endpoint's own check."""
+		lead = create_lead(first_name="Hal", email="hal@ex.com", organization="Hal Co")
+
+		def deny_lead(doctype, ptype=None, doc=None, *a, **k):
+			return doctype != "CRM Lead"
+
+		with patch("frappe.has_permission", side_effect=deny_lead):
+			with self.assertRaises(frappe.PermissionError):
+				activities_api.get_lead_activities(lead.name)
+
+	def test_direct_deal_activities_endpoint_keeps_its_permission_check(self):
+		"""The centralized seam does not weaken the direct Deal endpoint's own check."""
+		lead = create_lead(first_name="Ivy", email="ivy@ex.com", organization="Ivy Co")
+		deal = lead.convert_to_deal()
+
+		def deny_deal(doctype, ptype=None, doc=None, *a, **k):
+			return doctype != "CRM Deal"
+
+		with patch("frappe.has_permission", side_effect=deny_deal):
+			with self.assertRaises(frappe.PermissionError):
+				activities_api.get_deal_activities(deal)

@@ -6,8 +6,10 @@ from frappe import _
 from frappe.desk.form.load import get_docinfo
 from frappe.query_builder import JoinType
 from frappe.translate import get_translated_doctypes
+from frappe.utils import get_datetime
 
 from crm.fcrm.doctype.crm_call_log.crm_call_log import parse_call_log
+from crm.txb.constants import FIELD_CONVERTED_AT, FIELD_CONVERTED_CONTACT
 
 
 @frappe.whitelist()
@@ -16,14 +18,19 @@ def get_activities(name: str):
 		return get_deal_activities(name)
 	elif frappe.db.exists("CRM Lead", name):
 		return get_lead_activities(name)
+	elif frappe.db.exists("Contact", name):
+		return get_contact_activities(name)
 	else:
 		frappe.throw(_("Document not found"), frappe.DoesNotExistError)
 
 
-def get_deal_activities(name: str):
+def get_deal_activities(name: str, include_lead: bool = True):
 	if not frappe.has_permission("CRM Deal", "read", name):
 		frappe.throw(_("Not permitted"), frappe.PermissionError)
+	return _read_deal_activities(name, include_lead=include_lead)
 
+
+def _read_deal_activities(name: str, include_lead: bool = True):
 	get_docinfo("", "CRM Deal", name)
 	docinfo = frappe.response["docinfo"]
 	deal_meta = frappe.get_meta("CRM Deal")
@@ -50,15 +57,20 @@ def get_deal_activities(name: str):
 	creation_text = _("created this deal")
 
 	if lead:
-		activities, calls, notes, tasks, attachments = get_lead_activities(lead)
 		creation_text = _("converted the lead to this deal")
-		# The Lead's activities are surfaced here (and, through the Contact's linked deals, on
-		# a converted Contact) by aggregation, not by copying or reparenting: each record still
-		# references the Lead. Attribute them to that source so the timeline shows where a dial
-		# came from. The activity feed already carries is_lead; the call/note/task lists do not.
-		attribute_to_lead(calls, lead)
-		attribute_to_lead(notes, lead)
-		attribute_to_lead(tasks, lead)
+		if include_lead:
+			# Existing Deal-endpoint behavior: embed the source Lead's history inline so a single
+			# converted Opportunity shows its full pre-conversion timeline. The Lead's activities
+			# are surfaced here by aggregation, not by copying or reparenting: each record still
+			# references the Lead. Attribute them to that source so the timeline shows where a
+			# dial came from. The activity feed already carries is_lead; the call/note/task lists
+			# do not. The Contact aggregator instead reads every distinct Lead once itself and
+			# calls this with include_lead=False, so a Lead shared by several Opportunities is
+			# never replayed per Deal.
+			activities, calls, notes, tasks, attachments = get_lead_activities(lead)
+			attribute_to_lead(calls, lead)
+			attribute_to_lead(notes, lead)
+			attribute_to_lead(tasks, lead)
 
 	activities.append(
 		{
@@ -184,7 +196,10 @@ def get_deal_activities(name: str):
 def get_lead_activities(name: str):
 	if not frappe.has_permission("CRM Lead", "read", name):
 		frappe.throw(_("Not permitted"), frappe.PermissionError)
+	return _read_lead_activities(name)
 
+
+def _read_lead_activities(name: str):
 	get_docinfo("", "CRM Lead", name)
 	docinfo = frappe.response["docinfo"]
 	lead_meta = frappe.get_meta("CRM Lead")
@@ -320,6 +335,253 @@ def get_lead_activities(name: str):
 	activities = handle_multiple_versions(activities)
 
 	return activities, calls, notes, tasks, attachments
+
+
+# --- Contact activity aggregate (TXB-132) -------------------------------------------------
+#
+# A person-level Contact activity log is the deduplicated union of every archived Lead
+# associated with the Contact (its pre-conversion history) and every linked Opportunity (its
+# post-conversion history). Each distinct Lead is read exactly once and each distinct
+# Opportunity exactly once -- Opportunity history is read WITHOUT its embedded Lead replay
+# (include_lead=False) -- so a Lead referenced by several Opportunities is not repeated.
+
+# Phase labels attached to every aggregated record. `converted_at` on the archived Lead is the
+# cutoff: a Lead record at or before it is pre-conversion; an Opportunity record is always
+# post-conversion.
+PHASE_PRE_CONVERSION = "pre_conversion"
+PHASE_POST_CONVERSION = "post_conversion"
+
+# Frontend route prefix per source doctype, surfaced as `source_route` so a caller can link a
+# record back to the exact Lead or Opportunity it came from.
+SOURCE_ROUTES = {"CRM Lead": "leads", "CRM Deal": "deals"}
+
+
+@frappe.whitelist()
+def get_contact_activities(name: str):
+	"""Return the deduplicated activity aggregate for a Contact.
+
+	Spans every distinct archived Lead associated with the Contact (pre-conversion) and every
+	linked Opportunity (post-conversion), tags each record with its source and phase, and
+	returns deterministic chronology. Yields the same
+	(activities, calls, notes, tasks, attachments) shape as the Lead and Deal endpoints, so the
+	same categories -- versions, comments, communications, calls/dials, notes, tasks, and
+	attachments -- are all covered.
+	"""
+	_authorize_contact_activities(name)
+
+	lead_names, deal_names = _resolve_contact_sources(name)
+	converted_at = _converted_at_by_lead(lead_names)
+
+	activities, calls, notes, tasks, attachments = [], [], [], [], []
+
+	for lead in lead_names:
+		streams = _read_lead_activities(lead)
+		for stream in streams:
+			_tag_lead_source(stream, lead, converted_at.get(lead))
+		activities += streams[0]
+		calls += streams[1]
+		notes += streams[2]
+		tasks += streams[3]
+		attachments += streams[4]
+
+	for deal in deal_names:
+		# include_lead=False: the Lead history is read once above, not replayed per Opportunity.
+		streams = _read_deal_activities(deal, include_lead=False)
+		for stream in streams:
+			_tag_deal_source(stream, deal)
+		activities += streams[0]
+		calls += streams[1]
+		notes += streams[2]
+		tasks += streams[3]
+		attachments += streams[4]
+
+	activities = _dedup(activities, _activity_identity)
+	calls = _dedup(calls, _record_identity)
+	notes = _dedup(notes, _record_identity)
+	tasks = _dedup(tasks, _record_identity)
+	attachments = _dedup(attachments, _record_identity)
+
+	_sort_by_recency(activities)
+	_sort_by_recency(calls)
+	_sort_by_recency(notes)
+	_sort_by_recency(tasks)
+	_sort_by_recency(attachments)
+
+	return activities, calls, notes, tasks, attachments
+
+
+def _authorize_contact_activities(contact: str):
+	"""The single authorization seam for the Contact activity aggregate.
+
+	Contact `read` permission currently exposes the entire aggregate; source-level (per Lead /
+	per Opportunity) filtering is a deliberate non-goal for this iteration and, when it lands,
+	belongs here so no caller can bypass it. The aggregator reads its sources through the
+	unchecked internal readers precisely so this is the only gate -- the direct Lead and Deal
+	endpoints keep their own per-record permission checks untouched.
+	"""
+	if not frappe.has_permission("Contact", "read", contact):
+		frappe.throw(_("Not permitted"), frappe.PermissionError)
+
+
+def _resolve_contact_sources(contact: str):
+	"""Resolve the distinct archived Leads and linked Opportunities for a Contact.
+
+	Opportunities are the Contact's linked CRM Deals. Leads are the union of (a) every Lead
+	whose conversion recorded this Contact as its result and (b) every Lead referenced for
+	provenance by a linked Opportunity -- CRM Deal.lead is non-unique, so the same Lead reached
+	through several Opportunities is collapsed to one here. Both lists are sorted so downstream
+	ordering is deterministic.
+	"""
+	deal_names = sorted(
+		set(
+			frappe.get_all(
+				"CRM Contacts",
+				filters={"contact": contact, "parenttype": "CRM Deal"},
+				pluck="parent",
+				distinct=True,
+			)
+			or []
+		)
+	)
+
+	lead_names = set()
+
+	meta = frappe.get_meta("CRM Lead")
+	if meta.has_field(FIELD_CONVERTED_CONTACT):
+		lead_names.update(
+			frappe.get_all("CRM Lead", filters={FIELD_CONVERTED_CONTACT: contact}, pluck="name") or []
+		)
+
+	if deal_names:
+		for row in (
+			frappe.get_all(
+				"CRM Deal",
+				filters={"name": ("in", deal_names), "lead": ("is", "set")},
+				fields=["lead"],
+				distinct=True,
+			)
+			or []
+		):
+			if row.lead:
+				lead_names.add(row.lead)
+
+	return sorted(lead_names), deal_names
+
+
+def _converted_at_by_lead(lead_names: list) -> dict:
+	"""Map each Lead to its `converted_at` cutoff, batched in one query (absent -> None)."""
+	if not lead_names:
+		return {}
+	meta = frappe.get_meta("CRM Lead")
+	if not meta.has_field(FIELD_CONVERTED_AT):
+		return {}
+	rows = frappe.get_all(
+		"CRM Lead",
+		filters={"name": ("in", lead_names)},
+		fields=["name", FIELD_CONVERTED_AT],
+	)
+	return {row.name: row.get(FIELD_CONVERTED_AT) for row in rows}
+
+
+def _tag_lead_source(records: list, lead: str, converted_at) -> list:
+	"""Attach Lead source and per-record phase metadata, in place."""
+	route = f"{SOURCE_ROUTES['CRM Lead']}/{lead}"
+	for record in records or []:
+		if isinstance(record, dict):
+			record["is_lead"] = True
+			record["source_doctype"] = "CRM Lead"
+			record["source_docname"] = lead
+			record["source_route"] = route
+			record["phase"] = _phase_for(record, converted_at)
+	return records
+
+
+def _tag_deal_source(records: list, deal: str) -> list:
+	"""Attach Opportunity source and (always post-conversion) phase metadata, in place."""
+	route = f"{SOURCE_ROUTES['CRM Deal']}/{deal}"
+	for record in records or []:
+		if isinstance(record, dict):
+			record["is_lead"] = False
+			record["source_doctype"] = "CRM Deal"
+			record["source_docname"] = deal
+			record["source_route"] = route
+			record["phase"] = PHASE_POST_CONVERSION
+	return records
+
+
+def _phase_for(record: dict, converted_at) -> str:
+	"""Classify a Lead-sourced record against the conversion cutoff.
+
+	No recorded cutoff (an unconverted or pre-patch Lead) is treated as entirely
+	pre-conversion. Otherwise a record dated at or before `converted_at` is pre-conversion and
+	anything after it post-conversion.
+	"""
+	if not converted_at:
+		return PHASE_PRE_CONVERSION
+	timestamp = _record_timestamp(record)
+	if not timestamp:
+		return PHASE_PRE_CONVERSION
+	return (
+		PHASE_PRE_CONVERSION
+		if get_datetime(timestamp) <= get_datetime(converted_at)
+		else PHASE_POST_CONVERSION
+	)
+
+
+def _record_timestamp(record: dict):
+	"""The best available original timestamp for a record, preserved as stored."""
+	return record.get("creation") or record.get("communication_date") or record.get("start_time")
+
+
+def _record_identity(record: dict):
+	"""Stable identity for a call/note/task/attachment: its own docname."""
+	return ("name", record.get("name"))
+
+
+def _activity_identity(activity: dict):
+	"""Stable identity for a feed activity.
+
+	Comments, attachment logs and grouped versions carry a docname; creation, version and
+	communication rows do not, so fall back to source plus type plus timestamp. The source
+	docname is part of every key, so records from different Leads/Opportunities never collide.
+	"""
+	return (
+		activity.get("source_doctype"),
+		activity.get("source_docname"),
+		activity.get("activity_type"),
+		activity.get("name") or str(activity.get("creation")),
+	)
+
+
+def _dedup(records: list, identity) -> list:
+	"""Drop later records sharing a stable identity, preserving first-seen order."""
+	seen = set()
+	deduped = []
+	for record in records:
+		if not isinstance(record, dict):
+			deduped.append(record)
+			continue
+		key = identity(record)
+		if key in seen:
+			continue
+		seen.add(key)
+		deduped.append(record)
+	return deduped
+
+
+def _sort_by_recency(records: list) -> list:
+	"""Order newest first with a stable tie-break, in place, for deterministic chronology."""
+	records.sort(key=_recency_key, reverse=True)
+	return records
+
+
+def _recency_key(record: dict):
+	timestamp = _record_timestamp(record)
+	return (
+		get_datetime(timestamp) if timestamp else get_datetime("1900-01-01 00:00:00"),
+		str(record.get("source_docname") or ""),
+		str(record.get("name") or ""),
+	)
 
 
 def get_attachments(doctype: str, name: str):
