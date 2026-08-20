@@ -1098,7 +1098,14 @@ async function handleKanbanTransition(data) {
       const response = await call('crm.txb.api.actions.get_available_actions', {
         deal: data.item,
       })
-      available = response?.actions || []
+      // A malformed body is "we could not find out", not "this edge has no action".
+      // Coercing it to [] would look actionless and let an Admin drop write a handover
+      // terminal (Won/Sold) bare (TXB-175). Throw so the outer catch reverts the card and
+      // toasts, exactly as a rejected load does.
+      if (!Array.isArray(response?.actions)) {
+        throw new Error('get_available_actions returned no actions array')
+      }
+      available = response.actions
     }
 
     const outcome = await requestKanbanTransition({

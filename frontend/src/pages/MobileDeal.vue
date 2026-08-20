@@ -314,7 +314,9 @@ import { actionOptions, runAction } from '@/utils/takeAction'
 import {
   allowedTargets,
   prefillFor,
-  refreshCandidateActions,
+  refreshStatusResolution,
+  STATUS_CHANGE_ACTION,
+  STATUS_CHANGE_BLOCKED,
 } from '@/utils/dealTransitions'
 import { chooseAction } from '@/utils/kanbanTransitions'
 import { getSettings } from '@/stores/settings'
@@ -747,24 +749,46 @@ function statusLabel(status) {
 // are recorded. A bare write would reach "Session Set" with no BAP details at all, and
 // would reach "Lost" with no reason, where CRMDeal.validate_lost_reason simply throws.
 //
-// The Admin hatch is for moves the state machine does NOT describe: only when no action
-// covers this edge does an Admin write directly. A non-Admin is refused there.
+// The transition registry — not the available-actions response — decides ownership. An
+// action-owned edge whose action is missing, stale or unmatched fails closed (BLOCKED); it
+// is never quietly demoted to an Admin bare write, which is how Won/Sold got bypassed
+// (TXB-175). The Admin hatch is for UNOWNED moves the state machine does NOT describe; a
+// non-Admin is refused there.
 async function triggerStatusChange(value) {
-  const candidates = await refreshCandidateActions({
-    transitions: transitionMap.data?.transitions,
-    pipeline: doc.value?.pipeline_type,
-    from: doc.value?.status,
-    to: value,
-    loadAvailable: () =>
-      call('crm.txb.api.actions.get_available_actions', {
-        deal: props.dealId,
-      }),
-  })
+  let resolution
+  try {
+    resolution = await refreshStatusResolution({
+      transitions: transitionMap.data?.transitions,
+      pipeline: doc.value?.pipeline_type,
+      from: doc.value?.status,
+      to: value,
+      loadAvailable: () =>
+        call('crm.txb.api.actions.get_available_actions', {
+          deal: props.dealId,
+        }),
+    })
+  } catch (e) {
+    toast.error(
+      __('Could not confirm how to move this opportunity to "{0}". Please try again.', [
+        __(value),
+      ]),
+    )
+    return
+  }
 
-  if (candidates.length) {
-    const action = await chooseAction(candidates, value)
+  if (resolution.kind === STATUS_CHANGE_ACTION) {
+    const action = await chooseAction(resolution.candidates, value)
     if (!action) return
     await onTakeAction(action, prefillFor(action, value))
+    return
+  }
+
+  if (resolution.kind === STATUS_CHANGE_BLOCKED) {
+    toast.error(
+      __('Change to "{0}" through Take Action, so the details that go with it are recorded.', [
+        __(value),
+      ]),
+    )
     return
   }
 

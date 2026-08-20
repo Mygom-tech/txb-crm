@@ -1,5 +1,10 @@
 import { createDialog } from '@/utils/dialogs'
-import { candidateActions, prefillFor } from '@/utils/dealTransitions'
+import {
+  prefillFor,
+  resolveStatusChange,
+  STATUS_CHANGE_ACTION,
+  STATUS_CHANGE_UNOWNED,
+} from '@/utils/dealTransitions'
 import { runAction } from '@/utils/takeAction'
 import {
   logReach,
@@ -74,7 +79,7 @@ function applyGuardedTransition(ctx, routed) {
 async function dealStatusTransition(ctx) {
   const refused = { proceed: false, alreadySaved: false, finalStatus: ctx.from }
 
-  const candidates = candidateActions(
+  const resolution = resolveStatusChange(
     ctx.transitions,
     ctx.pipelineType,
     ctx.from,
@@ -82,18 +87,25 @@ async function dealStatusTransition(ctx) {
     ctx.available,
   )
 
-  // The drag guard should have refused this drop, so reaching here means the board and
-  // the server disagree — refuse rather than guess.
-  if (!candidates.length) {
-    // The hatch: an Admin may land on a status no action describes. The caller performs
-    // the write, exactly as it does for a non-deal board.
+  // UNOWNED: the state machine does not describe this edge. The hatch lets an Admin land
+  // on it; the caller performs the write, exactly as for a non-deal board. Everyone else
+  // is refused — the drag guard should already have prevented the drop.
+  if (resolution.kind === STATUS_CHANGE_UNOWNED) {
     if (ctx.isAdmin) {
       return { proceed: true, alreadySaved: false, finalStatus: ctx.to }
     }
     return refused
   }
 
-  const action = await chooseAction(candidates, ctx.to)
+  // BLOCKED: the graph owns this edge but the board's freshly loaded available actions
+  // offer none that match (empty, stale or unmatched). Fail closed rather than let an
+  // Admin drop write a handover terminal like Won/Sold bare (TXB-175). The caller reverts
+  // the card to its prior column.
+  if (resolution.kind !== STATUS_CHANGE_ACTION) {
+    return refused
+  }
+
+  const action = await chooseAction(resolution.candidates, ctx.to)
   if (!action) return refused
 
   const result = await runAction(ctx.itemName, action, {

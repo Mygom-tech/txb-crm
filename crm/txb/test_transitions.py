@@ -254,6 +254,54 @@ class TestTransitionEnforcement(FrappeTestCase):
 			frappe.db.get_value("CRM Deal", deal.name, "status"), "Session Run"
 		)
 
+	def test_an_admin_cannot_enter_the_session_won_terminal_bare(self):
+		"""The recovery hatch does not open on "Won": entering it bare would skip the
+		handover that creates the Delivering Coaching opportunity (TXB-175). Even an Admin
+		on a legal edge must let session_won own the save."""
+		deal = self.make_deal("Session Run")
+		frappe.set_user(ADMIN)
+		deal.reload()
+		deal.status = "Won"  # a legal edge (session_won owns it), but written bare
+
+		with self.assertRaisesRegex(frappe.ValidationError, "Take Action"):
+			deal.save(ignore_permissions=True)
+
+	def test_an_admin_cannot_jump_into_the_workshop_sold_terminal(self):
+		"""An off-graph raw jump into "Sold" is refused for an Admin too: the hatch that
+		normally covers arbitrary moves is closed for the handover terminals."""
+		deal = self.make_deal("Workshop submitted", pipeline=PIPELINE_WORKSHOP)
+		frappe.set_user(ADMIN)
+		deal.reload()
+		deal.status = "Sold"  # not reachable from Workshop submitted
+
+		with self.assertRaisesRegex(frappe.ValidationError, "cannot move from"):
+			deal.save(ignore_permissions=True)
+
+	def test_the_owning_action_may_persist_a_handover_terminal(self):
+		"""The invariant blocks only bare writes: the matching execute_action, which arms
+		the origin flag, still lands the deal on the terminal status."""
+		deal = self.make_deal("Session Run")
+		frappe.set_user(ADMIN)
+		deal.reload()
+		deal.status = "Won"
+		frappe.flags.txb_action = deal.name
+		deal.save(ignore_permissions=True)
+
+		self.assertEqual(frappe.db.get_value("CRM Deal", deal.name, "status"), "Won")
+
+	def test_a_non_terminal_on_graph_move_keeps_the_admin_hatch(self):
+		"""The terminal invariant is scoped to the handover statuses: an Admin still holds
+		the recovery hatch for every other on-graph move, written bare."""
+		deal = self.make_deal("Submitted")
+		frappe.set_user(ADMIN)
+		deal.reload()
+		deal.status = "Session Set"  # on-graph, but not a handover terminal
+		deal.save(ignore_permissions=True)
+
+		self.assertEqual(
+			frappe.db.get_value("CRM Deal", deal.name, "status"), "Session Set"
+		)
+
 	def test_available_actions_report_admin(self):
 		from crm.txb.api.actions import get_available_actions
 
