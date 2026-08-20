@@ -54,6 +54,31 @@ export function candidateActions(transitions, pipeline, from, to, available) {
 }
 
 /**
+ * Resolve an action-owned status move against a fresh server response.
+ *
+ * Available actions are filtered by the deal's current status. A cached response from the
+ * previous status can therefore make a real graph edge look actionless and send Admins down
+ * the bare-write recovery path. The caller supplies an uncached loader so a status selection
+ * never decides whether to bypass an action from stale or initial-empty data.
+ */
+export async function refreshCandidateActions({
+  transitions,
+  pipeline,
+  from,
+  to,
+  loadAvailable,
+}) {
+  const response = await loadAvailable()
+  return candidateActions(
+    transitions,
+    pipeline,
+    from,
+    to,
+    response?.actions || [],
+  )
+}
+
+/**
  * Branch values that land the deal in `to`, so dropping on a column pre-selects the
  * answer that column implies (TXB-110 decision 3).
  *

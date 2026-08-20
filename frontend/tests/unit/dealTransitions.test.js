@@ -4,6 +4,7 @@ import {
   candidateActions,
   canDropOn,
   prefillFor,
+  refreshCandidateActions,
 } from '@/utils/dealTransitions'
 
 const TRANSITIONS = {
@@ -81,6 +82,69 @@ describe('candidateActions', () => {
         AVAILABLE,
       ),
     ).toEqual([])
+  })
+})
+
+describe('refreshCandidateActions', () => {
+  const terminalTransitions = {
+    'Individual Session': {
+      'Session Run': {
+        Won: [{ name: 'session_won', label: 'Won' }],
+      },
+    },
+    Workshop: {
+      'Workshop ran': {
+        Sold: [{ name: 'workshop_won', label: 'Sold' }],
+      },
+    },
+  }
+
+  it('uses freshly loaded actions when the cached list predates Session Run', async () => {
+    const loadAvailable = async () => ({
+      actions: [{ name: 'session_won', label: 'Won', fields: [] }],
+    })
+
+    const found = await refreshCandidateActions({
+      transitions: terminalTransitions,
+      pipeline: 'Individual Session',
+      from: 'Session Run',
+      to: 'Won',
+      loadAvailable,
+    })
+
+    expect(found.map((action) => action.name)).toEqual(['session_won'])
+  })
+
+  it('loads the Workshop Sold action when the initial action cache is empty', async () => {
+    const loadAvailable = async () => ({
+      actions: [{ name: 'workshop_won', label: 'Sold', fields: [] }],
+    })
+
+    const found = await refreshCandidateActions({
+      transitions: terminalTransitions,
+      pipeline: 'Workshop',
+      from: 'Workshop ran',
+      to: 'Sold',
+      loadAvailable,
+    })
+
+    expect(found.map((action) => action.name)).toEqual(['workshop_won'])
+  })
+
+  it('rejects instead of treating a failed refresh as an actionless edge', async () => {
+    const loadAvailable = async () => {
+      throw new Error('network unavailable')
+    }
+
+    await expect(
+      refreshCandidateActions({
+        transitions: terminalTransitions,
+        pipeline: 'Individual Session',
+        from: 'Session Run',
+        to: 'Won',
+        loadAvailable,
+      }),
+    ).rejects.toThrow('network unavailable')
   })
 })
 

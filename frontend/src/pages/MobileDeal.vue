@@ -313,8 +313,8 @@ import { allowedStatusesFor } from '@/utils/pipelineStatuses'
 import { actionOptions, runAction } from '@/utils/takeAction'
 import {
   allowedTargets,
-  candidateActions,
   prefillFor,
+  refreshCandidateActions,
 } from '@/utils/dealTransitions'
 import { chooseAction } from '@/utils/kanbanTransitions'
 import { getSettings } from '@/stores/settings'
@@ -750,13 +750,16 @@ function statusLabel(status) {
 // The Admin hatch is for moves the state machine does NOT describe: only when no action
 // covers this edge does an Admin write directly. A non-Admin is refused there.
 async function triggerStatusChange(value) {
-  const candidates = candidateActions(
-    transitionMap.data?.transitions,
-    doc.value?.pipeline_type,
-    doc.value?.status,
-    value,
-    availableActions.value,
-  )
+  const candidates = await refreshCandidateActions({
+    transitions: transitionMap.data?.transitions,
+    pipeline: doc.value?.pipeline_type,
+    from: doc.value?.status,
+    to: value,
+    loadAvailable: () =>
+      call('crm.txb.api.actions.get_available_actions', {
+        deal: props.dealId,
+      }),
+  })
 
   if (candidates.length) {
     const action = await chooseAction(candidates, value)
