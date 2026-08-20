@@ -25,7 +25,7 @@
           :theme="status.color"
         />
         <TimelineTimestamp :date="activity.communication_date" />
-        <div class="flex gap-0.5">
+        <div v-if="!readOnly" class="flex gap-0.5">
           <Button
             :tooltip="__('Reply')"
             variant="ghost"
@@ -84,6 +84,8 @@ import { reactive, computed } from 'vue'
 const props = defineProps({
   activity: { type: Object, default: () => ({}) },
   emailBox: { type: Object, default: () => ({}) },
+  // Read-only aggregate log (Contact) suppresses reply composers; Lead/Deal keep them.
+  readOnly: { type: Boolean, default: false },
 })
 
 const emailBox = reactive(props.emailBox)

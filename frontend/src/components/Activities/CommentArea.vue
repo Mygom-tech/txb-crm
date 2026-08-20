@@ -14,7 +14,7 @@
       <div class="ml-auto flex items-center gap-1 whitespace-nowrap">
         <TimelineTimestamp :date="activity.creation" />
         <Dropdown
-          v-if="isOwner && !editing"
+          v-if="isOwner && !editing && !readOnly"
           :options="menuOptions"
           placement="right"
           @click="confirmingDelete = false"
@@ -76,6 +76,9 @@ import { computed, ref } from 'vue'
 
 const props = defineProps({
   activity: { type: Object, default: () => ({}) },
+  // Read-only aggregate log (Contact) hides the owner edit/delete affordance; editable
+  // Lead/Deal timelines leave this false and keep their existing controls.
+  readOnly: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['reload'])
