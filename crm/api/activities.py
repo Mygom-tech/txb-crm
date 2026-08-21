@@ -686,6 +686,13 @@ def get_contact_activities(name: str):
 	(activities, calls, notes, tasks, attachments) shape as the Lead and Deal endpoints, so the
 	same categories -- versions, comments, communications, calls/dials, notes, tasks, and
 	attachments -- are all covered.
+
+	Each linked Opportunity is read once through the same Deal reader that emits the expanded
+	normalized event contract (TXB-133): Opportunity field changes, Task lifecycle, meeting Events,
+	and general/Coaching Call Note metadata all arrive in the `activities` stream already carrying
+	their canonical envelope (actor, timestamp, summary, canonical source, open target). The
+	aggregator adds source/phase attribution and deduplicates by canonical event/source identity
+	(TXB-188); it never copies a source body -- the canonical record stays authoritative.
 	"""
 	_authorize_contact_activities(name)
 
@@ -859,19 +866,29 @@ def _record_identity(record: dict):
 
 
 def _activity_identity(activity: dict):
-	"""Stable identity for a feed activity.
+	"""Stable identity for a feed activity, keyed on its canonical event/source identity.
 
 	Comments, attachment logs and grouped versions carry a docname; creation and version rows do
 	not, so fall back to source plus type plus timestamp. A single save now emits one event per
 	changed field, all sharing the version's timestamp, so the changed field is part of the key to
 	keep co-saved changes (e.g. status and deal_owner) distinct. The source docname is part of
 	every key, so records from different Leads/Opportunities never collide.
+
+	The expanded Opportunity contract (TXB-133/TXB-188) folds in event types that carry no
+	top-level `name` and are identified only by their canonical envelope: a Task's "created" event,
+	a meeting's "scheduled" event, a Note's creation entry. Several of these can share one
+	Opportunity and one timestamp (e.g. two Tasks created in the same save), so the canonical
+	(doctype, docname) the event points at is part of the key. This only makes the identity more
+	specific -- genuinely identical events still collapse, but distinct canonical records that
+	happen to share a timestamp are no longer merged into one row.
 	"""
 	payload = activity.get("data")
 	field = payload.get("field") if isinstance(payload, dict) else None
 	return (
 		activity.get("source_doctype"),
 		activity.get("source_docname"),
+		activity.get("canonical_doctype"),
+		activity.get("canonical_docname"),
 		activity.get("activity_type"),
 		activity.get("name") or str(activity.get("creation")),
 		field,
