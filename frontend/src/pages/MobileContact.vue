@@ -106,7 +106,7 @@
     >
       <template #tab-item="{ tab, selected }">
         <button
-          v-if="tab.name == 'Deals'"
+          v-if="['Deals', 'Notes'].includes(tab.name)"
           class="group flex items-center gap-2 border-b border-transparent py-2.5 text-base text-ink-gray-5 duration-300 ease-in-out hover:text-ink-gray-9 !px-4"
           :class="{ 'text-ink-gray-9': selected }"
         >
@@ -144,6 +144,11 @@
           :docname="contactId"
           :tabs="activityTabs"
         />
+        <ContactNotes
+          v-else-if="tab.name === 'Notes'"
+          doctype="Contact"
+          :docname="contactId"
+        />
         <DealsListView
           v-else-if="tab.label === 'Deals' && rows.length"
           class="mt-4"
@@ -174,8 +179,10 @@ import PhoneIcon from '@/components/Icons/PhoneIcon.vue'
 import CameraIcon from '@/components/Icons/CameraIcon.vue'
 import DealsIcon from '@/components/Icons/DealsIcon.vue'
 import ActivityIcon from '@/components/Icons/ActivityIcon.vue'
+import NoteIcon from '@/components/Icons/NoteIcon.vue'
 import DealsListView from '@/components/ListViews/DealsListView.vue'
 import Activities from '@/components/Activities/Activities.vue'
+import ContactNotes from '@/components/ContactNotes.vue'
 import { validateIsImageFile } from '@/utils'
 import { useContactFields } from '@/composables/useContactFields'
 import { timestampCell } from '@/composables/useTimelinePreferences'
@@ -320,6 +327,12 @@ const tabs = [
     count: computed(() => deals.data?.length),
   },
   {
+    name: 'Notes',
+    label: __('Notes'),
+    icon: h(NoteIcon, { class: 'h-4 w-4' }),
+    count: computed(() => contactActivities.data?.notes?.length),
+  },
+  {
     name: 'Activity',
     label: __('Activity'),
     icon: h(ActivityIcon, { class: 'h-4 w-4' }),
@@ -341,6 +354,18 @@ const deals = createResource({
   cache: ['deals', props.contactId],
   params: { contact: props.contactId },
   auto: true,
+})
+
+// Notes tab badge count. Shares the Contact aggregate activity resource url + cache key with
+// ContactNotes and the Activity timeline, so mobile reflects the same deduplicated notes stream.
+const contactActivities = createResource({
+  url: 'crm.api.activities.get_activities',
+  params: { name: props.contactId },
+  cache: ['activity', props.contactId],
+  auto: true,
+  transform: ([versions, calls, notes, tasks, attachments]) => {
+    return { versions, calls, notes, tasks, attachments }
+  },
 })
 
 const rows = computed(() => {
