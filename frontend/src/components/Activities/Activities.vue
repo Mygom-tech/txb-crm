@@ -381,6 +381,16 @@
                     {{ activity.data.value }}
                   </div>
                 </span>
+                <!-- TXB-133: a Task lifecycle row opens its canonical CRM Task so the full detail
+                     stays in the specialized Tasks module. Suppressed in the read-only aggregate. -->
+                <button
+                  v-if="!readOnly && isTaskActivity(activity)"
+                  type="button"
+                  class="font-medium text-ink-gray-8 hover:underline"
+                  @click="openTaskActivity(activity)"
+                >
+                  {{ __('Open task') }}
+                </button>
               </div>
 
               <div class="ml-auto whitespace-nowrap">
@@ -790,7 +800,11 @@ const activities = computed(() => {
   }
 
   _activities.forEach((activity) => {
-    activity.icon = timelineIcon(activity.activity_type, activity.is_lead)
+    // A normalized Task lifecycle event reuses the generic creation/field-change activity_type, so
+    // key its timeline icon off its canonical CRM Task target rather than the deal/lead default.
+    activity.icon = isTaskActivity(activity)
+      ? markRaw(TaskIcon)
+      : timelineIcon(activity.activity_type, activity.is_lead)
 
     if (
       activity.activity_type == 'incoming_call' ||
@@ -879,6 +893,18 @@ function openNoteActivity(activity) {
   if (props.readOnly) return
   const noteName = activity.target?.name || activity.canonical_docname
   modalRef.value?.showNote({ name: noteName })
+}
+
+// TXB-133: a Task lifecycle event (creation or a tracked field change) is normalized into the
+// Activity stream with its canonical home on the CRM Task. The feed row only labels the moment; it
+// opens the authoritative Task record so its full detail stays in the specialized Tasks module.
+function isTaskActivity(activity) {
+  return activity.target?.doctype === 'CRM Task'
+}
+function openTaskActivity(activity) {
+  if (props.readOnly) return
+  const taskName = activity.target?.name || activity.canonical_docname
+  modalRef.value?.showTask({ name: taskName })
 }
 
 const top = computed(() => {
