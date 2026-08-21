@@ -20,7 +20,7 @@ from crm.txb.constants import FIELD_CONVERTED_AT, FIELD_CONVERTED_CONTACT
 # copied. The canonical bodies stay in the record `canonical_docname` points at.
 #
 #   event_type          normalized kind (creation | field_change | comment | communication |
-#                       attachment | call)
+#                       attachment | call | meeting | note)
 #   occurred_at         canonical timestamp used for deterministic chronology
 #   actor               the user the event is attributed to
 #   summary             a short readable label only (field label, email subject, ...); never the
@@ -42,7 +42,174 @@ EVENT_TYPE_BY_ACTIVITY = {
 	"attachment_log": "attachment",
 	"incoming_call": "call",
 	"outgoing_call": "call",
+	"event": "meeting",
+	"note": "note",
 }
+
+# --- Meeting (Event) lifecycle events (TXB-186) --------------------------------------------
+#
+# A CRM meeting is a Frappe Event linked to the Opportunity/Lead through
+# reference_doctype/reference_docname -- the same records the separate Events tab reads. Event has
+# track_changes enabled, so scheduling, rescheduling, status changes, completion and cancellation
+# are all recoverable from its immutable audit Versions. Each lifecycle moment becomes one
+# normalized "event" activity whose canonical home is the Event; nothing is copied and the
+# `target` opens that canonical Event. `meeting_action` names the lifecycle moment and `summary`
+# always carries the meeting's own subject label, so a consumer renders "<actor> <verb> <subject>"
+# without reading any Event body.
+
+# starts_on / ends_on moving is a reschedule.
+MEETING_RESCHEDULE_FIELDS = {"starts_on", "ends_on"}
+# Terminal Event statuses that read as completion vs. cancellation in the timeline. Frappe ships
+# "Completed"/"Closed" and (via customisation) "Cancelled"; spelling variants are tolerated.
+MEETING_COMPLETED_STATUSES = {"Completed", "Closed"}
+MEETING_CANCELLED_STATUSES = {"Cancelled", "Canceled"}
+
+
+def _meeting_events(container_doctype: str, container_docname: str, *, is_lead: bool):
+	"""Yield the normalized meeting lifecycle events for one Opportunity/Lead.
+
+	Reads every Event linked to (container_doctype, container_docname) and emits a "scheduled"
+	event at Event creation plus one event per relevant audit Version (reschedule, completion,
+	cancellation, other reliable status change). Canonical content stays in the Event; each
+	activity only references it via the envelope and open target.
+	"""
+	events = frappe.get_all(
+		"Event",
+		filters={
+			"reference_doctype": container_doctype,
+			"reference_docname": container_docname,
+		},
+		fields=["name", "subject", "starts_on", "ends_on", "status", "owner", "creation"],
+	)
+
+	activities = []
+	for event in events:
+		subject = event.get("subject") or _("Meeting")
+		target = {"doctype": "Event", "name": event["name"]}
+
+		scheduled = {
+			"name": event["name"],
+			"activity_type": "event",
+			"creation": event["creation"],
+			"owner": event["owner"],
+			"data": {
+				"meeting_action": "scheduled",
+				"subject": subject,
+				"starts_on": event.get("starts_on"),
+				"ends_on": event.get("ends_on"),
+			},
+			"is_lead": is_lead,
+		}
+		_with_event_envelope(
+			scheduled,
+			occurred_at=event["creation"],
+			actor=event["owner"],
+			canonical_doctype="Event",
+			canonical_docname=event["name"],
+			summary=subject,
+			target=target,
+		)
+		activities.append(scheduled)
+		activities.extend(_meeting_version_events(event, subject, target, is_lead=is_lead))
+
+	return activities
+
+
+def _meeting_version_events(event: dict, subject: str, target: dict, *, is_lead: bool):
+	"""Yield one normalized lifecycle event per relevant Event Version.
+
+	One save can touch several fields; a single event is emitted per Version, preferring the more
+	meaningful lifecycle signal -- a status change (completion / cancellation / other) over a bare
+	reschedule. Canonical old/new values stay in the Version; the event only labels the moment.
+	"""
+	versions = frappe.get_all(
+		"Version",
+		filters={"ref_doctype": "Event", "docname": event["name"]},
+		fields=["name", "owner", "creation", "data"],
+		order_by="creation asc",
+	)
+
+	activities = []
+	for version in versions:
+		data = json.loads(version.data or "{}")
+		changed = {change[0]: change for change in (data.get("changed") or []) if change}
+
+		payload = {"subject": subject}
+		if "status" in changed:
+			new_status = changed["status"][2]
+			if new_status in MEETING_CANCELLED_STATUSES:
+				action = "cancelled"
+			elif new_status in MEETING_COMPLETED_STATUSES:
+				action = "completed"
+			else:
+				action = "status_changed"
+			payload["status"] = new_status
+		elif changed.keys() & MEETING_RESCHEDULE_FIELDS:
+			action = "rescheduled"
+			if "starts_on" in changed:
+				payload["starts_on"] = changed["starts_on"][2]
+			if "ends_on" in changed:
+				payload["ends_on"] = changed["ends_on"][2]
+		else:
+			continue
+
+		payload["meeting_action"] = action
+		activity = {
+			"name": version.name,
+			"activity_type": "event",
+			"creation": version.creation,
+			"owner": version.owner,
+			"data": payload,
+			"is_lead": is_lead,
+		}
+		_with_event_envelope(
+			activity,
+			occurred_at=version.creation,
+			actor=version.owner,
+			canonical_doctype="Event",
+			canonical_docname=event["name"],
+			summary=subject,
+			target=target,
+		)
+		activities.append(activity)
+
+	return activities
+
+
+def _note_metadata_events(notes: list, *, is_lead: bool):
+	"""Yield one lightweight metadata event per linked FCRM Note (TXB-186).
+
+	General notes and Coaching Call notes (titled "Coaching Call #N") are both canonical FCRM Note
+	records owned by the specialized Notes module. Here each surfaces as a single creation entry in
+	the main Activity stream -- actor, timestamp, title-only summary and an open target on the
+	canonical Note. No note body is copied: the full content and all editing stay in the Notes
+	module, which remains authoritative.
+	"""
+	activities = []
+	for note in notes or []:
+		if not isinstance(note, dict) or not note.get("name"):
+			continue
+		occurred_at = note.get("creation") or note.get("modified")
+		title = note.get("title") or _("Note")
+		activity = {
+			"name": note["name"],
+			"activity_type": "note",
+			"creation": occurred_at,
+			"owner": note.get("owner"),
+			"data": {"title": title},
+			"is_lead": is_lead,
+		}
+		_with_event_envelope(
+			activity,
+			occurred_at=occurred_at,
+			actor=note.get("owner"),
+			canonical_doctype="FCRM Note",
+			canonical_docname=note["name"],
+			summary=title,
+			target={"doctype": "FCRM Note", "name": note["name"]},
+		)
+		activities.append(activity)
+	return activities
 
 
 def _with_event_envelope(
@@ -313,10 +480,19 @@ def _read_deal_activities(name: str, include_lead: bool = True):
 		)
 		activities.append(activity)
 
-	calls = calls + get_linked_calls(name).get("calls", [])
-	notes = notes + get_linked_notes(name) + get_linked_calls(name).get("notes", [])
-	tasks = tasks + get_linked_tasks(name) + get_linked_calls(name).get("tasks", [])
+	linked = get_linked_calls(name)
+	# This Opportunity's own notes only: any embedded Lead notes are already surfaced (with their
+	# own metadata events) by the get_lead_activities call above, so they are not re-emitted here.
+	deal_notes = get_linked_notes(name) + linked.get("notes", [])
+	calls = calls + linked.get("calls", [])
+	notes = notes + deal_notes
+	tasks = tasks + get_linked_tasks(name) + linked.get("tasks", [])
 	attachments = attachments + get_attachments("CRM Deal", name)
+
+	# TXB-186: meeting lifecycle and Note-creation metadata join the main Activity stream. The full
+	# Note bodies remain in `notes` (the authoritative Notes module); these are reference-only.
+	activities.extend(_meeting_events("CRM Deal", name, is_lead=False))
+	activities.extend(_note_metadata_events(deal_notes, is_lead=False))
 
 	_tag_call_events(calls)
 
@@ -453,10 +629,16 @@ def _read_lead_activities(name: str):
 		)
 		activities.append(activity)
 
-	calls = get_linked_calls(name).get("calls", [])
-	notes = get_linked_notes(name) + get_linked_calls(name).get("notes", [])
-	tasks = get_linked_tasks(name) + get_linked_calls(name).get("tasks", [])
+	linked = get_linked_calls(name)
+	calls = linked.get("calls", [])
+	notes = get_linked_notes(name) + linked.get("notes", [])
+	tasks = get_linked_tasks(name) + linked.get("tasks", [])
 	attachments = get_attachments("CRM Lead", name)
+
+	# TXB-186: meeting lifecycle and Note-creation metadata join the main Activity stream. The full
+	# Note bodies remain in `notes` (the authoritative Notes module); these are reference-only.
+	activities.extend(_meeting_events("CRM Lead", name, is_lead=True))
+	activities.extend(_note_metadata_events(notes, is_lead=True))
 
 	_tag_call_events(calls)
 
@@ -883,7 +1065,7 @@ def get_linked_calls(name: str):
 		notes = frappe.db.get_all(
 			"FCRM Note",
 			filters={"name": ("in", notes)},
-			fields=["name", "title", "content", "owner", "modified"],
+			fields=["name", "title", "content", "owner", "modified", "creation"],
 		)
 
 	if tasks:
