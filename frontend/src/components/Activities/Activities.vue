@@ -262,6 +262,60 @@
               :hideDuration="hideCallDuration(doctype)"
             />
           </div>
+          <div
+            v-else-if="activity.activity_type == 'event'"
+            :id="activity.name"
+            class="mb-4 flex flex-col gap-2 py-1.5"
+          >
+            <div class="flex items-center justify-stretch gap-2 text-base">
+              <div
+                class="inline-flex items-center flex-wrap gap-1 text-ink-gray-5"
+              >
+                <span class="font-medium text-ink-gray-8">
+                  {{ activity.owner_name }}
+                </span>
+                <span>{{ meetingVerb(activity) }}</span>
+                <button
+                  type="button"
+                  class="max-w-xs truncate font-medium text-ink-gray-8 hover:underline"
+                  @click="openEventActivity(activity)"
+                >
+                  {{ activity.summary || activity.data?.subject }}
+                </button>
+              </div>
+              <div class="ml-auto whitespace-nowrap">
+                <TimelineTimestamp :date="activity.creation" />
+              </div>
+            </div>
+          </div>
+          <div
+            v-else-if="activity.activity_type == 'note'"
+            :id="activity.name"
+            class="mb-4 flex flex-col gap-2 py-1.5"
+          >
+            <div class="flex items-center justify-stretch gap-2 text-base">
+              <div
+                class="inline-flex items-center flex-wrap gap-1 text-ink-gray-5"
+              >
+                <span class="font-medium text-ink-gray-8">
+                  {{ activity.owner_name }}
+                </span>
+                <span>{{ __('added a note') }}</span>
+                <button
+                  type="button"
+                  class="max-w-xs truncate font-medium text-ink-gray-8"
+                  :class="readOnly ? '' : 'hover:underline'"
+                  :disabled="readOnly"
+                  @click="openNoteActivity(activity)"
+                >
+                  {{ activity.summary || activity.data?.title }}
+                </button>
+              </div>
+              <div class="ml-auto whitespace-nowrap">
+                <TimelineTimestamp :date="activity.creation" />
+              </div>
+            </div>
+          </div>
           <div v-else class="mb-4 flex flex-col gap-2 py-1.5">
             <div class="flex items-center justify-stretch gap-2 text-base">
               <div
@@ -510,6 +564,7 @@ import { hideCallDuration } from '@/utils/dealPresentation'
 import { globalStore } from '@/stores/global'
 import { usersStore } from '@/stores/users'
 import { useTimelinePreferences } from '@/composables/useTimelinePreferences'
+import { useEvent, showEventModal, activeEvent } from '@/composables/event'
 import { whatsappEnabled } from '@/composables/whatsapp'
 import { useDocument } from '@/data/document'
 import { useTelemetry } from 'frappe-ui/frappe'
@@ -791,6 +846,41 @@ function update_activities_details(activity) {
   }
 }
 
+// TXB-186: the normalized backend labels each meeting event with a lifecycle `meeting_action`;
+// map it to a human verb here so the row reads "<actor> <verb> <meeting subject>".
+const MEETING_VERBS = {
+  scheduled: 'scheduled a meeting',
+  rescheduled: 'rescheduled the meeting',
+  completed: 'completed the meeting',
+  cancelled: 'cancelled the meeting',
+  status_changed: 'updated the meeting',
+}
+function meetingVerb(activity) {
+  return __(MEETING_VERBS[activity.data?.meeting_action] || MEETING_VERBS.status_changed)
+}
+
+// Hydrate the canonical Event so a feed row opens the same modal as the Events tab. The event
+// composable already reads this Lead/Opportunity's linked Events (with participants); the feed row
+// only carries the open target, so resolve the full record by its canonical name.
+const { events: linkedEvents } = useEvent({
+  doctype: props.doctype,
+  docname: props.docname,
+})
+function openEventActivity(activity) {
+  const eventName = activity.target?.name || activity.canonical_docname
+  const full = (linkedEvents.value || []).find((e) => e.name === eventName)
+  if (!full) return
+  activeEvent.value = full
+  showEventModal.value = true
+}
+
+// Open the canonical Note in the authoritative Notes module; the feed entry is metadata only.
+function openNoteActivity(activity) {
+  if (props.readOnly) return
+  const noteName = activity.target?.name || activity.canonical_docname
+  modalRef.value?.showNote({ name: noteName })
+}
+
 const top = computed(() => {
   if (['Activity', 'Emails', 'Comments'].includes(title.value)) {
     return '32.3%'
@@ -882,6 +972,9 @@ function timelineIcon(activity_type, is_lead) {
       break
     case 'event':
       icon = CalendarIcon
+      break
+    case 'note':
+      icon = NoteIcon
       break
     case 'incoming_call':
       icon = InboundCallIcon
