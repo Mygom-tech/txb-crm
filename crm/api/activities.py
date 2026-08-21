@@ -32,6 +32,11 @@ from crm.txb.constants import FIELD_CONVERTED_AT, FIELD_CONVERTED_CONTACT
 # Contact source metadata (is_lead / source_doctype / source_docname / source_route) is layered on
 # top by the Contact aggregator (TXB-178) and is deliberately kept in its own keys so it never
 # collides with the canonical source identity above.
+
+# CRM Task lifecycle fields whose forward-only changes are normalized into an Opportunity's history
+# (TXB-133). Title and description edits are deliberately excluded from auditing in this phase.
+TASK_AUDITED_FIELDS = ("status", "assigned_to", "due_date", "priority")
+
 EVENT_TYPE_BY_ACTIVITY = {
 	"creation": "creation",
 	"changed": "field_change",
@@ -479,6 +484,10 @@ def _read_deal_activities(name: str, include_lead: bool = True):
 			target={"doctype": "Comment", "name": attachment_log.name},
 		)
 		activities.append(activity)
+
+	# Fold the linked Tasks' forward-only lifecycle (creation + tracked changes) into the
+	# chronological activity stream so the Opportunity carries auditable Task history (TXB-133).
+	activities.extend(get_linked_task_activities(name))
 
 	linked = get_linked_calls(name)
 	# This Opportunity's own notes only: any embedded Lead notes are already surfaced (with their
@@ -934,7 +943,12 @@ def handle_multiple_versions(versions: list):
 			if is_version:
 				grouped_versions.append(version)
 			continue
-		if is_version and old_version.get("owner") and version["owner"] == old_version["owner"]:
+		if (
+			is_version
+			and old_version.get("owner")
+			and version["owner"] == old_version["owner"]
+			and version.get("target") == old_version.get("target")
+		):
 			grouped_versions.append(version)
 		else:
 			if grouped_versions:
@@ -1115,6 +1129,72 @@ def get_linked_tasks(name: str):
 		],
 	)
 	return tasks or []
+
+
+def get_linked_task_activities(name: str):
+	"""Yield normalized lifecycle events for the Tasks linked to a CRM Deal (TXB-133).
+
+	Each Task contributes one ``creation`` event plus one ``field_change`` event per tracked change
+	(status, assigned_to, due_date, priority) recorded in its own audit Versions. This is forward
+	only: only changes Frappe captured after track_changes was enabled surface here, and no prior
+	history is inferred or fabricated. Canonical old/new values stay in the CRM Task Version record;
+	each event references it through the envelope and opens the Task itself.
+	"""
+	tasks = frappe.db.get_all(
+		"CRM Task",
+		filters={"reference_doctype": "CRM Deal", "reference_docname": name},
+		fields=["name", "title", "owner", "creation"],
+	)
+	if not tasks:
+		return []
+
+	task_meta = frappe.get_meta("CRM Task")
+	task_fields = {
+		field.fieldname: {"label": field.label, "options": field.options}
+		for field in task_meta.fields
+		if field.fieldname in TASK_AUDITED_FIELDS
+	}
+
+	activities = []
+	for task in tasks:
+		creation_text = _("created a task {0}").format(task.title or task.name)
+		creation_activity = {
+			"activity_type": "creation",
+			"creation": task.creation,
+			"owner": task.owner,
+			"data": creation_text,
+			"is_lead": False,
+		}
+		_with_event_envelope(
+			creation_activity,
+			occurred_at=task.creation,
+			actor=task.owner,
+			canonical_doctype="CRM Task",
+			canonical_docname=task.name,
+			summary=creation_text,
+			target={"doctype": "CRM Task", "name": task.name},
+		)
+		activities.append(creation_activity)
+
+		versions = frappe.get_all(
+			"Version",
+			filters={"ref_doctype": "CRM Task", "docname": task.name},
+			fields=["name", "data", "owner", "creation"],
+			order_by="creation asc",
+		)
+		for version in versions:
+			activities.extend(
+				_version_field_events(
+					version,
+					task_fields,
+					avoid_fields=[],
+					is_lead=False,
+					container_doctype="CRM Task",
+					container_docname=task.name,
+				)
+			)
+
+	return activities
 
 
 def parse_attachment_log(html: str, type: str):
