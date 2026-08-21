@@ -52,19 +52,22 @@
           <Dropdown
             :options="[
               {
-                label: __('Delete'),
-                icon: 'trash-2',
+                label: __('Cancel'),
+                icon: 'x-circle',
+                condition: () => task.status !== 'Canceled',
                 onClick: () => {
                   $dialog({
-                    title: __('Delete Task'),
-                    message: __('Are you sure you want to delete this task?'),
+                    title: __('Cancel Task'),
+                    message: __(
+                      'Opportunity tasks are kept for history and cannot be deleted. Cancel this task instead?',
+                    ),
                     actions: [
                       {
-                        label: __('Delete'),
+                        label: __('Cancel Task'),
                         theme: 'red',
                         variant: 'solid',
                         onClick(close) {
-                          modalRef.deleteTask(task.name)
+                          modalRef.updateTaskStatus('Canceled', task)
                           close()
                         },
                       },
