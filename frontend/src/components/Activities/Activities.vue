@@ -816,7 +816,9 @@ const activities = computed(() => {
     update_activities_details(activity)
 
     if (activity.other_versions) {
-      activity.show_others = false
+      // Default grouped changes to expanded, but only initialize once so a user's
+      // manual collapse survives routine reactive recomputation of this timeline.
+      if (activity.show_others === undefined) activity.show_others = true
       activity.other_versions.forEach((other_version) => {
         update_activities_details(other_version)
       })
