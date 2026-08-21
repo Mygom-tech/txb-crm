@@ -391,6 +391,23 @@
                         />
                       </div>
                       <div class="ml-1">
+                        <Tooltip
+                          v-if="
+                            isDealSourceLeadField(
+                              doctype,
+                              field,
+                              doc[field.fieldname],
+                            )
+                          "
+                          :text="__('Open source Lead')"
+                        >
+                          <ArrowUpRightIcon
+                            class="h-4 w-4 shrink-0 cursor-pointer text-ink-blue-link hover:text-ink-gray-8"
+                            @click.stop="
+                              navigateToLead(router, doc[field.fieldname])
+                            "
+                          />
+                        </Tooltip>
                         <ArrowUpRightIcon
                           v-if="
                             field.fieldtype === 'Link' &&
@@ -454,6 +471,10 @@ import SidePanelModal from '@/components/Modals/SidePanelModal.vue'
 import { getMeta } from '@/stores/meta'
 import { parseLinkFilters } from '@/utils/fieldTransforms'
 import { isDealNavLink, navigateToDeal } from '@/utils/dealHandoverLinks'
+import {
+  isDealSourceLeadField,
+  navigateToLead,
+} from '@/utils/dealSourceLeadLink'
 import { usersStore } from '@/stores/users'
 import { statusesStore } from '@/stores/statuses'
 import { statusLinkFilters } from '@/utils/pipelineStatuses'
