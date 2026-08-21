@@ -35,6 +35,20 @@
       </template>
       <span>{{ __('Schedule an Event') }}</span>
     </Button>
+    <!-- Coaching Call Notes (Delivering Coaching pipeline) keep the Notes module readable but do
+         not yet accept new submissions (TXB-133): the create control is present but disabled and
+         labelled "Soon" so the affordance is discoverable without implementing submission. -->
+    <Tooltip
+      v-else-if="title == 'Notes' && isCoachingNotes"
+      :text="__('Coaching Call Note submission is coming soon')"
+    >
+      <Button
+        variant="solid"
+        :label="__('Soon')"
+        iconLeft="plus"
+        :disabled="true"
+      />
+    </Tooltip>
     <Button
       v-else-if="title == 'Notes'"
       variant="solid"
@@ -94,7 +108,8 @@ import WhatsAppIcon from '@/components/Icons/WhatsAppIcon.vue'
 import { globalStore } from '@/stores/global'
 import { whatsappEnabled } from '@/composables/whatsapp'
 import { callEnabled } from '@/composables/telephony'
-import { Dropdown } from 'frappe-ui'
+import { isCoachingPipeline } from '@/utils/dealPresentation'
+import { Dropdown, Tooltip } from 'frappe-ui'
 import { computed, h } from 'vue'
 
 const props = defineProps({
@@ -106,6 +121,11 @@ const props = defineProps({
 })
 
 const { makeCall } = globalStore()
+
+// Coaching Call Notes live in the Notes module of a Delivering Coaching Opportunity; their
+// submission is intentionally not implemented in this phase (TXB-133), so the create control is
+// disabled and labelled "Soon" rather than removed.
+const isCoachingNotes = computed(() => isCoachingPipeline(props.doc?.pipeline_type))
 
 const tabIndex = defineModel({ type: Number })
 const showWhatsappTemplates = defineModel('showWhatsappTemplates', {

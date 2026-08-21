@@ -310,6 +310,7 @@ import RequestOwnershipModal from '@/components/Modals/RequestOwnershipModal.vue
 import { setupCustomizations, isTranslatable } from '@/utils'
 import { getView } from '@/utils/view'
 import { allowedStatusesFor } from '@/utils/pipelineStatuses'
+import { notesTabLabel } from '@/utils/dealPresentation'
 import { actionOptions, runAction } from '@/utils/takeAction'
 import {
   allowedTargets,
@@ -579,7 +580,7 @@ const tabs = computed(() => {
     },
     {
       name: 'Notes',
-      label: __('Notes'),
+      label: __(notesTabLabel(doc.value?.pipeline_type)),
       icon: NoteIcon,
     },
     {
