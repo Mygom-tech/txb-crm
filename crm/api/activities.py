@@ -11,6 +11,144 @@ from frappe.utils import get_datetime
 from crm.fcrm.doctype.crm_call_log.crm_call_log import parse_call_log
 from crm.txb.constants import FIELD_CONVERTED_AT, FIELD_CONVERTED_CONTACT
 
+# --- Normalized Opportunity activity event contract (TXB-133) ------------------------------
+#
+# One Opportunity's work history is a chronological stream of events drawn from several canonical
+# sources (audit Versions, Communications, Call Logs, Comments and the document's own creation).
+# Every event the readers below emit carries a stable normalized envelope so a consumer can order,
+# label and open it without knowing the source shape -- and without any source content being
+# copied. The canonical bodies stay in the record `canonical_docname` points at.
+#
+#   event_type          normalized kind (creation | field_change | comment | communication |
+#                       attachment | call)
+#   occurred_at         canonical timestamp used for deterministic chronology
+#   actor               the user the event is attributed to
+#   summary             a short readable label only (field label, email subject, ...); never the
+#                       source body
+#   canonical_doctype   the record that holds the canonical content: "Version" for a field change,
+#   canonical_docname   "Communication", "CRM Call Log", "Comment", or the Deal/Lead itself
+#   target              {doctype, name} a consumer can open/expand, or None
+#
+# Contact source metadata (is_lead / source_doctype / source_docname / source_route) is layered on
+# top by the Contact aggregator (TXB-178) and is deliberately kept in its own keys so it never
+# collides with the canonical source identity above.
+EVENT_TYPE_BY_ACTIVITY = {
+	"creation": "creation",
+	"changed": "field_change",
+	"added": "field_change",
+	"removed": "field_change",
+	"comment": "comment",
+	"communication": "communication",
+	"attachment_log": "attachment",
+	"incoming_call": "call",
+	"outgoing_call": "call",
+}
+
+
+def _with_event_envelope(
+	activity: dict,
+	*,
+	occurred_at,
+	actor,
+	canonical_doctype: str,
+	canonical_docname,
+	summary=None,
+	target=None,
+):
+	"""Layer the normalized event envelope onto a source activity, in place.
+
+	Adds the stable cross-source fields without copying any source content: the Version,
+	Communication, Call Log or Comment record referenced by (canonical_doctype, canonical_docname)
+	remains the single home of the canonical body. Returns the same dict for convenient chaining.
+	"""
+	activity["event_type"] = EVENT_TYPE_BY_ACTIVITY.get(
+		activity.get("activity_type"), activity.get("activity_type")
+	)
+	activity["occurred_at"] = occurred_at
+	activity["actor"] = actor
+	activity["summary"] = summary
+	activity["canonical_doctype"] = canonical_doctype
+	activity["canonical_docname"] = canonical_docname
+	activity["target"] = target
+	return activity
+
+
+def _version_field_events(
+	version,
+	doc_fields: dict,
+	avoid_fields: list,
+	*,
+	is_lead: bool,
+	container_doctype: str,
+	container_docname: str,
+):
+	"""Yield one normalized event per relevant field change recorded in a single Version.
+
+	A single save can change several fields at once -- e.g. an Opportunity's status and
+	deal_owner together. The audit Version records every change in ``data['changed']``; this emits
+	each relevant one as its own event. (The reader previously read only ``changed[0]``, so any
+	co-saved field was silently dropped from the timeline.) Canonical old/new values stay in the
+	Version record; each event only references it via the envelope.
+	"""
+	data = json.loads(version.data)
+	for change in data.get("changed") or []:
+		if not change:
+			continue
+
+		field = doc_fields.get(change[0], None)
+		if not field or change[0] in avoid_fields or (not change[1] and not change[2]):
+			continue
+
+		field_label = field.get("label") or change[0]
+		field_option = field.get("options") or None
+
+		activity_type = "changed"
+		payload = {
+			"field": change[0],
+			"field_label": field_label,
+			"old_value": change[1],
+			"value": change[2],
+		}
+
+		if not change[1] and change[2]:
+			activity_type = "added"
+			payload = {
+				"field": change[0],
+				"field_label": field_label,
+				"value": change[2],
+			}
+		elif change[1] and not change[2]:
+			activity_type = "removed"
+			payload = {
+				"field": change[0],
+				"field_label": field_label,
+				"value": change[1],
+			}
+
+		if payload.get("value") and field_option and is_translatable(field_option):
+			payload["value"] = _(payload["value"])
+			if payload.get("old_value"):
+				payload["old_value"] = _(payload["old_value"])
+
+		activity = {
+			"activity_type": activity_type,
+			"creation": version.creation,
+			"owner": version.owner,
+			"data": payload,
+			"is_lead": is_lead,
+			"options": field_option,
+		}
+		_with_event_envelope(
+			activity,
+			occurred_at=version.creation,
+			actor=version.owner,
+			canonical_doctype="Version",
+			canonical_docname=version.name,
+			summary=field_label,
+			target={"doctype": container_doctype, "name": container_docname},
+		)
+		yield activity
+
 
 @frappe.whitelist()
 def get_activities(name: str):
@@ -72,70 +210,37 @@ def _read_deal_activities(name: str, include_lead: bool = True):
 			attribute_to_lead(notes, lead)
 			attribute_to_lead(tasks, lead)
 
-	activities.append(
-		{
-			"activity_type": "creation",
-			"creation": doc[0],
-			"owner": doc[1],
-			"data": creation_text,
-			"is_lead": False,
-		}
+	creation_activity = {
+		"activity_type": "creation",
+		"creation": doc[0],
+		"owner": doc[1],
+		"data": creation_text,
+		"is_lead": False,
+	}
+	_with_event_envelope(
+		creation_activity,
+		occurred_at=doc[0],
+		actor=doc[1],
+		canonical_doctype="CRM Deal",
+		canonical_docname=name,
+		summary=creation_text,
+		target={"doctype": "CRM Deal", "name": name},
 	)
+	activities.append(creation_activity)
 
 	docinfo.versions.reverse()
 
 	for version in docinfo.versions:
-		data = json.loads(version.data)
-		if not data.get("changed"):
-			continue
-
-		if change := data.get("changed")[0]:
-			field = deal_fields.get(change[0], None)
-
-			if not field or change[0] in avoid_fields or (not change[1] and not change[2]):
-				continue
-
-			field_label = field.get("label") or change[0]
-			field_option = field.get("options") or None
-
-			activity_type = "changed"
-			data = {
-				"field": change[0],
-				"field_label": field_label,
-				"old_value": change[1],
-				"value": change[2],
-			}
-
-			if not change[1] and change[2]:
-				activity_type = "added"
-				data = {
-					"field": change[0],
-					"field_label": field_label,
-					"value": change[2],
-				}
-			elif change[1] and not change[2]:
-				activity_type = "removed"
-				data = {
-					"field": change[0],
-					"field_label": field_label,
-					"value": change[1],
-				}
-
-			if data.get("value") and field_option and is_translatable(field_option):
-				data["value"] = _(data["value"])
-
-				if data.get("old_value"):
-					data["old_value"] = _(data["old_value"])
-
-		activity = {
-			"activity_type": activity_type,
-			"creation": version.creation,
-			"owner": version.owner,
-			"data": data,
-			"is_lead": False,
-			"options": field_option,
-		}
-		activities.append(activity)
+		activities.extend(
+			_version_field_events(
+				version,
+				deal_fields,
+				avoid_fields,
+				is_lead=False,
+				container_doctype="CRM Deal",
+				container_docname=name,
+			)
+		)
 
 	for comment in docinfo.comments:
 		activity = {
@@ -147,10 +252,19 @@ def _read_deal_activities(name: str, include_lead: bool = True):
 			"attachments": get_attachments("Comment", comment.name),
 			"is_lead": False,
 		}
+		_with_event_envelope(
+			activity,
+			occurred_at=comment.creation,
+			actor=comment.owner,
+			canonical_doctype="Comment",
+			canonical_docname=comment.name,
+			target={"doctype": "Comment", "name": comment.name},
+		)
 		activities.append(activity)
 
 	for communication in docinfo.communications + docinfo.automated_messages:
 		activity = {
+			"name": communication.name,
 			"activity_type": "communication",
 			"communication_type": communication.communication_type,
 			"communication_date": communication.communication_date or communication.creation,
@@ -169,6 +283,15 @@ def _read_deal_activities(name: str, include_lead: bool = True):
 			},
 			"is_lead": False,
 		}
+		_with_event_envelope(
+			activity,
+			occurred_at=communication.communication_date or communication.creation,
+			actor=communication.sender,
+			canonical_doctype="Communication",
+			canonical_docname=communication.name,
+			summary=communication.subject,
+			target={"doctype": "Communication", "name": communication.name},
+		)
 		activities.append(activity)
 
 	for attachment_log in docinfo.attachment_logs:
@@ -180,12 +303,22 @@ def _read_deal_activities(name: str, include_lead: bool = True):
 			"data": parse_attachment_log(attachment_log.content, attachment_log.comment_type),
 			"is_lead": False,
 		}
+		_with_event_envelope(
+			activity,
+			occurred_at=attachment_log.creation,
+			actor=attachment_log.owner,
+			canonical_doctype="Comment",
+			canonical_docname=attachment_log.name,
+			target={"doctype": "Comment", "name": attachment_log.name},
+		)
 		activities.append(activity)
 
 	calls = calls + get_linked_calls(name).get("calls", [])
 	notes = notes + get_linked_notes(name) + get_linked_calls(name).get("notes", [])
 	tasks = tasks + get_linked_tasks(name) + get_linked_calls(name).get("tasks", [])
 	attachments = attachments + get_attachments("CRM Deal", name)
+
+	_tag_call_events(calls)
 
 	activities.sort(key=lambda x: x["creation"], reverse=True)
 	activities = handle_multiple_versions(activities)
@@ -216,70 +349,38 @@ def _read_lead_activities(name: str):
 	]
 
 	doc = frappe.db.get_values("CRM Lead", name, ["creation", "owner"])[0]
-	activities = [
-		{
-			"activity_type": "creation",
-			"creation": doc[0],
-			"owner": doc[1],
-			"data": _("created this lead"),
-			"is_lead": True,
-		}
-	]
+	creation_text = _("created this lead")
+	creation_activity = {
+		"activity_type": "creation",
+		"creation": doc[0],
+		"owner": doc[1],
+		"data": creation_text,
+		"is_lead": True,
+	}
+	_with_event_envelope(
+		creation_activity,
+		occurred_at=doc[0],
+		actor=doc[1],
+		canonical_doctype="CRM Lead",
+		canonical_docname=name,
+		summary=creation_text,
+		target={"doctype": "CRM Lead", "name": name},
+	)
+	activities = [creation_activity]
 
 	docinfo.versions.reverse()
 
 	for version in docinfo.versions:
-		data = json.loads(version.data)
-		if not data.get("changed"):
-			continue
-
-		if change := data.get("changed")[0]:
-			field = lead_fields.get(change[0], None)
-
-			if not field or change[0] in avoid_fields or (not change[1] and not change[2]):
-				continue
-
-			field_label = field.get("label") or change[0]
-			field_option = field.get("options") or None
-
-			activity_type = "changed"
-			data = {
-				"field": change[0],
-				"field_label": field_label,
-				"old_value": change[1],
-				"value": change[2],
-			}
-
-			if not change[1] and change[2]:
-				activity_type = "added"
-				data = {
-					"field": change[0],
-					"field_label": field_label,
-					"value": change[2],
-				}
-			elif change[1] and not change[2]:
-				activity_type = "removed"
-				data = {
-					"field": change[0],
-					"field_label": field_label,
-					"value": change[1],
-				}
-
-			if data.get("value") and field_option and is_translatable(field_option):
-				data["value"] = _(data["value"])
-
-				if data.get("old_value"):
-					data["old_value"] = _(data["old_value"])
-
-		activity = {
-			"activity_type": activity_type,
-			"creation": version.creation,
-			"owner": version.owner,
-			"data": data,
-			"is_lead": True,
-			"options": field_option,
-		}
-		activities.append(activity)
+		activities.extend(
+			_version_field_events(
+				version,
+				lead_fields,
+				avoid_fields,
+				is_lead=True,
+				container_doctype="CRM Lead",
+				container_docname=name,
+			)
+		)
 
 	for comment in docinfo.comments:
 		activity = {
@@ -291,10 +392,19 @@ def _read_lead_activities(name: str):
 			"attachments": get_attachments("Comment", comment.name),
 			"is_lead": True,
 		}
+		_with_event_envelope(
+			activity,
+			occurred_at=comment.creation,
+			actor=comment.owner,
+			canonical_doctype="Comment",
+			canonical_docname=comment.name,
+			target={"doctype": "Comment", "name": comment.name},
+		)
 		activities.append(activity)
 
 	for communication in docinfo.communications + docinfo.automated_messages:
 		activity = {
+			"name": communication.name,
 			"activity_type": "communication",
 			"communication_type": communication.communication_type,
 			"communication_date": communication.communication_date or communication.creation,
@@ -313,6 +423,15 @@ def _read_lead_activities(name: str):
 			},
 			"is_lead": True,
 		}
+		_with_event_envelope(
+			activity,
+			occurred_at=communication.communication_date or communication.creation,
+			actor=communication.sender,
+			canonical_doctype="Communication",
+			canonical_docname=communication.name,
+			summary=communication.subject,
+			target={"doctype": "Communication", "name": communication.name},
+		)
 		activities.append(activity)
 
 	for attachment_log in docinfo.attachment_logs:
@@ -324,12 +443,22 @@ def _read_lead_activities(name: str):
 			"data": parse_attachment_log(attachment_log.content, attachment_log.comment_type),
 			"is_lead": True,
 		}
+		_with_event_envelope(
+			activity,
+			occurred_at=attachment_log.creation,
+			actor=attachment_log.owner,
+			canonical_doctype="Comment",
+			canonical_docname=attachment_log.name,
+			target={"doctype": "Comment", "name": attachment_log.name},
+		)
 		activities.append(activity)
 
 	calls = get_linked_calls(name).get("calls", [])
 	notes = get_linked_notes(name) + get_linked_calls(name).get("notes", [])
 	tasks = get_linked_tasks(name) + get_linked_calls(name).get("tasks", [])
 	attachments = get_attachments("CRM Lead", name)
+
+	_tag_call_events(calls)
 
 	activities.sort(key=lambda x: x["creation"], reverse=True)
 	activities = handle_multiple_versions(activities)
@@ -541,15 +670,20 @@ def _record_identity(record: dict):
 def _activity_identity(activity: dict):
 	"""Stable identity for a feed activity.
 
-	Comments, attachment logs and grouped versions carry a docname; creation, version and
-	communication rows do not, so fall back to source plus type plus timestamp. The source
-	docname is part of every key, so records from different Leads/Opportunities never collide.
+	Comments, attachment logs and grouped versions carry a docname; creation and version rows do
+	not, so fall back to source plus type plus timestamp. A single save now emits one event per
+	changed field, all sharing the version's timestamp, so the changed field is part of the key to
+	keep co-saved changes (e.g. status and deal_owner) distinct. The source docname is part of
+	every key, so records from different Leads/Opportunities never collide.
 	"""
+	payload = activity.get("data")
+	field = payload.get("field") if isinstance(payload, dict) else None
 	return (
 		activity.get("source_doctype"),
 		activity.get("source_docname"),
 		activity.get("activity_type"),
 		activity.get("name") or str(activity.get("creation")),
+		field,
 	)
 
 
@@ -656,6 +790,27 @@ def attribute_to_lead(records: list, lead: str) -> list:
 			record["source_doctype"] = "CRM Lead"
 			record["source_docname"] = lead
 	return records
+
+
+def _tag_call_events(calls: list) -> list:
+	"""Layer the normalized event envelope onto parsed call records, in place.
+
+	Calls surface in the main Activity feed alongside versions, so they carry the same canonical
+	envelope. The CRM Call Log record referenced by (canonical_doctype, canonical_docname) stays
+	the single home of the recording, transcript and note -- nothing is copied here.
+	"""
+	for call in calls or []:
+		if not isinstance(call, dict):
+			continue
+		_with_event_envelope(
+			call,
+			occurred_at=call.get("start_time") or call.get("creation"),
+			actor=call.get("caller") or call.get("receiver"),
+			canonical_doctype="CRM Call Log",
+			canonical_docname=call.get("name"),
+			target={"doctype": "CRM Call Log", "name": call.get("name")},
+		)
+	return calls
 
 
 def get_linked_calls(name: str):
