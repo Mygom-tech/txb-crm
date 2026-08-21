@@ -1,6 +1,8 @@
 # Copyright (c) 2023, Frappe Technologies Pvt. Ltd. and contributors
 # For license information, please see license.txt
 
+import frappe
+from frappe import _
 from frappe.desk.form.assign_to import add as assign
 from frappe.desk.form.assign_to import remove as unassign
 from frappe.model.document import Document
@@ -29,6 +31,18 @@ class CRMTask(Document):
 
 	def after_insert(self):
 		self.assign_to()
+
+	def on_trash(self):
+		# An Opportunity Task's lifecycle is durable, forward-only history (TXB-133): it must not
+		# disappear through hard deletion, whether from the UI or a direct server/API call. Tasks
+		# linked to a CRM Deal are cancelled (status=Canceled) instead of deleted; deletion stays
+		# available for unrelated Task contexts. Enforced here so the rule cannot be bypassed by
+		# calling frappe.client.delete directly against the record.
+		if self.reference_doctype == "CRM Deal" and self.reference_docname:
+			frappe.throw(
+				_("An Opportunity Task cannot be deleted. Cancel it instead to preserve its history."),
+				frappe.PermissionError,
+			)
 
 	def validate(self):
 		if self.is_new() or not self.assigned_to:
