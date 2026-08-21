@@ -1,18 +1,8 @@
 <template>
   <div v-if="source" class="flex flex-wrap items-center gap-1.5 text-sm">
-    <component
-      :is="LeadsIcon"
-      v-if="source.kind === 'lead'"
-      class="h-3.5 w-3.5 text-ink-gray-5"
-    />
-    <component :is="DealsIcon" v-else class="h-3.5 w-3.5 text-ink-gray-5" />
-    <router-link
-      :to="source.route"
-      class="max-w-[16rem] truncate font-medium text-ink-gray-8 hover:text-ink-gray-9 hover:underline"
-      :title="source.label"
-    >
-      {{ source.label }}
-    </router-link>
+    <!-- Reuse the shared source-link contract so the activity log and the forthcoming Contact
+         Notes table link to the archived Lead / linked Opportunity identically. -->
+    <ContactSourceLink :activity="activity" :leadEmails="leadEmails" />
     <Badge
       v-if="source.phaseLabel"
       :label="__(source.phaseLabel)"
@@ -24,8 +14,7 @@
 </template>
 
 <script setup>
-import LeadsIcon from '@/components/Icons/LeadsIcon.vue'
-import DealsIcon from '@/components/Icons/DealsIcon.vue'
+import ContactSourceLink from '@/components/Activities/ContactSourceLink.vue'
 import {
   activitySource,
   PHASE_PRE_CONVERSION,
@@ -38,6 +27,7 @@ const props = defineProps({
   leadEmails: { type: Object, default: () => ({}) },
 })
 
-// Presentation contract lives in the pure helper; this component only renders it.
+// Presentation contract lives in the pure helper; this component only renders it. The clickable
+// source is delegated to ContactSourceLink; the badge adds the pre/post-conversion phase.
 const source = computed(() => activitySource(props.activity, props.leadEmails))
 </script>
