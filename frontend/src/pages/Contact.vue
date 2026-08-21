@@ -165,6 +165,11 @@
           :docname="contactId"
           :tabs="activityTabs"
         />
+        <ContactNotes
+          v-else-if="tab.name === 'Notes'"
+          doctype="Contact"
+          :docname="contactId"
+        />
         <template v-else>
           <DealsListView
             v-if="rows.length"
@@ -220,8 +225,10 @@ import PhoneIcon from '@/components/Icons/PhoneIcon.vue'
 import CameraIcon from '@/components/Icons/CameraIcon.vue'
 import DealsIcon from '@/components/Icons/DealsIcon.vue'
 import ActivityIcon from '@/components/Icons/ActivityIcon.vue'
+import NoteIcon from '@/components/Icons/NoteIcon.vue'
 import DealsListView from '@/components/ListViews/DealsListView.vue'
 import Activities from '@/components/Activities/Activities.vue'
+import ContactNotes from '@/components/ContactNotes.vue'
 import CustomActions from '@/components/CustomActions.vue'
 import RequestOwnershipModal from '@/components/Modals/RequestOwnershipModal.vue'
 import CreateDealFromContactModal from '@/components/Modals/CreateDealFromContactModal.vue'
@@ -368,6 +375,12 @@ const tabs = [
     count: computed(() => deals.data?.length),
   },
   {
+    name: 'Notes',
+    label: 'Notes',
+    icon: NoteIcon,
+    count: computed(() => contactNotesCount.value),
+  },
+  {
     name: 'Activity',
     label: 'Activity',
     icon: ActivityIcon,
@@ -392,6 +405,22 @@ const deals = createResource({
   params: { contact: props.contactId },
   auto: true,
 })
+
+// Notes tab badge count. Shares the Contact aggregate activity resource url + cache key with
+// ContactNotes and the Activity timeline, so the count reflects the same deduplicated notes
+// stream without an extra fetch.
+const contactActivities = createResource({
+  url: 'crm.api.activities.get_activities',
+  params: { name: props.contactId },
+  cache: ['activity', props.contactId],
+  auto: true,
+  transform: ([versions, calls, notes, tasks, attachments]) => {
+    return { versions, calls, notes, tasks, attachments }
+  },
+})
+const contactNotesCount = computed(
+  () => contactActivities.data?.notes?.length,
+)
 
 const rows = computed(() => {
   if (!deals.data || deals.data == []) return []
