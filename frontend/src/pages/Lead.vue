@@ -270,6 +270,7 @@
     v-model="showLostReasonModal"
     doctype="CRM Lead"
     :document="document"
+    :fresh="lostReasonFresh"
     skippable
     :skip-reason="PENDING_REVIEW"
   />
@@ -665,6 +666,10 @@ function statusLabel(status) {
 }
 
 const showLostReasonModal = ref(false)
+// Whether the modal should open with blank drafts. An explicit transition into Disqualified
+// sets this so a fresh reason is always required; the auto-prompt for an already-unresolved
+// lead leaves it false and keeps its existing pre-fill behavior.
+const lostReasonFresh = ref(false)
 
 // Native replacement for the `Disqualified Reason Prompt` script: opening a Disqualified
 // lead whose reason is still unresolved (blank or Pending Review) re-opens the reason
@@ -674,6 +679,7 @@ watch(
   () => doc.value?.name,
   (name) => {
     if (name && isDisqualifiedReasonUnresolved(doc.value, getLeadStatus)) {
+      lostReasonFresh.value = false
       showLostReasonModal.value = true
     }
   },
@@ -681,17 +687,19 @@ watch(
 )
 
 function setLostReason() {
-  if (
-    getLeadStatus(document.doc.status).type !== 'Lost' ||
-    (document.doc.lost_reason && document.doc.lost_reason !== 'Other') ||
-    (document.doc.lost_reason === 'Other' && document.doc.lost_notes)
-  ) {
+  if (getLeadStatus(document.doc.status).type !== 'Lost') {
     document.save.submit(null, {
       onSuccess: () => sections.reload(),
     })
     return
   }
 
+  // Every explicit transition into Disqualified requires a freshly confirmed reason, even when
+  // the lead already carries a real reason/notes from an earlier disqualification. Open the
+  // modal with blank drafts without clearing the persisted values first: Save commits the newly
+  // selected reason/notes with the Disqualified status, Cancel restores the prior status and
+  // keeps the stored reason/notes untouched.
+  lostReasonFresh.value = true
   showLostReasonModal.value = true
 }
 
