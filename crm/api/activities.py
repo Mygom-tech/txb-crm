@@ -505,8 +505,16 @@ def _read_deal_activities(name: str, include_lead: bool = True):
 
 	_tag_call_events(calls)
 
-	activities.sort(key=lambda x: x["creation"], reverse=True)
+	# Newest-first is a fixed CRM-wide invariant, applied identically to the feed and to every
+	# returned entity stream (as the Contact aggregator already does), so the frontend inherits a
+	# canonical chronology it never has to reverse. Grouping runs on the already newest-first feed,
+	# so each grouped Version's children stay newest-first too.
+	_sort_by_recency(activities)
 	activities = handle_multiple_versions(activities)
+	_sort_by_recency(calls)
+	_sort_by_recency(notes)
+	_sort_by_recency(tasks)
+	_sort_by_recency(attachments)
 
 	return activities, calls, notes, tasks, attachments
 
@@ -651,8 +659,16 @@ def _read_lead_activities(name: str):
 
 	_tag_call_events(calls)
 
-	activities.sort(key=lambda x: x["creation"], reverse=True)
+	# Newest-first is a fixed CRM-wide invariant, applied identically to the feed and to every
+	# returned entity stream (as the Contact aggregator already does), so the frontend inherits a
+	# canonical chronology it never has to reverse. Grouping runs on the already newest-first feed,
+	# so each grouped Version's children stay newest-first too.
+	_sort_by_recency(activities)
 	activities = handle_multiple_versions(activities)
+	_sort_by_recency(calls)
+	_sort_by_recency(notes)
+	_sort_by_recency(tasks)
+	_sort_by_recency(attachments)
 
 	return activities, calls, notes, tasks, attachments
 
