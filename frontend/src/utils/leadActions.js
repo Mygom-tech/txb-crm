@@ -344,6 +344,94 @@ export async function logADial(lead, { now, defaults } = {}) {
   })
 }
 
+// -----------------------------------------------------------------------------------------
+// Disqualify a Lead (TXB-196): entering "Disqualified" from the Kanban board
+// -----------------------------------------------------------------------------------------
+
+/** The terminal status a Lead may only enter with a freshly confirmed disqualification reason. */
+export const DISQUALIFIED_STATUS = 'Disqualified'
+
+/**
+ * Whether a move into `toStatus` must capture a fresh disqualification reason. Mirrors the
+ * TXB-193 Lead-page rule (Lead.vue / MobileLead.vue open LostReasonModal with blank drafts on
+ * every explicit transition into Disqualified) so the Kanban board collects the same reason
+ * instead of letting the backend fall back to the "Pending Review" placeholder.
+ */
+export function requiresDisqualification(toStatus) {
+  return normalizeStatus(toStatus) === DISQUALIFIED_STATUS
+}
+
+/**
+ * The Disqualification Reason fields the Kanban prompt renders, matching the TXB-193
+ * LostReasonModal contract: a required Lost Reason link and free-text notes. Rendered with no
+ * defaults so the prompt always opens blank -- an explicit disqualification must not carry over
+ * a reason from an earlier one.
+ */
+export function disqualifyFields() {
+  return [
+    {
+      fieldname: 'lost_reason',
+      label: __('Lost Reason'),
+      fieldtype: 'Link',
+      options: 'CRM Lost Reason',
+      reqd: 1,
+    },
+    {
+      fieldname: 'lost_notes',
+      label: __('Lost Notes'),
+      fieldtype: 'Small Text',
+      reqd: 0,
+    },
+  ]
+}
+
+/**
+ * Prompt for a disqualification reason, then atomically commit the Disqualified status together
+ * with the freshly selected lost_reason/lost_notes in a single authoritative write.
+ *
+ * Resolves with the server's response, or null when the user cancels or dismisses the modal --
+ * a cancel posts nothing, so the Lead's status and prior reason/notes stand untouched and the
+ * caller reverts the moved card. A save failure throws, so the caller's catch reverts the card
+ * the same way. On success nothing more must be written: the one set_value already committed the
+ * status and the reason, so the caller must report the transition as already saved.
+ *
+ * @param {string} lead - Lead docname
+ * @param {Object} [opts]
+ * @param {string} [opts.status] - the Disqualified status the card was dropped on
+ */
+export async function logDisqualify(lead, { status } = {}) {
+  const data = await renderFieldLayoutDialog({
+    title: __('Disqualification Reason'),
+    fields: disqualifyFields(),
+    required: ['lost_reason'],
+    submitLabel: __('Save'),
+    cancelLabel: __('Cancel'),
+  })
+
+  // Cancel / dismiss: nothing is posted, so the status and prior reason stay exactly as they were.
+  if (!data) return null
+
+  const targetStatus = status || DISQUALIFIED_STATUS
+
+  // Imported lazily so the pure helpers above stay unit-testable without dragging frappe-ui's
+  // resource plugin into the test environment.
+  const { call } = await import('frappe-ui')
+
+  // One authoritative write commits the status and the reason/notes together; the caller must
+  // not issue a second bare status set_value afterwards.
+  await call('frappe.client.set_value', {
+    doctype: 'CRM Lead',
+    name: lead,
+    fieldname: {
+      status: targetStatus,
+      lost_reason: data.lost_reason,
+      lost_notes: data.lost_notes || '',
+    },
+  })
+
+  return { status: targetStatus }
+}
+
 /**
  * The Run Discovery Meeting contract, kept in step with the server's copy in
  * crm/txb/lead_actions.py. A guarded action from Discovery meeting set that requires notes and

@@ -10,6 +10,8 @@ import {
   logReach,
   logADial,
   logDiscovery,
+  logDisqualify,
+  requiresDisqualification,
   resolveLeadStatusTransition,
   LEAD_TRANSITION_SAVED,
   LEAD_TRANSITION_FAILED,
@@ -31,6 +33,9 @@ const LEAD_DOCTYPE = 'CRM Lead'
  *   - "Contacted" opens Log a reach (crm.txb.api.actions.log_reach),
  *   - "Contact attempted" opens Log a dial (crm.txb.lead_actions.log_a_dial),
  *   - "Discovery meeting set" opens Schedule Discovery meeting (schedule_discovery).
+ * A Lead dropped into "Disqualified" is intercepted the same way (TXB-196): it opens the fresh
+ * Disqualification Reason prompt and commits status plus the reason/notes in one atomic write,
+ * never a bare status flip that would let the backend record a "Pending Review" placeholder.
  * Every other board keeps the plain confirm it has today.
  *
  * @param {Object} ctx - { doctype, itemName, fieldname, fieldLabel, from, to,
@@ -46,6 +51,12 @@ export async function requestKanbanTransition(ctx) {
   }
 
   if (ctx.doctype === LEAD_DOCTYPE && ctx.fieldname === 'status') {
+    // A drop into Disqualified must freshly confirm the reason before anything is persisted
+    // (TXB-196), extending the TXB-193 Lead-page contract to the board. This branch owns the
+    // atomic status+reason write, so it stays out of the shared Lead transition authority that
+    // the Lead detail surfaces also delegate to.
+    if (requiresDisqualification(ctx.to)) return leadDisqualifyTransition(ctx)
+
     const routed = await resolveLeadStatusTransition(ctx.from, ctx.to, ctx.itemName, {
       actions: { logReach, logADial, logDiscovery },
     })
@@ -74,6 +85,22 @@ function applyGuardedTransition(ctx, routed) {
     return { proceed: true, alreadySaved: true, finalStatus: ctx.to }
   }
   return { proceed: false, alreadySaved: false, finalStatus: ctx.from }
+}
+
+/**
+ * Route a CRM Lead drop into Disqualified through the fresh Disqualification Reason prompt.
+ *
+ * {@link logDisqualify} opens the blank reason/notes modal and, on confirm, commits status plus
+ * lost_reason/lost_notes in one authoritative write -- so a confirmed drop reports `alreadySaved`
+ * and the caller must not issue a second bare status set_value. A cancel or dismiss posts nothing
+ * (null result), so we refuse and the caller reverts the card to its source column. A save or
+ * validation failure throws out of logDisqualify and propagates here, letting the caller's catch
+ * revert the card the same way, exactly like the other guarded Lead transitions.
+ */
+async function leadDisqualifyTransition(ctx) {
+  const result = await logDisqualify(ctx.itemName, { status: ctx.to })
+  if (!result) return { proceed: false, alreadySaved: false, finalStatus: ctx.from }
+  return { proceed: true, alreadySaved: true, finalStatus: ctx.to }
 }
 
 async function dealStatusTransition(ctx) {
