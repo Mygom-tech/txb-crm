@@ -17,15 +17,21 @@ import { renderFieldLayoutDialog } from '@/utils/renderFieldLayoutDialog'
  * Pure so it can be tested without a browser: given what the server returned, decide
  * what the menu shows.
  *
+ * TXB-192: actions flagged `hidden_from_menu` (Cancel a BAP, Cancel Workshop) stay in the
+ * available-actions collection so status-change and Kanban routing can still resolve them,
+ * but they are not offered as direct entries in the Take Action dropdown.
+ *
  * @param {Array} actions - from get_available_actions
  * @param {Function} onSelect - called with the action when its entry is clicked
  * @returns {Array} dropdown options
  */
 export function actionOptions(actions, onSelect) {
-  return (actions || []).map((action) => ({
-    label: action.label,
-    onClick: () => onSelect(action),
-  }))
+  return (actions || [])
+    .filter((action) => !action.hidden_from_menu)
+    .map((action) => ({
+      label: action.label,
+      onClick: () => onSelect(action),
+    }))
 }
 
 /**

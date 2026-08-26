@@ -66,6 +66,10 @@ def get_available_actions(deal: str) -> dict:
 				# The board pre-selects a branch value from the column the card was
 				# dropped on, which it can only do if it can see the mapping.
 				"to_state_map": action.get("to_state_map") or {},
+				# TXB-192: kept in the collection so status-change and Kanban routing can
+				# still resolve and execute the action; the direct Take Action dropdown
+				# filters these out client-side.
+				"hidden_from_menu": action.get("hidden_from_menu", False),
 				"fields": fields_with_defaults(action, doc),
 			}
 		)

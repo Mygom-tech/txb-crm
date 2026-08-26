@@ -257,6 +257,9 @@ CANCEL_BAP = {
 	"to_state": "Lost",
 	"changes_status": True,
 	"admin_only": False,
+	# TXB-192: still reachable via explicit Lost status and Kanban transition routing, but
+	# not offered as a direct entry in the Take Action dropdown.
+	"hidden_from_menu": True,
 	"handler": cancel_bap,
 	"fields": [
 		{"fieldname": "cancel_reason", "label": "Cancellation Reason", "fieldtype": "Select", "options": "\n".join(CANCEL_REASONS), "reqd": 1},
