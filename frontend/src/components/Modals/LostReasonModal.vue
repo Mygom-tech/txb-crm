@@ -64,6 +64,12 @@ const props = defineProps({
   // unresolved and the prompt re-opens on the next visit.
   skippable: { type: Boolean, default: false },
   skipReason: { type: String, default: '' },
+  // When set, the modal opens with blank reason/notes drafts instead of pre-filling them
+  // from the document. An explicit transition into Disqualified must always capture a freshly
+  // confirmed reason, so it must not preselect values carried over from an earlier
+  // disqualification. The persisted `document.doc` values are left untouched either way, so
+  // Cancel still restores the prior reason/notes.
+  fresh: { type: Boolean, default: false },
 })
 
 const show = defineModel({ type: Boolean })
@@ -78,8 +84,8 @@ const title = computed(() =>
 
 const linkRef = ref(null)
 const doc = props.document.doc
-const lostReason = ref(doc.lost_reason || '')
-const lostNotes = ref(doc.lost_notes || '')
+const lostReason = ref(props.fresh ? '' : doc.lost_reason || '')
+const lostNotes = ref(props.fresh ? '' : doc.lost_notes || '')
 const error = ref('')
 
 function cancel() {

@@ -128,6 +128,7 @@
     v-model="showLostReasonModal"
     doctype="CRM Lead"
     :document="document"
+    fresh
   />
 </template>
 <script setup>
@@ -430,15 +431,15 @@ function applyGuardedTransition(routed) {
 const showLostReasonModal = ref(false)
 
 function setLostReason() {
-  if (
-    getLeadStatus(doc.value.status).type !== 'Lost' ||
-    (doc.value.lost_reason && doc.value.lost_reason !== 'Other') ||
-    (doc.value.lost_reason === 'Other' && doc.value.lost_notes)
-  ) {
+  if (getLeadStatus(doc.value.status).type !== 'Lost') {
     document.save.submit()
     return
   }
 
+  // Every explicit transition into Disqualified requires a freshly confirmed reason, even when
+  // the lead already carries a real reason/notes from an earlier disqualification. The modal
+  // opens with blank drafts (`fresh`) without clearing the persisted values first: Save commits
+  // the newly selected reason/notes, Cancel restores the prior status and keeps them untouched.
   showLostReasonModal.value = true
 }
 
