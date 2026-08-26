@@ -571,9 +571,9 @@ import ActivitySourceBadge from '@/components/Activities/ActivitySourceBadge.vue
 import { leadSourceNames } from '@/utils/contactActivity'
 import { startCase } from '@/utils'
 import { hideCallDuration } from '@/utils/dealPresentation'
+import { sortByCreation } from '@/utils/activityOrdering'
 import { globalStore } from '@/stores/global'
 import { usersStore } from '@/stores/users'
-import { useTimelinePreferences } from '@/composables/useTimelinePreferences'
 import { useEvent, showEventModal, activeEvent } from '@/composables/event'
 import { whatsappEnabled } from '@/composables/whatsapp'
 import { useDocument } from '@/data/document'
@@ -595,7 +595,6 @@ import { useRoute } from 'vue-router'
 const { $socket } = globalStore()
 const { getUser } = usersStore()
 const { capture } = useTelemetry()
-const { isNewestFirst } = useTimelinePreferences()
 
 const props = defineProps({
   doctype: { type: String, default: 'CRM Lead' },
@@ -606,16 +605,7 @@ const props = defineProps({
   // Contact-side mutation control (composers, uploads, edits, deletes). Lead/Deal callers
   // leave this false and keep their existing editable behavior unchanged.
   readOnly: { type: Boolean, default: false },
-  // Explicit caller-controlled timeline direction. When left null the shared editable
-  // timeline preference (isNewestFirst) applies, preserving Lead/Deal behavior. When set
-  // (e.g. Contact Activity passing true) it takes precedence and renders newest-first
-  // regardless of the global preference.
-  newestFirst: { type: Boolean, default: null },
 })
-
-// Caller override wins over the global editable-timeline preference. Contact Activity
-// enables newest-first explicitly; Lead/Deal callers leave it unset and follow isNewestFirst.
-const effectiveNewestFirst = computed(() => props.newestFirst ?? isNewestFirst.value)
 
 const emit = defineEmits(['beforeSave', 'afterSave'])
 
@@ -796,7 +786,7 @@ const activities = computed(() => {
     )
   } else if (title.value == 'Calls') {
     if (!all_activities.data?.calls) return []
-    return sortByCreation(all_activities.data.calls, effectiveNewestFirst.value)
+    return sortByCreation(all_activities.data.calls)
   } else if (title.value == 'Tasks') {
     if (!all_activities.data?.tasks) return []
     return sortByModified(all_activities.data.tasks)
@@ -833,19 +823,9 @@ const activities = computed(() => {
       })
     }
   })
-  return sortByCreation(_activities, effectiveNewestFirst.value)
+  return sortByCreation(_activities)
 })
 
-function sortByCreation(list, newestFirst = false) {
-  // Direction comes from the comparator operand order (like sortByModified),
-  // not .reverse(). A consistent comparator keeps .sort() idempotent, so
-  // sorting the reactive array in place doesn't re-trigger this computed.
-  return list.sort((a, b) =>
-    newestFirst
-      ? new Date(b.creation) - new Date(a.creation)
-      : new Date(a.creation) - new Date(b.creation),
-  )
-}
 function sortByModified(list) {
   return list.sort((b, a) => new Date(a.modified) - new Date(b.modified))
 }
@@ -1047,7 +1027,8 @@ function scroll(hash) {
     let el
     if (!hash) {
       let e = document.getElementsByClassName('activity')
-      el = effectiveNewestFirst.value ? e[0] : e[e.length - 1]
+      // The timeline is always newest-first now, so the latest entry is the first node.
+      el = e[0]
     } else {
       el = document.getElementById(hash)
     }

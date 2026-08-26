@@ -8,18 +8,15 @@ export function useTimelinePreferences() {
   const timestampFormat = computed(
     () => _settings.doc?.crm_timeline_timestamp_format || 'Relative',
   )
-  const sortOrder = computed(
-    () => _settings.doc?.crm_timeline_sort_order || 'Oldest First',
-  )
 
   const showExactTimestamp = computed(() => timestampFormat.value === 'Exact')
-  const isNewestFirst = computed(() => sortOrder.value === 'Newest First')
 
+  // Timeline chronology is a fixed CRM-wide invariant (newest-first) and is no longer a user
+  // preference, so crm_timeline_sort_order is intentionally not read here. Any saved value stays
+  // stored but inert. Only the timestamp-format preference is surfaced.
   return {
     timestampFormat,
-    sortOrder,
     showExactTimestamp,
-    isNewestFirst,
   }
 }
 

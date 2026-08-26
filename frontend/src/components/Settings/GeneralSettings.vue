@@ -100,31 +100,6 @@
           />
         </div>
       </div>
-      <div class="h-px border-t mx-2 border-outline-gray-modals" />
-      <div class="flex gap-4 items-center justify-between py-3 px-2">
-        <div class="flex flex-col">
-          <div class="text-p-base font-medium text-ink-gray-7 truncate">
-            {{ __('Timeline sort order') }}
-          </div>
-          <div class="text-p-sm text-ink-gray-5">
-            {{
-              __(
-                'Order of activities, emails, comments and calls in the timeline',
-              )
-            }}
-          </div>
-        </div>
-        <div>
-          <FormControl
-            v-model="settings.doc.crm_timeline_sort_order"
-            type="select"
-            class="w-40"
-            :options="sortOrderOptions"
-            :placeholder="__('Oldest First')"
-            @update:modelValue="save()"
-          />
-        </div>
-      </div>
     </div>
   </div>
 </template>
@@ -138,10 +113,6 @@ const { _settings: settings } = getSettings()
 const timestampFormatOptions = [
   { label: __('Relative'), value: 'Relative' },
   { label: __('Exact'), value: 'Exact' },
-]
-const sortOrderOptions = [
-  { label: __('Oldest First'), value: 'Oldest First' },
-  { label: __('Newest First'), value: 'Newest First' },
 ]
 
 function toggle(settingKey) {
