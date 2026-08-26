@@ -351,6 +351,9 @@ CANCEL_WORKSHOP = {
 	"to_state": "Lost",
 	"changes_status": True,
 	"admin_only": False,
+	# TXB-192: still reachable via explicit Lost status and Kanban transition routing, but
+	# not offered as a direct entry in the Take Action dropdown.
+	"hidden_from_menu": True,
 	"handler": cancel_workshop,
 	"fields": [
 		{"fieldname": "cancellation_notes", "label": "Cancellation Notes", "fieldtype": "Small Text"},
