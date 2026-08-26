@@ -1,5 +1,5 @@
 <template>
-  <Dialog v-model:open="show" :title="__('Lost Reason')" @close="cancel">
+  <Dialog v-model:open="show" :title="title" @close="cancel">
     <template #default>
       <div class="-mt-3 mb-4 text-p-base text-ink-gray-7">
         {{
@@ -54,7 +54,7 @@ import Link from '@/components/Controls/Link.vue'
 import { createDocument } from '@/composables/document'
 import { reasonAfterSkip } from '@/utils/leadReasonPrompt'
 import { Dialog } from 'frappe-ui'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 
 const props = defineProps({
   doctype: { type: String, default: 'CRM Lead' },
@@ -67,6 +67,14 @@ const props = defineProps({
 })
 
 const show = defineModel({ type: Boolean })
+
+// CRM Lead disqualification uses "Disqualification Reason" terminology; CRM Deal and any
+// other doctype keep the original "Lost Reason" title.
+const title = computed(() =>
+  props.doctype === 'CRM Lead'
+    ? __('Disqualification Reason')
+    : __('Lost Reason'),
+)
 
 const linkRef = ref(null)
 const doc = props.document.doc
