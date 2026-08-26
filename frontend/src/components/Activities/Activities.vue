@@ -606,7 +606,16 @@ const props = defineProps({
   // Contact-side mutation control (composers, uploads, edits, deletes). Lead/Deal callers
   // leave this false and keep their existing editable behavior unchanged.
   readOnly: { type: Boolean, default: false },
+  // Explicit caller-controlled timeline direction. When left null the shared editable
+  // timeline preference (isNewestFirst) applies, preserving Lead/Deal behavior. When set
+  // (e.g. Contact Activity passing true) it takes precedence and renders newest-first
+  // regardless of the global preference.
+  newestFirst: { type: Boolean, default: null },
 })
+
+// Caller override wins over the global editable-timeline preference. Contact Activity
+// enables newest-first explicitly; Lead/Deal callers leave it unset and follow isNewestFirst.
+const effectiveNewestFirst = computed(() => props.newestFirst ?? isNewestFirst.value)
 
 const emit = defineEmits(['beforeSave', 'afterSave'])
 
@@ -787,7 +796,7 @@ const activities = computed(() => {
     )
   } else if (title.value == 'Calls') {
     if (!all_activities.data?.calls) return []
-    return sortByCreation(all_activities.data.calls, isNewestFirst.value)
+    return sortByCreation(all_activities.data.calls, effectiveNewestFirst.value)
   } else if (title.value == 'Tasks') {
     if (!all_activities.data?.tasks) return []
     return sortByModified(all_activities.data.tasks)
@@ -824,7 +833,7 @@ const activities = computed(() => {
       })
     }
   })
-  return sortByCreation(_activities, isNewestFirst.value)
+  return sortByCreation(_activities, effectiveNewestFirst.value)
 })
 
 function sortByCreation(list, newestFirst = false) {
@@ -1038,7 +1047,7 @@ function scroll(hash) {
     let el
     if (!hash) {
       let e = document.getElementsByClassName('activity')
-      el = isNewestFirst.value ? e[0] : e[e.length - 1]
+      el = effectiveNewestFirst.value ? e[0] : e[e.length - 1]
     } else {
       el = document.getElementById(hash)
     }

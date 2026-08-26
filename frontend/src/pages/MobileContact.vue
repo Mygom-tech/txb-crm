@@ -140,6 +140,7 @@
         <Activities
           v-else-if="tab.name === 'Activity'"
           readOnly
+          :newestFirst="true"
           doctype="Contact"
           :docname="contactId"
           :tabs="activityTabs"
