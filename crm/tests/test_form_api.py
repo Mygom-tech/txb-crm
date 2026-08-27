@@ -19,6 +19,7 @@ class TestFormAPI(IntegrationTestCase):
 		frappe.set_user("Administrator")
 		frappe.flags.in_web_form = False
 		frappe.form_dict.pop("web_form", None)
+		frappe.form_dict.pop("utm_source", None)
 		frappe.db.rollback()
 
 	# ---- field picker ----
@@ -159,6 +160,42 @@ class TestFormAPI(IntegrationTestCase):
 
 		self.assertEqual(lead.source, "Web Form")
 		self.assertTrue(lead.status)  # hidden Status default applied
+
+	def test_utm_source_overrides_source_case_insensitively(self):
+		"""`?utm_source=` posted by the public page next to the accept() payload wins over
+		the form's hidden default / the Web Form stamp when it names a real source."""
+		name = make_form("utm-lead", title="UTM Lead")
+		if not frappe.db.exists("CRM Lead Source", "Facebook"):
+			frappe.get_doc({"doctype": "CRM Lead Source", "source_name": "Facebook"}).insert()
+
+		frappe.flags.in_web_form = True
+		frappe.form_dict["web_form"] = name
+		frappe.form_dict["utm_source"] = "FACEBOOK"
+		lead = frappe.get_doc(
+			{
+				"doctype": "CRM Lead",
+				"first_name": "Cy",
+				"last_name": "Test",
+				"email": "wf-test-cy@test.invalid",
+			}
+		).insert(ignore_permissions=True)
+		self.assertEqual(lead.source, "Facebook")
+
+	def test_unknown_utm_source_falls_back(self):
+		name = make_form("utm-lead-unknown", title="UTM Lead Unknown")
+		frappe.flags.in_web_form = True
+		frappe.form_dict["web_form"] = name
+		frappe.form_dict["utm_source"] = "definitely-not-a-source"
+		lead = frappe.get_doc(
+			{
+				"doctype": "CRM Lead",
+				"first_name": "Di",
+				"last_name": "Test",
+				"email": "wf-test-di@test.invalid",
+			}
+		).insert(ignore_permissions=True)
+		self.assertEqual(lead.source, "Web Form")
+		self.assertFalse(frappe.db.exists("CRM Lead Source", "definitely-not-a-source"))
 
 	def test_enrichment_skipped_without_web_form_flag(self):
 		"""Outside the web-form path, the hook is a no-op — a normally created Lead
