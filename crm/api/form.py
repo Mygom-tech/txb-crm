@@ -20,15 +20,16 @@ from frappe.utils.telemetry import capture
 ALLOWED_DOCTYPES = ("CRM Lead", "CRM Deal")
 FORM_SOURCE = "Web Form"
 FORM_MODULE = "FCRM"
+# URL query param the public form page posts next to the web-form payload so the
+# record's Source can be attributed (e.g. ?utm_source=facebook → Source = Facebook)
+UTM_SOURCE_PARAM = "utm_source"
 
 
-def ensure_form_source() -> str:
-	"""Return the 'Web Form' CRM Lead Source, creating it once if needed."""
-	if not frappe.db.exists("CRM Lead Source", FORM_SOURCE):
-		frappe.get_doc({"doctype": "CRM Lead Source", "source_name": FORM_SOURCE}).insert(
-			ignore_permissions=True
-		)
-	return FORM_SOURCE
+def ensure_lead_source(name: str = FORM_SOURCE) -> str:
+	"""Return the named CRM Lead Source (default 'Web Form'), creating it once if needed."""
+	if not frappe.db.exists("CRM Lead Source", name):
+		frappe.get_doc({"doctype": "CRM Lead Source", "source_name": name}).insert(ignore_permissions=True)
+	return name
 
 
 # Fieldtypes a form can render/collect — standard + custom fields of these types
@@ -136,10 +137,13 @@ def _default_status(document_type: str) -> str | None:
 	return rows[0] if rows else None
 
 
-def _seed_visible_fields(document_type: str) -> list[dict]:
-	"""Web-form rows for a new form's visible layout: the curated contact set,
-	arranged into labelled sections and columns (with Section/Column breaks)."""
+def _seed_visible_fields(document_type: str, layout: list[dict] | None = None, required=()) -> list[dict]:
+	"""Web-form rows for a form's visible layout (default: the curated contact set in
+	SEED_LAYOUT), arranged into labelled sections and columns (with Section/Column breaks).
+	`required` forces `reqd` on the named fields beyond what the doctype mandates."""
 	catalog = {f["fieldname"]: f for f in _mappable_fields(document_type)}
+	if layout is None:
+		layout = SEED_LAYOUT.get(document_type, [])
 
 	def _break(fieldtype, i, label=""):
 		prefix = "section_break" if fieldtype == "Section Break" else "column_break"
@@ -155,7 +159,7 @@ def _seed_visible_fields(document_type: str) -> list[dict]:
 
 	rows = []
 	n = 0
-	for section in SEED_LAYOUT.get(document_type, []):
+	for section in layout:
 		n += 1
 		rows.append(_break("Section Break", n, section.get("label") or ""))
 		for ci, col in enumerate(section["columns"]):
@@ -172,7 +176,7 @@ def _seed_visible_fields(document_type: str) -> list[dict]:
 						"label": f["label"],
 						"fieldtype": f["fieldtype"],
 						"options": f["options"],
-						"reqd": 1 if f["reqd"] else 0,
+						"reqd": 1 if (f["reqd"] or fn in required) else 0,
 						"placeholder": "",
 						"field_description": "",
 					}
@@ -439,10 +443,12 @@ def enrich_form_submission(doc):
 		return
 
 	_apply_hidden_defaults(doc)
+	# precedence: ?utm_source= (if it names a real source) > form hidden default > "Web Form"
+	_apply_utm_source(doc)
 
 	# stamp the source so form records are identifiable/filterable
 	if doc.meta.has_field("source") and not doc.get("source"):
-		doc.source = ensure_form_source()
+		doc.source = ensure_lead_source()
 
 	capture(
 		"web_form_submitted",
@@ -468,6 +474,22 @@ def enrich_form_submission(doc):
 		contact = create_contact(doc)
 		if contact:
 			doc.append("contacts", {"contact": contact, "is_primary": 1})
+
+
+def _apply_utm_source(doc):
+	"""Attribute the record's Source from the `utm_source` the public page posts alongside
+	the web-form payload. Matched (case-insensitively, via the PK collation) against existing
+	CRM Lead Sources; anything unknown is ignored — never auto-created from URL input — so the
+	form's own default applies.
+	"""
+	if not doc.meta.has_field("source"):
+		return
+	value = str(frappe.form_dict.get(UTM_SOURCE_PARAM) or "").strip()
+	if not value:
+		return
+	source = frappe.db.get_value("CRM Lead Source", value, "name")
+	if source:
+		doc.source = source
 
 
 def _apply_hidden_defaults(doc):

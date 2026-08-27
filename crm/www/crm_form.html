@@ -331,6 +331,10 @@
           var payload = DRAFT
             ? { name: WEB_FORM, values: JSON.stringify(values) }
             : { web_form: WEB_FORM, data: JSON.stringify(values) };
+          // ?utm_source= lets the server attribute the record's Source
+          // (see crm.api.form._apply_utm_source)
+          var utmSource = new URLSearchParams(window.location.search).get("utm_source");
+          if (utmSource) payload.utm_source = utmSource;
 
           fetch(endpoint, {
             method: "POST",

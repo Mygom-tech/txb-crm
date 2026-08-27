@@ -9,6 +9,7 @@ from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 from crm.domain_enrichment.install import seed_default_rules_and_mappings
 from crm.fcrm.doctype.crm_dashboard.crm_dashboard import create_default_manager_dashboard
 from crm.fcrm.doctype.crm_products.crm_products import create_product_details_script
+from crm.txb.workshop_form import seed_workshop_form
 
 
 def before_install():
@@ -26,6 +27,7 @@ def after_install(force=False):
 	add_web_form_custom_fields()
 	add_default_industries()
 	add_default_lead_sources()
+	seed_workshop_form()
 	add_default_lost_reasons()
 	add_default_quick_filters()
 	add_standard_dropdown_items()
