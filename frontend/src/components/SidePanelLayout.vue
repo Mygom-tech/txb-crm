@@ -82,13 +82,17 @@
                           class="flex h-7 items-center px-2 py-1"
                         >
                           <Tooltip :text="__(field.tooltip)">
-                            <button
-                              type="button"
+                            <!-- real href: Ctrl/⌘-click, middle-click and "Open in new
+                                 tab" work; a plain click stays an in-app navigation -->
+                            <a
                               class="truncate text-ink-blue-link hover:underline"
-                              @click="navigateToDeal(router, doc[field.fieldname])"
+                              :href="dealHref(doc[field.fieldname])"
+                              @click.exact.prevent="
+                                navigateToDeal(router, doc[field.fieldname])
+                              "
                             >
                               {{ doc[field.fieldname] }}
-                            </button>
+                            </a>
                           </Tooltip>
                         </div>
                         <div
@@ -544,6 +548,8 @@ const { getFormattedPercent, getFormattedFloat, getFormattedCurrency } =
   getMeta(props.doctype)
 
 const router = useRouter()
+const dealHref = (dealId) =>
+  router.resolve({ name: 'Deal', params: { dealId } }).href
 
 const { users, isManager, getUser } = usersStore()
 const { pipelineStatuses } = statusesStore()
@@ -767,9 +773,10 @@ async function fieldChange(value, df) {
       })
     } catch (e) {
       toast.error(
-        __('Could not confirm how to move this opportunity to "{0}". Please try again.', [
-          __(value),
-        ]),
+        __(
+          'Could not confirm how to move this opportunity to "{0}". Please try again.',
+          [__(value)],
+        ),
       )
       return
     }
@@ -793,9 +800,10 @@ async function fieldChange(value, df) {
 
     if (resolution.kind === STATUS_CHANGE_BLOCKED) {
       toast.error(
-        __('Change to "{0}" through Take Action, so the details that go with it are recorded.', [
-          __(value),
-        ]),
+        __(
+          'Change to "{0}" through Take Action, so the details that go with it are recorded.',
+          [__(value)],
+        ),
       )
       return
     }

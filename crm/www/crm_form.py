@@ -48,6 +48,16 @@ def get_context(context):
 	context.submit_label = doc.button_label or "Submit"
 	context.success_message = doc.success_message or "Thank you!"
 	context.success_url = doc.success_url or ""
+	# Draft preview → dry-run (validate only, no record). Published → submit through
+	# Frappe's built-in Web Form engine (validation + insert).
+	if doc.crm_published:
+		context.submit_endpoint = "/api/method/frappe.website.doctype.web_form.web_form.accept"
+		context.submit_extra = {"web_form": doc.name}
+		context.values_key = "data"
+	else:
+		context.submit_endpoint = "/api/method/crm.api.form.test_submit_form"
+		context.submit_extra = {"name": doc.name}
+		context.values_key = "values"
 	context.fields = [
 		{
 			"fieldname": f.fieldname,

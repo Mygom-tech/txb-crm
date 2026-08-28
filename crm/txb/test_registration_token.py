@@ -3,6 +3,7 @@
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
+from frappe.utils import get_url
 
 from crm.patches.v1_0.reissue_registration_tokens import is_predictable
 from crm.txb.constants import (
@@ -74,7 +75,7 @@ class TestRegistrationToken(FrappeTestCase):
 		token = deal.get(FIELD_REGISTRATION_TOKEN)
 		self.assertEqual(
 			deal.get(FIELD_REGISTRATION_LINK),
-			f"https://crm.txbconsulting.com/registration?token={token}",
+			f"{get_url()}/register?token={token}",
 		)
 
 	def test_no_token_for_other_pipelines_or_statuses(self):

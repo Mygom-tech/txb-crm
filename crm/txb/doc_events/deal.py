@@ -8,6 +8,7 @@ import secrets
 
 import frappe
 from frappe import _
+from frappe.utils import get_url
 
 from crm.txb.constants import (
 	ADMIN_ROLE,
@@ -17,7 +18,7 @@ from crm.txb.constants import (
 	FIELD_REGISTRATION_TOKEN,
 	FIELD_WORKSHOP_SCHEDULED_AT,
 	PIPELINE_WORKSHOP,
-	REGISTRATION_BASE_URL,
+	REGISTRATION_PAGE_ROUTE,
 	REGISTRATION_TOKEN_BYTES,
 	STATUS_WORKSHOP_SET,
 )
@@ -58,8 +59,8 @@ def require_workshop_schedule(doc, method=None):
 	)
 
 
-def generate_registration_token(doc, method=None):
-	"""Issue a registration token once a Workshop deal reaches "Workshop set".
+def issue_registration_link(doc) -> str:
+	"""Give a Workshop deal its public registration link, minting the token once.
 
 	The token guards a guest-accessible endpoint that creates Contacts, Organizations and
 	Deals, so it is the only thing standing between the public and a write into the CRM.
@@ -69,17 +70,22 @@ def generate_registration_token(doc, method=None):
 	non-alphanumerics and took the last 16 characters. A stripped deal name is itself 16
 	characters, so the slice discarded the timestamp entirely and the token was simply the
 	deal number in lower case -- trivially enumerable. It is now drawn from `secrets`.
-	"""
-	if doc.pipeline_type != PIPELINE_WORKSHOP or doc.status != STATUS_WORKSHOP_SET:
-		return
 
+	The link is built from the serving site (`get_url`), so staging links point at staging.
+	"""
 	if not doc.get(FIELD_REGISTRATION_TOKEN):
 		doc.set(FIELD_REGISTRATION_TOKEN, secrets.token_urlsafe(REGISTRATION_TOKEN_BYTES))
+	link = f"{get_url()}/{REGISTRATION_PAGE_ROUTE}?token={doc.get(FIELD_REGISTRATION_TOKEN)}"
+	doc.set(FIELD_REGISTRATION_LINK, link)
+	return link
 
-	doc.set(
-		FIELD_REGISTRATION_LINK,
-		f"{REGISTRATION_BASE_URL}/registration?token={doc.get(FIELD_REGISTRATION_TOKEN)}",
-	)
+
+def generate_registration_token(doc, method=None):
+	"""Issue the registration link automatically once a Workshop deal reaches "Workshop set".
+	The Generate Link button on the deal page issues it on demand at any status."""
+	if doc.pipeline_type != PIPELINE_WORKSHOP or doc.status != STATUS_WORKSHOP_SET:
+		return
+	issue_registration_link(doc)
 
 
 def sync_contact_name(doc, method=None):

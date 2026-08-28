@@ -171,6 +171,10 @@
         v-model="doc"
         @updateField="updateField"
       />
+      <WorkshopRegistrationPanel
+        v-if="doc.name && doc.pipeline_type === 'Workshop'"
+        :deal="doc"
+      />
       <div
         v-if="sections.data"
         class="flex flex-1 flex-col justify-between overflow-hidden"
@@ -413,6 +417,7 @@ import Link from '@/components/Controls/Link.vue'
 import CollapsibleSection from '@/components/CollapsibleSection.vue'
 import SidePanelLayout from '@/components/SidePanelLayout.vue'
 import SLASection from '@/components/SLASection.vue'
+import WorkshopRegistrationPanel from '@/components/WorkshopRegistrationPanel.vue'
 import {
   loadSidebarWidth,
   saveSidebarWidth,

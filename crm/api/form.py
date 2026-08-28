@@ -506,8 +506,8 @@ def _utm_source_from_request() -> str:
 
 
 def _apply_hidden_defaults(doc):
-	"""Apply the submitting form's hidden-field defaults (e.g. Status) to fields the
-	visitor didn't fill, so mandatory values are present before the record is saved."""
+	"""Apply the submitting form's hidden-field defaults (e.g. Status, Pipeline) so the
+	values the author pinned are present before the record is saved."""
 	web_form = frappe.form_dict.get("web_form")
 	if not web_form:
 		return
@@ -527,10 +527,7 @@ def _apply_hidden_defaults(doc):
 	for h in hidden:
 		fieldname = h.get("fieldname")
 		default = h.get("default")
-		if (
-			fieldname
-			and default not in (None, "")
-			and doc.meta.has_field(fieldname)
-			and not doc.get(fieldname)
-		):
+		# unconditional: a hidden field is never on the form, so whatever the doc holds is a
+		# doctype default (e.g. a Select's first option), not something the visitor chose
+		if fieldname and default not in (None, "") and doc.meta.has_field(fieldname):
 			doc.set(fieldname, default)
