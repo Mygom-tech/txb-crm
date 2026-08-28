@@ -1,19 +1,24 @@
 import frappe
 from frappe.tests.utils import FrappeTestCase
 from frappe.website.doctype.web_form.web_form import accept
+from werkzeug.test import EnvironBuilder
+from werkzeug.wrappers import Request
 
+from crm.install import add_web_form_custom_fields
 from crm.txb import workshop_form as W
 from crm.txb.constants import PIPELINE_WORKSHOP
 
 
 class TestWorkshopForm(FrappeTestCase):
 	def setUp(self):
+		self._saved_request = getattr(frappe.local, "request", None)
 		W.seed_workshop_form()
 
 	def tearDown(self):
 		frappe.flags.in_web_form = False
 		frappe.form_dict.pop("web_form", None)
 		frappe.form_dict.pop("utm_source", None)
+		frappe.local.request = self._saved_request
 		frappe.db.rollback()
 
 	def _form_name(self):
@@ -79,3 +84,50 @@ class TestWorkshopForm(FrappeTestCase):
 					frappe.get_doc({"doctype": "CRM Lead Source", "source_name": src}).insert()
 			lead = self._submit(utm_source=raw, email=f"ws-{raw.lower()}@test.invalid")
 			self.assertEqual(lead.source, expected, raw)
+
+	def test_utm_source_falls_back_to_referer(self):
+		"""Frappe's generic /<route>/new page posts no utm_source; the submitting page's
+		query string (Referer) is the fallback. Exercised via the before_insert hook —
+		accept() itself is rate-limited once a request object exists."""
+		frappe.local.request = Request(
+			EnvironBuilder(
+				path="/api/method/frappe.website.doctype.web_form.web_form.accept",
+				method="POST",
+				headers={"Referer": "https://crm.example.com/workshop-registration/new?utm_source=social"},
+			).get_environ()
+		)
+		frappe.flags.in_web_form = True
+		frappe.form_dict["web_form"] = self._form_name()
+		lead = frappe.get_doc(
+			{
+				"doctype": "CRM Lead",
+				"first_name": "Ref",
+				"last_name": "Test",
+				"email": "ws-referer@test.invalid",
+			}
+		).insert(ignore_permissions=True)
+		self.assertEqual(lead.source, "Social")
+
+	def test_placeholder_round_trips_and_page_context_renders(self):
+		"""Web Form Field has no native `placeholder`; the CRM adds it as a Custom Field on
+		every migrate. Without it the public page 500s (AttributeError) and the builder's
+		placeholder is silently dropped on save."""
+		from crm.api.form import get_form_config, save_form
+		from crm.www.crm_form import get_context
+
+		add_web_form_custom_fields()
+		name = self._form_name()
+		config = get_form_config(name)
+		for f in config["fields"]:
+			if f["fieldname"] == "email":
+				f["placeholder"] = "vardas@imone.lt"
+		save_form(name, {**config, "fields": config["fields"]})
+		self.assertEqual(
+			next(f["placeholder"] for f in get_form_config(name)["fields"] if f["fieldname"] == "email"),
+			"vardas@imone.lt",
+		)
+
+		frappe.form_dict["route"] = W.FORM_ROUTE
+		context = get_context(frappe._dict())
+		self.assertEqual(context.web_form_name, name)
+		self.assertTrue(any(f["placeholder"] == "vardas@imone.lt" for f in context.fields))

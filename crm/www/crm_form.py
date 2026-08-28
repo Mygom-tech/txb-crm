@@ -57,7 +57,7 @@ def get_context(context):
 			"fieldtype": f.fieldtype,
 			"options": f.options or "",
 			"reqd": int(f.reqd or 0),
-			"placeholder": f.placeholder or "",
+			"placeholder": f.get("placeholder") or "",  # custom column; absent until migrate
 			"description": f.description or "",
 		}
 		for f in doc.web_form_fields

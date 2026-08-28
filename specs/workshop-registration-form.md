@@ -44,7 +44,9 @@ the builder shows the hidden Source row and round-trips it.
 Precedence on submission: **`utm_source` (valid) > form hidden default > `"Web Form"`**.
 
 - `crm_form.html` posts `utm_source` from the page URL as its own param next to the `accept()`
-  payload.
+  payload. Frappe's generic page (`/<route>/new`, served because `published` is mirrored) posts
+  nothing extra, so the server falls back to the `utm_source` in the submitting page's query
+  string via the `Referer` header (same-origin submits carry it).
 - `crm.api.form._apply_utm_source` reads `frappe.form_dict.utm_source` and resolves it with a
   single PK lookup on `CRM Lead Source` (case-insensitive via the MariaDB `_ci` collation — the
   test `FACEBOOK → Facebook` guards that assumption). Unknown values are ignored — sources are
