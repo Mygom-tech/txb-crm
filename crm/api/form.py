@@ -484,7 +484,8 @@ def _apply_utm_source(doc):
 	"""
 	if not doc.meta.has_field("source"):
 		return
-	value = str(frappe.form_dict.get(UTM_SOURCE_PARAM) or "").strip()
+	# UTM values carry no spaces by convention: social-media / cold_outreach → "Social Media"
+	value = str(frappe.form_dict.get(UTM_SOURCE_PARAM) or "").strip().replace("-", " ").replace("_", " ")
 	if not value:
 		return
 	source = frappe.db.get_value("CRM Lead Source", value, "name")
