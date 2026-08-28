@@ -1,5 +1,6 @@
 import frappe
 from frappe.tests.utils import FrappeTestCase
+from frappe.website.doctype.web_form.web_form import accept
 
 from crm.txb import workshop_form as W
 from crm.txb.constants import PIPELINE_WORKSHOP
@@ -49,3 +50,32 @@ class TestWorkshopForm(FrappeTestCase):
 		).insert(ignore_permissions=True)
 		self.assertEqual(lead.source, PIPELINE_WORKSHOP)
 		self.assertTrue(lead.status)
+
+	def _submit(self, utm_source=None, email="ws-e2e@test.invalid"):
+		"""Drive the real public path: the form published, Frappe's own accept() doing
+		the insert (which sets in_web_form), utm_source posted next to the payload."""
+		name = self._form_name()
+		frappe.db.set_value("Web Form", name, {"crm_published": 1, "published": 1})
+		frappe.form_dict["web_form"] = name  # the page posts it; the hook reads it from form_dict
+		if utm_source is not None:
+			frappe.form_dict["utm_source"] = utm_source
+		accept(
+			name,
+			frappe.as_json({"first_name": "E2E", "last_name": "Test", "email": email}),
+		)
+		return frappe.get_doc("CRM Lead", {"email": email})
+
+	def test_accept_without_utm_lands_as_workshop(self):
+		self.assertEqual(self._submit().source, PIPELINE_WORKSHOP)
+
+	def test_accept_with_utm_source_sets_matching_source(self):
+		for raw, expected in (
+			("social", "Social"),
+			("social-media", "Social Media"),
+			("LINKEDIN", "LinkedIn"),
+		):
+			for src in ("Social", "Social Media", "LinkedIn"):
+				if not frappe.db.exists("CRM Lead Source", src):
+					frappe.get_doc({"doctype": "CRM Lead Source", "source_name": src}).insert()
+			lead = self._submit(utm_source=raw, email=f"ws-{raw.lower()}@test.invalid")
+			self.assertEqual(lead.source, expected, raw)
