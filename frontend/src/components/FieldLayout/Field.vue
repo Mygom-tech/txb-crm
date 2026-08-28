@@ -22,13 +22,15 @@
       v-if="isDealNavLink(field, data[field.fieldname])"
       class="form-control flex h-7 items-center px-2"
     >
-      <button
-        type="button"
+      <!-- a real href so Ctrl/⌘-click, middle-click and "Open in new tab" work; a plain
+           click stays an in-app navigation -->
+      <a
         class="truncate text-ink-blue-link hover:underline"
-        @click="navigateToDeal(router, data[field.fieldname])"
+        :href="dealHref(data[field.fieldname])"
+        @click.exact.prevent="navigateToDeal(router, data[field.fieldname])"
       >
         {{ data[field.fieldname] }}
-      </button>
+      </a>
     </div>
     <FormControl
       v-else-if="
@@ -368,6 +370,8 @@ const props = defineProps({
 })
 
 const router = useRouter()
+const dealHref = (dealId) =>
+  router.resolve({ name: 'Deal', params: { dealId } }).href
 
 const data = inject('data')
 const doctype = inject('doctype')

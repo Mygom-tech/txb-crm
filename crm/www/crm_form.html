@@ -244,6 +244,11 @@
         var CSRF = {{ csrf_token | tojson }};
         var DRAFT = {{ draft_preview | tojson }};
         var SUCCESS_URL = {{ success_url | tojson }};
+        // where the values go: the page's Python decides (web-form accept, dry-run, or a
+        // dedicated endpoint such as workshop registration)
+        var SUBMIT_ENDPOINT = {{ submit_endpoint | tojson }};
+        var SUBMIT_EXTRA = {{ submit_extra | tojson }};
+        var VALUES_KEY = {{ values_key | tojson }};
         var form = document.getElementById("web-form");
         var errBox = document.getElementById("form-error");
         var btn = document.getElementById("submit-btn");
@@ -323,14 +328,9 @@
           var original = btn.textContent;
           btn.textContent = "Submitting…";
 
-          // Draft preview → dry-run (validate only, no record). Published → submit
-          // through Frappe's built-in Web Form engine (validation + insert).
-          var endpoint = DRAFT
-            ? "/api/method/crm.api.form.test_submit_form"
-            : "/api/method/frappe.website.doctype.web_form.web_form.accept";
-          var payload = DRAFT
-            ? { name: WEB_FORM, values: JSON.stringify(values) }
-            : { web_form: WEB_FORM, data: JSON.stringify(values) };
+          var endpoint = SUBMIT_ENDPOINT;
+          var payload = Object.assign({}, SUBMIT_EXTRA);
+          payload[VALUES_KEY] = JSON.stringify(values);
           // ?utm_source= lets the server attribute the record's Source
           // (see crm.api.form._apply_utm_source)
           var utmSource = new URLSearchParams(window.location.search).get("utm_source");

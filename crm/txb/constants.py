@@ -218,3 +218,16 @@ OWNER_FIELDS = {
 	"CRM Deal": "deal_owner",
 	"Contact": "custom_contact_owner",
 }
+
+# Workshop registration (TXB-15): a Workshop deal issues a tokenised public link / QR; each
+# attendee answers one question that decides what the CRM creates for them.
+REGISTRATION_PAGE_ROUTE = "register"
+WORKSHOP_INTEREST_IN = "I am in"
+WORKSHOP_INTEREST_QUESTIONS = "I am in, but have questions"
+WORKSHOP_INTEREST_NOT_FOR_ME = "Not for me"
+WORKSHOP_INTEREST_OPTIONS = (WORKSHOP_INTEREST_IN, WORKSHOP_INTEREST_QUESTIONS, WORKSHOP_INTEREST_NOT_FOR_ME)
+# The Delivering Coaching opportunity an "I am in" registrant gets starts here.
+REGISTRATION_DEAL_STATUS = "Submitted"
+# Recorded on the Contact: what they answered and for which workshop.
+FIELD_CONTACT_REGISTRATION_STATUS = "custom_workshop_registration_status"
+FIELD_CONTACT_SOURCE_WORKSHOP = "custom_source_workshop"
