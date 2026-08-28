@@ -12,6 +12,7 @@ doctype; this module only:
 """
 
 import json
+from urllib.parse import parse_qs, urlparse
 
 import frappe
 from frappe import _
@@ -276,7 +277,7 @@ def get_form_config(name: str) -> dict:
 				"fieldtype": f.fieldtype,
 				"options": f.options,
 				"reqd": f.reqd,
-				"placeholder": f.placeholder,
+				"placeholder": f.get("placeholder"),  # custom column; absent until migrate
 				"field_description": f.description,
 			}
 			for f in doc.web_form_fields
@@ -485,12 +486,23 @@ def _apply_utm_source(doc):
 	if not doc.meta.has_field("source"):
 		return
 	# UTM values carry no spaces by convention: social-media / cold_outreach → "Social Media"
-	value = str(frappe.form_dict.get(UTM_SOURCE_PARAM) or "").strip().replace("-", " ").replace("_", " ")
+	value = str(_utm_source_from_request() or "").strip().replace("-", " ").replace("_", " ")
 	if not value:
 		return
 	source = frappe.db.get_value("CRM Lead Source", value, "name")
 	if source:
 		doc.source = source
+
+
+def _utm_source_from_request() -> str:
+	"""The CRM's own form page posts `utm_source` explicitly. Frappe's generic web-form
+	page (/<route>/new) does not, so fall back to the query string of the page that
+	submitted — same-origin requests carry it in the Referer header."""
+	value = frappe.form_dict.get(UTM_SOURCE_PARAM)
+	if value:
+		return value
+	referer = getattr(frappe.request, "headers", {}).get("Referer", "") if frappe.request else ""
+	return parse_qs(urlparse(referer).query).get(UTM_SOURCE_PARAM, [""])[0]
 
 
 def _apply_hidden_defaults(doc):

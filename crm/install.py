@@ -387,13 +387,28 @@ def add_web_form_custom_fields():
 	- `crm_hidden_defaults`: JSON of doctype-mandatory fields the author removed
 	  from the visible form, with the default value to apply on submission so the
 	  target record can still be created.
+	- `Web Form Field.placeholder`: the builder edits a per-field placeholder, which
+	  Frappe v15's Web Form Field does not have — without this column the value is
+	  silently dropped on save and reading it back raises AttributeError.
 	"""
 	meta = frappe.get_meta("Web Form")
-	if meta.has_field("crm_published") and meta.has_field("crm_hidden_defaults"):
+	if (
+		meta.has_field("crm_published")
+		and meta.has_field("crm_hidden_defaults")
+		and frappe.get_meta("Web Form Field").has_field("placeholder")
+	):
 		return
 	click.secho("* Installing Custom Fields in Web Form")
 	create_custom_fields(
 		{
+			"Web Form Field": [
+				{
+					"fieldname": "placeholder",
+					"fieldtype": "Data",
+					"label": "Placeholder",
+					"insert_after": "description",
+				}
+			],
 			"Web Form": [
 				{
 					"default": "0",
@@ -410,10 +425,11 @@ def add_web_form_custom_fields():
 					"insert_after": "crm_published",
 					"hidden": 1,
 				},
-			]
+			],
 		}
 	)
 	frappe.clear_cache(doctype="Web Form")
+	frappe.clear_cache(doctype="Web Form Field")
 
 
 def add_default_industries():
