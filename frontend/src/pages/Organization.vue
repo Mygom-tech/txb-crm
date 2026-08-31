@@ -12,12 +12,6 @@
         v-if="organization._actions?.length"
         :actions="organization._actions"
       />
-      <EnrichFromWebsite
-        doctype="CRM Organization"
-        :docname="props.organizationId"
-        :website="organization.doc?.website"
-        @done="onEnriched"
-      />
     </template>
   </LayoutHeader>
   <div v-if="organization.doc" ref="parentRef" class="flex h-full">
@@ -207,7 +201,6 @@ import DealsIcon from '@/components/Icons/DealsIcon.vue'
 import ContactsIcon from '@/components/Icons/ContactsIcon.vue'
 import DeleteLinkedDocModal from '@/components/DeleteLinkedDocModal.vue'
 import CustomActions from '@/components/CustomActions.vue'
-import EnrichFromWebsite from '@/components/EnrichFromWebsite.vue'
 import { useDocument } from '@/data/document'
 import { getSettings } from '@/stores/settings'
 import { globalStore } from '@/stores/global'
@@ -281,11 +274,6 @@ const {
 } = useDocument('CRM Organization', props.organizationId)
 
 const canDelete = computed(() => permissions.data?.permissions?.delete || false)
-
-function onEnriched() {
-  organization.reload?.()
-  sections.reload()
-}
 
 onMounted(async () => {
   // Native replacement for the retired `Organization Reload After Create` Form Script.

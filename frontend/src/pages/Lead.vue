@@ -26,12 +26,6 @@
           v-if="document.actions?.length"
           :actions="document.actions"
         />
-        <EnrichFromWebsite
-          doctype="CRM Lead"
-          :docname="leadId"
-          :website="doc.website"
-          @done="onEnriched"
-        />
         <Button
           v-if="!userIsAdmin()"
           :label="__('Request Ownership')"
@@ -318,7 +312,6 @@ import CustomActions from '@/components/CustomActions.vue'
 import ArchivedLeadBanner from '@/components/ArchivedLeadBanner.vue'
 import ConvertToDealModal from '@/components/Modals/ConvertToDealModal.vue'
 import RequestOwnershipModal from '@/components/Modals/RequestOwnershipModal.vue'
-import EnrichFromWebsite from '@/components/EnrichFromWebsite.vue'
 import {
   openWebsite,
   setupCustomizations,
@@ -723,11 +716,6 @@ function beforeStatusChange(data) {
       onSuccess: () => reloadResources(data),
     })
   }
-}
-
-function onEnriched() {
-  document.reload?.()
-  sections.reload()
 }
 
 function reloadResources(data) {
