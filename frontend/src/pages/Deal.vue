@@ -16,12 +16,6 @@
         v-if="document.actions?.length"
         :actions="document.actions"
       />
-      <EnrichFromWebsite
-        doctype="CRM Deal"
-        :docname="dealId"
-        :website="doc.website"
-        @done="onEnriched"
-      />
       <Button
         v-if="!userIsAdmin()"
         :label="__('Request Ownership')"
@@ -426,7 +420,6 @@ import {
 } from '@/utils/resizerState'
 import { expandDealContacts } from '@/utils/dealContacts'
 import CustomActions from '@/components/CustomActions.vue'
-import EnrichFromWebsite from '@/components/EnrichFromWebsite.vue'
 import RequestOwnershipModal from '@/components/Modals/RequestOwnershipModal.vue'
 import {
   openWebsite,
@@ -1054,11 +1047,6 @@ function beforeStatusChange(data) {
       onSuccess: () => reloadResources(data),
     })
   }
-}
-
-function onEnriched() {
-  document.reload?.()
-  sections.reload()
 }
 
 function reloadResources(data) {
