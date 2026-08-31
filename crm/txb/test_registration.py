@@ -229,6 +229,32 @@ class TestWorkshopRegistration(FrappeTestCase):
 			"Programa", frappe.render_template(template.response_html, {"program_type": ""})
 		)
 
+	def test_setup_module_does_not_import_the_registration_api(self):
+		# TXB-201 regression: registration_setup once imported CONFIRMATION_TEMPLATE from
+		# crm.txb.api.registration, whose dependency chain reaches crm.install, which imports
+		# registration_setup -- a cycle that raised ImportError while bench migrate ran the
+		# conditional_program_type_in_confirmation patch. The name now lives in crm.txb.constants,
+		# so importing the patch (which pulls in registration_setup) must not require the API module,
+		# and all three modules must share the one constant.
+		import ast
+		import importlib
+		import inspect
+
+		from crm.txb import constants
+
+		source = ast.parse(inspect.getsource(registration_setup))
+		imported_modules = {
+			node.module for node in ast.walk(source) if isinstance(node, ast.ImportFrom)
+		}
+		self.assertNotIn("crm.txb.api.registration", imported_modules)
+
+		patch = importlib.import_module(
+			"crm.patches.v1_0.conditional_program_type_in_confirmation"
+		)
+		self.assertTrue(hasattr(patch, "execute"))
+		self.assertIs(registration_setup.CONFIRMATION_TEMPLATE, constants.CONFIRMATION_TEMPLATE)
+		self.assertIs(R.CONFIRMATION_TEMPLATE, constants.CONFIRMATION_TEMPLATE)
+
 	# ---- public page ----
 
 	def test_register_page_renders_for_a_live_token_and_404s_otherwise(self):
