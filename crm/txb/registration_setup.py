@@ -48,14 +48,21 @@ DEFAULT_CONFIRMATION_HTML = (
 	f"<table>{CONFIRMATION_PROGRAM_ROW}</table>"
 )
 
-# One HTML element (a table row, paragraph, list item, …) that carries the `program_type`
-# placeholder. Wrapping the whole element in `{% if program_type %}` keeps every other line of
-# the persisted template untouched.
+# The single Programa *table row* that carries the `program_type` placeholder. The gate must
+# wrap this one `<tr>` and nothing else: an earlier attempt (TXB-200) also accepted `div`, which
+# matched the whole padded content container that holds the greeting, submitted fields, contact
+# and closing text -- so a blank Program Type emptied the entire email body (TXB-202). Restricting
+# the tag to `tr` keeps every other line of the persisted template untouched.
 _PROGRAM_ROW_RE = re.compile(
-	r"<(?P<tag>tr|p|div|li)\b[^>]*>(?:(?!</(?P=tag)>).)*?"
+	r"<(?P<tag>tr)\b[^>]*>(?:(?!</(?P=tag)>).)*?"
 	r"\{\{\s*program_type\s*\}\}(?:(?!</(?P=tag)>).)*?</(?P=tag)>",
 	re.IGNORECASE | re.DOTALL,
 )
+
+# The opening of the Program Type gate, and every `{% if %}`/`{% endif %}` token, so the erroneous
+# outer guard can be unwrapped while its nested optional-field guards are kept balanced.
+_PROGRAM_GUARD_OPEN_RE = re.compile(r"\{%-?\s*if\s+program_type\s*-?%\}", re.IGNORECASE)
+_JINJA_BLOCK_RE = re.compile(r"\{%-?\s*(?P<kw>if|endif)\b[^%]*?%\}", re.IGNORECASE | re.DOTALL)
 
 
 def make_program_row_conditional(html: str) -> str:
@@ -67,9 +74,35 @@ def make_program_row_conditional(html: str) -> str:
 	return _PROGRAM_ROW_RE.sub(lambda m: "{% if program_type %}" + m.group(0) + "{% endif %}", html, count=1)
 
 
+def unwrap_broad_program_guard(html: str) -> str:
+	"""Undo the TXB-200 regression that wrapped the whole padded content container -- not just
+	the Programa row -- in `{% if program_type %}`, which dropped the greeting, submitted fields,
+	contact and closing text whenever Program Type was blank. Strip only that outer if/endif pair,
+	preserving all nested optional-field guards and every byte of HTML between them. A guard that
+	already fronts a `<tr>` (the correct row-only shape) is left untouched, so this is idempotent
+	and a no-op on a healthy or never-patched body."""
+	m = _PROGRAM_GUARD_OPEN_RE.search(html or "")
+	if not m or html[m.end() :].lstrip()[:3].lower() == "<tr":
+		return html
+	depth = 1
+	for tok in _JINJA_BLOCK_RE.finditer(html, m.end()):
+		depth += 1 if tok.group("kw").lower() == "if" else -1
+		if depth == 0:
+			return html[: m.start()] + html[m.end() : tok.start()] + html[tok.end() :]
+	return html
+
+
+def repair_confirmation_body(html: str) -> str:
+	"""Bring a persisted confirmation body to the canonical shape: no erroneous outer Program Type
+	guard, exactly the Programa `<tr>` gated. Idempotent across a healthy, a raw, or a TXB-200
+	damaged body."""
+	return make_program_row_conditional(unwrap_broad_program_guard(html or ""))
+
+
 def ensure_confirmation_email_template() -> None:
-	"""Create the confirmation Email Template on a fresh site, or make the Programa row of an
-	existing one conditional. Idempotent so it is safe from install, the patch and the tests."""
+	"""Create the confirmation Email Template on a fresh site, or repair an existing one so only
+	its Programa row is conditional. Idempotent so it is safe from install, the patch and the
+	tests."""
 	if not frappe.db.exists("Email Template", CONFIRMATION_TEMPLATE):
 		frappe.get_doc(
 			{
@@ -82,7 +115,7 @@ def ensure_confirmation_email_template() -> None:
 		).insert(ignore_permissions=True)
 		return
 	doc = frappe.get_doc("Email Template", CONFIRMATION_TEMPLATE)
-	updated = make_program_row_conditional(doc.response_html or "")
+	updated = repair_confirmation_body(doc.response_html or "")
 	if updated != doc.response_html:
 		doc.response_html = updated
 		doc.save(ignore_permissions=True)
