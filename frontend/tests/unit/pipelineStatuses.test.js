@@ -39,6 +39,7 @@ import {
   reconcileTabSelection,
 } from '@/utils/fieldLayoutTabs'
 import { evaluateDependsOnValue } from '@/utils/expressions'
+import { resolveRegistrationLinkHydration } from '@/utils/registrationLink'
 import {
   CREATED_QUERY_KEY,
   isFreshlyCreatedRoute,
@@ -1368,5 +1369,38 @@ describe('buildDiscoveryActivity (TXB-129)', () => {
       meeting_link: 'https://meet.example.com/abc',
       meeting_address: null,
     })
+  })
+})
+
+describe('resolveRegistrationLinkHydration (Workshop registration QR)', () => {
+  it('hydrates the QR for a persisted link on refresh, even when it equals the local link', () => {
+    // Regression for TXB-199: after refresh the panel initializes `link` from
+    // the same persisted value, so hydration must not be gated on a difference.
+    const persisted = 'https://crm.example.com/registration/abc123'
+    expect(resolveRegistrationLinkHydration(persisted)).toEqual({
+      link: persisted,
+      loadQr: true,
+    })
+  })
+
+  it('never requests a QR when there is no persisted link', () => {
+    expect(resolveRegistrationLinkHydration('')).toEqual({
+      link: '',
+      loadQr: false,
+    })
+    expect(resolveRegistrationLinkHydration(undefined)).toEqual({
+      link: '',
+      loadQr: false,
+    })
+    expect(resolveRegistrationLinkHydration(null)).toEqual({
+      link: '',
+      loadQr: false,
+    })
+  })
+
+  it('preserves the persisted URL verbatim so the same registration token is reused', () => {
+    const persisted =
+      'https://crm.example.com/registration/workshop?token=stable-token'
+    expect(resolveRegistrationLinkHydration(persisted).link).toBe(persisted)
   })
 })
