@@ -197,7 +197,7 @@ def process_registration(token: str | None = None, data: str | dict | None = Non
 		else:
 			add_note(source_deal, "Workshop registration declined", lines(_person(values), _comments(values)))
 
-		send_confirmation(values)
+		send_confirmation(values, source_deal)
 		return result
 	except Exception as e:
 		logger.error(f"[process_registration] Failed to register a workshop attendee. {e}")
@@ -298,14 +298,24 @@ def create_registration_deal(values: dict, organization: str | None, contact, so
 	return deal
 
 
-def send_confirmation(values: dict):
+def confirmation_context(values: dict, source_deal) -> dict:
+	"""The render context for the confirmation email: the submitted form fields plus the
+	authoritative Program Type from the source Workshop deal. The registration form never
+	collects `program_type`, so without this the database template would emit the literal
+	`{{ program_type }}`; a missing value is normalised to an empty string so the template's
+	`{% if program_type %}` row drops out cleanly."""
+	return {**values, "program_type": (source_deal.get("custom_program_type") or "").strip()}
+
+
+def send_confirmation(values: dict, source_deal):
 	"""Best-effort: a mail failure must not undo a completed registration."""
 	try:
 		template = frappe.get_doc("Email Template", CONFIRMATION_TEMPLATE)
+		context = confirmation_context(values, source_deal)
 		frappe.sendmail(
 			recipients=[values["email"]],
-			subject=frappe.render_template(template.subject, values),
-			message=frappe.render_template(template.response_html, values),
+			subject=frappe.render_template(template.subject, context),
+			message=frappe.render_template(template.response_html, context),
 			now=True,
 		)
 	except Exception as e:

@@ -186,6 +186,49 @@ class TestWorkshopRegistration(FrappeTestCase):
 		)
 		self.assertEqual(frappe.db.get_value("CRM Deal", result["deal"], "source"), "Social")
 
+	# ---- confirmation email ----
+
+	def _render_confirmation(self, source_deal):
+		template = frappe.get_doc("Email Template", R.CONFIRMATION_TEMPLATE)
+		ctx = R.confirmation_context(values(WORKSHOP_INTEREST_IN), source_deal)
+		return (
+			frappe.render_template(template.subject, ctx),
+			frappe.render_template(template.response_html, ctx),
+		)
+
+	def test_confirmation_email_renders_program_type_when_present(self):
+		self.deal.db_set("custom_program_type", "TxB Executive")
+		subject, body = self._render_confirmation(self.deal)
+		self.assertIn("Programa: TxB Executive", body)
+		self.assertNotIn("{{", subject + body)
+
+	def test_confirmation_email_omits_program_row_when_absent(self):
+		# self.deal carries no custom_program_type; the whole Programa row must drop out.
+		subject, body = self._render_confirmation(self.deal)
+		self.assertNotIn("Programa", body)
+		self.assertNotIn("program_type", subject + body)
+		self.assertNotIn("{{", subject + body)
+
+	def test_setup_makes_existing_raw_program_row_conditional_and_is_idempotent(self):
+		raw = "<p>Sveiki</p><table><tr><td>Programa: {{ program_type }}</td></tr></table>"
+		frappe.db.set_value("Email Template", R.CONFIRMATION_TEMPLATE, "response_html", raw)
+		registration_setup.ensure_confirmation_email_template()
+		html = frappe.db.get_value("Email Template", R.CONFIRMATION_TEMPLATE, "response_html")
+		self.assertIn("{% if program_type %}", html)
+		self.assertIn("<p>Sveiki</p>", html)  # the rest of the body is preserved
+		registration_setup.ensure_confirmation_email_template()  # second run changes nothing
+		self.assertEqual(
+			frappe.db.get_value("Email Template", R.CONFIRMATION_TEMPLATE, "response_html"), html
+		)
+		template = frappe.get_doc("Email Template", R.CONFIRMATION_TEMPLATE)
+		self.assertIn(
+			"Programa: TxB Advanced",
+			frappe.render_template(template.response_html, {"program_type": "TxB Advanced"}),
+		)
+		self.assertNotIn(
+			"Programa", frappe.render_template(template.response_html, {"program_type": ""})
+		)
+
 	# ---- public page ----
 
 	def test_register_page_renders_for_a_live_token_and_404s_otherwise(self):

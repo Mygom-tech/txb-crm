@@ -45,3 +45,4 @@ crm.patches.v1_0.add_handover_link_custom_fields
 crm.patches.v1_0.add_conversion_result_fields
 crm.patches.v1_0.seed_workshop_registration_form
 crm.patches.v1_0.workshop_registration_v2
+crm.patches.v1_0.conditional_program_type_in_confirmation
