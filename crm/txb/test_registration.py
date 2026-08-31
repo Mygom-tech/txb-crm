@@ -19,6 +19,38 @@ from crm.txb.constants import (
 
 OWNER = "Administrator"
 
+# A realistic confirmation body shaped like the production "Registracijos patvirtinimas" template:
+# an outer wrapper, a branded header, a padded central content container that holds the greeting,
+# acknowledgement, a submitted-data table (with the Programa row and other optional-field guards),
+# contact and closing text, and a footer. The Programa row is raw here -- the shape before any
+# conditionalisation.
+_HEADER = (
+	'<div style="background: #002d5b; padding: 20px; text-align: center;">'
+	'<img src="https://txb.example/logo.png" alt="TxB" /></div>'
+)
+_CONTENT = (
+	'<div style="padding: 30px; color: #333;">'
+	"<p>Sveiki, {{ first_name }},</p>"
+	"<p>Jūsų registracija į „{{ workshop_name }}“ sėkmingai gauta. Ačiū!</p>"
+	"<p>Pateikti duomenys:</p>"
+	"<table>"
+	"<tr><td>Vardas: {{ first_name }} {{ last_name }}</td></tr>"
+	"<tr><td>El. paštas: {{ email }}</td></tr>"
+	"{% if phone %}<tr><td>Telefonas: {{ phone }}</td></tr>{% endif %}"
+	"<tr><td>Programa: {{ program_type }}</td></tr>"
+	"{% if company_name %}<tr><td>Įmonė: {{ company_name }}</td></tr>{% endif %}"
+	"</table>"
+	"<p>Jei turite klausimų, susisiekite su mumis.</p>"
+	"<p>Pagarbiai, TxB komanda</p>"
+	"</div>"
+)
+_FOOTER = '<div style="background: #f4f4f4; padding: 15px; text-align: center;"><p>© TxB</p></div>'
+FULL_CONFIRMATION_HTML = '<div style="max-width: 600px; margin: 0 auto;">' + _HEADER + _CONTENT + _FOOTER + "</div>"
+# Exactly the TXB-200 damage: the whole padded content container wrapped in the Program Type guard.
+DAMAGED_CONFIRMATION_HTML = FULL_CONFIRMATION_HTML.replace(
+	_CONTENT, "{% if program_type %}" + _CONTENT + "{% endif %}", 1
+)
+
 
 def workshop_deal(**kw):
 	doc = frappe.get_doc(
@@ -254,6 +286,87 @@ class TestWorkshopRegistration(FrappeTestCase):
 		self.assertTrue(hasattr(patch, "execute"))
 		self.assertIs(registration_setup.CONFIRMATION_TEMPLATE, constants.CONFIRMATION_TEMPLATE)
 		self.assertIs(R.CONFIRMATION_TEMPLATE, constants.CONFIRMATION_TEMPLATE)
+
+	# ---- confirmation email: realistic full-template regression ----
+
+	def _store_confirmation(self, html):
+		frappe.db.set_value("Email Template", R.CONFIRMATION_TEMPLATE, "response_html", html)
+
+	def _render_stored(self, program_type):
+		html = frappe.db.get_value("Email Template", R.CONFIRMATION_TEMPLATE, "response_html")
+		ctx = {
+			"first_name": "Ona",
+			"last_name": "Testė",
+			"email": "reg-e2e@test.invalid",
+			"phone": "+37060000001",
+			"company_name": "Imone UAB",
+			"workshop_name": "Sales Workshop",
+			"program_type": program_type,
+		}
+		return html, frappe.render_template(html, ctx)
+
+	def _assert_full_body_intact(self, body):
+		# every established section of the TxB confirmation survives, only Programa may vary
+		self.assertIn("Sveiki, Ona,", body)
+		self.assertIn("sėkmingai gauta", body)  # registration acknowledgement
+		self.assertIn("Pateikti duomenys:", body)  # submitted-data heading
+		self.assertIn("El. paštas: reg-e2e@test.invalid", body)  # a submitted field
+		self.assertIn("Telefonas: +37060000001", body)  # a nested optional-field guard still fires
+		self.assertIn("Įmonė: Imone UAB", body)  # the other optional-field guard is preserved
+		self.assertIn("susisiekite su mumis", body)  # contact text
+		self.assertIn("Pagarbiai, TxB komanda", body)  # closing
+		self.assertIn("© TxB", body)  # footer
+		self.assertNotIn("{{", body)
+		self.assertNotIn("{%", body)  # no raw Jinja leaks
+
+	def test_repair_unwraps_txb200_guard_and_conditions_only_program_row(self):
+		# A template already damaged by TXB-200: the whole content block is behind the guard.
+		self._store_confirmation(DAMAGED_CONFIRMATION_HTML)
+		registration_setup.ensure_confirmation_email_template()
+		html, blank = self._render_stored("")
+		# the broad guard is gone; the surviving guard fronts the Programa <tr>, not the <div>.
+		self.assertNotIn("{% if program_type %}<div", html)
+		self.assertIn("{% if program_type %}<tr", html)
+		self._assert_full_body_intact(blank)
+		self.assertNotIn("Programa", blank)  # only the Programa row drops out
+		_, selected = self._render_stored("TxB Executive")
+		self._assert_full_body_intact(selected)
+		self.assertIn("Programa: TxB Executive", selected)
+		# repeated execution is a no-op
+		registration_setup.ensure_confirmation_email_template()
+		self.assertEqual(
+			frappe.db.get_value("Email Template", R.CONFIRMATION_TEMPLATE, "response_html"), html
+		)
+
+	def test_repair_conditions_row_on_a_healthy_full_template_and_stays_idempotent(self):
+		# A never-damaged full body: only the raw Programa row needs gating.
+		self._store_confirmation(FULL_CONFIRMATION_HTML)
+		registration_setup.ensure_confirmation_email_template()
+		html, blank = self._render_stored("")
+		self.assertIn("{% if program_type %}<tr", html)
+		self.assertNotIn("{% if program_type %}<div", html)
+		self._assert_full_body_intact(blank)
+		self.assertNotIn("Programa", blank)
+		_, selected = self._render_stored("TxB Advanced")
+		self.assertIn("Programa: TxB Advanced", selected)
+		registration_setup.ensure_confirmation_email_template()  # second run changes nothing
+		self.assertEqual(
+			frappe.db.get_value("Email Template", R.CONFIRMATION_TEMPLATE, "response_html"), html
+		)
+
+	def test_confirmation_failure_is_best_effort_and_keeps_the_registration(self):
+		# A send failure must not roll back a completed registration (ac-2 boundary).
+		import unittest.mock as mock
+
+		with mock.patch(
+			"crm.txb.api.registration.frappe.sendmail", side_effect=Exception("smtp down")
+		):
+			result = R.process_registration(
+				self.token, frappe.as_json(values(WORKSHOP_INTEREST_IN, email="reg-mail@test.invalid"))
+			)
+		self.assertIn("deal", result)
+		self.assertTrue(frappe.db.exists("CRM Deal", result["deal"]))
+		self.assertTrue(frappe.db.exists("Contact", result["contact"]))
 
 	# ---- public page ----
 
