@@ -30,6 +30,7 @@ from frappe.utils import get_url
 from crm.api.form import _apply_utm_source
 from crm.fcrm.doctype.crm_deal.crm_deal import contact_exists
 from crm.txb.constants import (
+	CONFIRMATION_TEMPLATE,
 	FIELD_CONTACT_REGISTRATION_STATUS,
 	FIELD_CONTACT_SOURCE_WORKSHOP,
 	FIELD_REGISTRATION_LINK,
@@ -44,8 +45,6 @@ from crm.txb.constants import (
 )
 from crm.txb.doc_events.deal import issue_registration_link
 from crm.txb.pipelines.common import add_note, add_task, deal_link, lines
-
-CONFIRMATION_TEMPLATE = "Registracijos patvirtinimas"
 
 # What the page collects, in the shape the CRM form template renders (see crm/www/register.py).
 FORM_FIELDS = (

@@ -6,8 +6,8 @@ import re
 import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
-from crm.txb.api.registration import CONFIRMATION_TEMPLATE
 from crm.txb.constants import (
+	CONFIRMATION_TEMPLATE,
 	FIELD_CONTACT_REGISTRATION_STATUS,
 	FIELD_CONTACT_SOURCE_WORKSHOP,
 	WORKSHOP_INTEREST_OPTIONS,

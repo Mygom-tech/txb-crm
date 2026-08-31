@@ -231,3 +231,8 @@ REGISTRATION_DEAL_STATUS = "Submitted"
 # Recorded on the Contact: what they answered and for which workshop.
 FIELD_CONTACT_REGISTRATION_STATUS = "custom_workshop_registration_status"
 FIELD_CONTACT_SOURCE_WORKSHOP = "custom_source_workshop"
+# The persisted Email Template sent when a registration is confirmed. Named here so both the
+# registration runtime (crm.txb.api.registration) and the idempotent setup/patch code
+# (crm.txb.registration_setup) share it without the setup module importing the registration API
+# -- that import created a circular dependency through crm.install during bench migrate (TXB-201).
+CONFIRMATION_TEMPLATE = "Registracijos patvirtinimas"
