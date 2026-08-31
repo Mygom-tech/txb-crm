@@ -52,6 +52,7 @@
 
 <script setup>
 import { copyToClipboard } from '@/utils'
+import { resolveRegistrationLinkHydration } from '@/utils/registrationLink'
 import { call, toast } from 'frappe-ui'
 import { ref, watch } from 'vue'
 
@@ -108,10 +109,13 @@ function downloadUrl(fmt) {
 watch(
   () => props.deal.custom_registration_link,
   (v) => {
-    if (v && v !== link.value) {
-      link.value = v
-      loadQr()
-    }
+    // Any non-empty persisted link must hydrate the QR at least once — including
+    // the initial render where it already equals the local link — so the QR
+    // survives a deal refresh. Empty links never request a QR.
+    const { link: next, loadQr: shouldLoad } = resolveRegistrationLinkHydration(v)
+    if (!shouldLoad) return
+    link.value = next
+    loadQr()
   },
   { immediate: true },
 )
