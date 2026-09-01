@@ -25,6 +25,7 @@
                 ? document.statuses
                 : document._statuses,
               triggerStatusChange,
+              doc.status,
             )
           "
         >

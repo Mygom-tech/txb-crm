@@ -6,6 +6,8 @@ import {
   CONTACT_ATTEMPTED_STATUS,
   CONTACTED_STATUS,
   DISCOVERY_STATUS,
+  FOLLOW_UP_STATUS,
+  NURTURE_STATUS,
   isGuardedLeadTransition,
   resolveLeadStatusTransition,
   LEAD_TRANSITION_SAVED,
@@ -37,6 +39,8 @@ function stubActions(overrides = {}) {
     logReach: vi.fn().mockResolvedValue({ status: CONTACTED_STATUS }),
     logADial: vi.fn().mockResolvedValue({ status: CONTACT_ATTEMPTED_STATUS }),
     logDiscovery: vi.fn().mockResolvedValue({ status: DISCOVERY_STATUS }),
+    scheduleFollowUp: vi.fn().mockResolvedValue({ status: FOLLOW_UP_STATUS }),
+    setNurture: vi.fn().mockResolvedValue({ status: NURTURE_STATUS }),
     ...overrides,
   }
 }
@@ -163,7 +167,7 @@ describe('unguarded and ordinary transitions keep their contracts (ac-3)', () =>
     const actions = stubActions()
     const routed = await resolveLeadStatusTransition(
       CONTACT_ATTEMPTED_STATUS,
-      'Nurture',
+      'Not interested',
       LEAD,
       { actions },
     )
@@ -184,10 +188,107 @@ describe('unguarded and ordinary transitions keep their contracts (ac-3)', () =>
 
   it('keeps an ordinary move on the plain status save', async () => {
     const actions = stubActions()
-    const routed = await resolveLeadStatusTransition('Contacted', 'Nurture', LEAD, { actions })
+    const routed = await resolveLeadStatusTransition('Contacted', 'Not interested', LEAD, {
+      actions,
+    })
     expect(routed.outcome).toBe(LEAD_TRANSITION_PLAIN)
     expect(routed.guarded).toBe(false)
-    expect(routed.status).toBe('Nurture')
+    expect(routed.status).toBe('Not interested')
+  })
+})
+
+describe('Follow-up and Nurture route through the shared authority (TXB-211)', () => {
+  it('routes entering Follow-up through Schedule a follow-up, never a plain save', async () => {
+    const actions = stubActions()
+    const routed = await resolveLeadStatusTransition('Open', FOLLOW_UP_STATUS, LEAD, { actions })
+
+    expect(actions.scheduleFollowUp).toHaveBeenCalledOnce()
+    expect(actions.scheduleFollowUp).toHaveBeenCalledWith(LEAD, expect.anything())
+    expect(actions.setNurture).not.toHaveBeenCalled()
+    expect(actions.logReach).not.toHaveBeenCalled()
+    expect(routed).toMatchObject({
+      outcome: LEAD_TRANSITION_SAVED,
+      guarded: true,
+      status: FOLLOW_UP_STATUS,
+    })
+  })
+
+  it('routes entering Nurture through Nurture the lead, never a plain save', async () => {
+    const actions = stubActions()
+    const routed = await resolveLeadStatusTransition('Contacted', NURTURE_STATUS, LEAD, { actions })
+
+    expect(actions.setNurture).toHaveBeenCalledOnce()
+    expect(actions.setNurture).toHaveBeenCalledWith(LEAD, expect.anything())
+    expect(actions.scheduleFollowUp).not.toHaveBeenCalled()
+    expect(routed).toMatchObject({
+      outcome: LEAD_TRANSITION_SAVED,
+      guarded: true,
+      status: NURTURE_STATUS,
+    })
+  })
+
+  it('gates a target-only (optimistic-from) Follow-up / Nurture caller into the same action', async () => {
+    // The side-panel / Details controls overwrite the in-memory status first and pass `from`
+    // as undefined; entering Follow-up or Nurture must still gate through its action.
+    expect(isGuardedLeadTransition(undefined, FOLLOW_UP_STATUS)).toBe(true)
+    expect(isGuardedLeadTransition(undefined, NURTURE_STATUS)).toBe(true)
+
+    const followUp = stubActions()
+    await resolveLeadStatusTransition(undefined, FOLLOW_UP_STATUS, LEAD, { actions: followUp })
+    expect(followUp.scheduleFollowUp).toHaveBeenCalledOnce()
+
+    const nurture = stubActions()
+    await resolveLeadStatusTransition(undefined, NURTURE_STATUS, LEAD, { actions: nurture })
+    expect(nurture.setNurture).toHaveBeenCalledOnce()
+  })
+
+  it('does not re-gate a Lead already resting in Follow-up or Nurture when moving onward', async () => {
+    const actions = stubActions()
+    const fromFollowUp = await resolveLeadStatusTransition(FOLLOW_UP_STATUS, 'Lost', LEAD, {
+      actions,
+    })
+    const fromNurture = await resolveLeadStatusTransition(NURTURE_STATUS, 'Lost', LEAD, { actions })
+
+    expect(actions.scheduleFollowUp).not.toHaveBeenCalled()
+    expect(actions.setNurture).not.toHaveBeenCalled()
+    expect(fromFollowUp.outcome).toBe(LEAD_TRANSITION_PLAIN)
+    expect(fromNurture.outcome).toBe(LEAD_TRANSITION_PLAIN)
+  })
+
+  it('preserves the prior status when Follow-up is cancelled or fails', async () => {
+    const cancelled = stubActions({ scheduleFollowUp: vi.fn().mockResolvedValue(null) })
+    const onCancel = await resolveLeadStatusTransition('Open', FOLLOW_UP_STATUS, LEAD, {
+      actions: cancelled,
+    })
+    expect(onCancel.outcome).toBe(LEAD_TRANSITION_CANCELLED)
+    expect(onCancel.status).toBe('Open')
+
+    const failure = new Error('schedule_follow_up failed')
+    const failed = stubActions({ scheduleFollowUp: vi.fn().mockRejectedValue(failure) })
+    const onFail = await resolveLeadStatusTransition('Open', FOLLOW_UP_STATUS, LEAD, {
+      actions: failed,
+    })
+    expect(onFail.outcome).toBe(LEAD_TRANSITION_FAILED)
+    expect(onFail.status).toBe('Open')
+    expect(onFail.error).toBe(failure)
+  })
+
+  it('preserves the prior status when Nurture is cancelled or fails', async () => {
+    const cancelled = stubActions({ setNurture: vi.fn().mockResolvedValue(null) })
+    const onCancel = await resolveLeadStatusTransition('Contacted', NURTURE_STATUS, LEAD, {
+      actions: cancelled,
+    })
+    expect(onCancel.outcome).toBe(LEAD_TRANSITION_CANCELLED)
+    expect(onCancel.status).toBe('Contacted')
+
+    const failure = new Error('set_nurture failed')
+    const failed = stubActions({ setNurture: vi.fn().mockRejectedValue(failure) })
+    const onFail = await resolveLeadStatusTransition('Contacted', NURTURE_STATUS, LEAD, {
+      actions: failed,
+    })
+    expect(onFail.outcome).toBe(LEAD_TRANSITION_FAILED)
+    expect(onFail.status).toBe('Contacted')
+    expect(onFail.error).toBe(failure)
   })
 })
 

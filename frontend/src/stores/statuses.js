@@ -1,5 +1,6 @@
 import IndicatorIcon from '@/components/Icons/IndicatorIcon.vue'
 import { parseColor, isTranslatable } from '@/utils'
+import { isRetiredLeadStatus } from '@/utils/leadActions'
 import { defineStore } from 'pinia'
 import { useTelemetry } from 'frappe-ui/frappe'
 import { createListResource, createResource } from 'frappe-ui'
@@ -93,7 +94,12 @@ export const statusesStore = defineStore('crm-statuses', () => {
     return communicationStatuses[name]
   }
 
-  function statusOptions(doctype, statuses = [], triggerStatusChange = null) {
+  function statusOptions(
+    doctype,
+    statuses = [],
+    triggerStatusChange = null,
+    currentValue = null,
+  ) {
     let statusesByName =
       doctype == 'deal' ? dealStatusesByName : leadStatusesByName
 
@@ -110,6 +116,17 @@ export const statusesStore = defineStore('crm-statuses', () => {
 
     let options = []
     for (const status in statusesByName) {
+      // TXB-211: the retired Lead statuses (Qualified, legacy "No Answer") are never selectable
+      // on any surface. A record still resting on one during a mixed-version cutover keeps it
+      // readable — only the record's own current value is retained, so no other retired status
+      // can be picked for a new or existing Lead.
+      if (
+        doctype != 'deal' &&
+        isRetiredLeadStatus(status) &&
+        status !== currentValue
+      ) {
+        continue
+      }
       options.push({
         label: translatable
           ? __(statusesByName[status]?.name)

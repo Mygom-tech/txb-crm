@@ -629,7 +629,9 @@ export function isGuardedLeadTransition(fromStatus, toStatus) {
     requiresReach(fromStatus, toStatus) ||
     requiresDial(toStatus) ||
     requiresDiscoverySchedule(fromStatus, toStatus) ||
-    requiresDiscoveryRun(fromStatus, toStatus)
+    requiresDiscoveryRun(fromStatus, toStatus) ||
+    requiresFollowUp(fromStatus, toStatus) ||
+    requiresNurture(fromStatus, toStatus)
   )
 }
 
@@ -653,7 +655,8 @@ export function isGuardedLeadTransition(fromStatus, toStatus) {
  * @param {string} [options.actor]
  * @param {string} [options.now]
  * @param {Object} [options.defaults]
- * @param {Object} [options.actions] - { logReach, logADial, logDiscovery } overrides
+ * @param {Object} [options.actions] - { logReach, logADial, logDiscovery, runDiscoveryMeeting,
+ *   scheduleFollowUp, setNurture } overrides
  * @returns {Promise<{outcome: string, guarded: boolean, status: string, result?: any, error?: any}>}
  */
 export async function resolveLeadStatusTransition(
@@ -662,7 +665,15 @@ export async function resolveLeadStatusTransition(
   lead,
   { actor, now, defaults, actions } = {},
 ) {
-  const run = { logReach, logADial, logDiscovery, runDiscoveryMeeting, ...(actions || {}) }
+  const run = {
+    logReach,
+    logADial,
+    logDiscovery,
+    runDiscoveryMeeting,
+    scheduleFollowUp,
+    setNurture,
+    ...(actions || {}),
+  }
 
   let invoke = null
   if (requiresReach(fromStatus, toStatus)) {
@@ -675,6 +686,14 @@ export async function resolveLeadStatusTransition(
     // Entering the Discovery meeting run trigger opens the six-outcome modal; the server applies
     // the chosen outcome atomically, so the lead never rests on the trigger status itself.
     invoke = () => run.runDiscoveryMeeting(lead, { defaults })
+  } else if (requiresFollowUp(fromStatus, toStatus)) {
+    // Entering Follow-up opens the follow-up modal; the server records the follow-up note and the
+    // status atomically, so a cancel or failure leaves the lead exactly where it was.
+    invoke = () => run.scheduleFollowUp(lead, { actor, now })
+  } else if (requiresNurture(fromStatus, toStatus)) {
+    // Entering Nurture opens the nurture-plan modal; the server records the plan note and the
+    // status atomically, so a cancel or failure leaves the lead exactly where it was.
+    invoke = () => run.setNurture(lead, { actor, now })
   }
 
   // Unguarded: the caller owns the ordinary status save (including the Lost-reason path).
@@ -849,4 +868,268 @@ export async function logDiscovery(lead, { actor, now } = {}) {
     status: payload.status,
     activity: payload.activity,
   })
+}
+
+// -----------------------------------------------------------------------------------------
+// Schedule a follow-up (TXB-210): entering "Follow-up"
+// -----------------------------------------------------------------------------------------
+
+/** The warm-resting status a Lead may only enter by scheduling a follow-up. Mirrors the
+ * server's LEAD_STATUS_FOLLOW_UP (crm/txb/constants.py); the atomic status+note save lives
+ * behind crm.txb.api.actions.schedule_follow_up, and require_follow_up_context refuses any
+ * other write into it. */
+export const FOLLOW_UP_STATUS = 'Follow-up'
+
+/**
+ * Does moving from `fromStatus` to `toStatus` require scheduling a follow-up?
+ *
+ * Entering Follow-up (from anywhere but Follow-up itself) is the only gate. Re-saving a Lead
+ * already resting in Follow-up, or moving it onward, does not re-prompt. A target-only caller
+ * whose in-memory status was already mutated optimistically passes `fromStatus` as undefined;
+ * the entry gate still fires so it too routes through the modal instead of writing a bare status.
+ */
+export function requiresFollowUp(fromStatus, toStatus) {
+  if (normalizeStatus(toStatus) !== FOLLOW_UP_STATUS) return false
+  return normalizeStatus(fromStatus) !== FOLLOW_UP_STATUS
+}
+
+/** Fields the Follow-up dialog renders. A follow-up date-time and context are both required,
+ * mirroring the server's FOLLOW_UP_REQUIRED_FIELDS. */
+export function followUpFields() {
+  return [
+    {
+      fieldname: 'follow_up_date',
+      label: __('Follow-up date and time'),
+      fieldtype: 'Datetime',
+      reqd: 1,
+    },
+    {
+      fieldname: 'follow_up_context',
+      label: __('Follow-up context'),
+      fieldtype: 'Small Text',
+      reqd: 1,
+    },
+  ]
+}
+
+/** Fieldnames the server will reject if empty. */
+export function requiredFollowUpFields() {
+  return followUpFields()
+    .filter((field) => field.reqd)
+    .map((field) => field.fieldname)
+}
+
+/**
+ * Validate a Follow-up payload. Returns the list of missing required fieldnames; an empty list
+ * means valid. Whitespace is not a value, matching the server's emptiness rule.
+ */
+export function validateFollowUp(data) {
+  const doc = data || {}
+  return requiredFollowUpFields().filter((fieldname) => !isFilled(doc[fieldname]))
+}
+
+/** True when the Follow-up payload has every required field. */
+export function isFollowUpValid(data) {
+  return validateFollowUp(data).length === 0
+}
+
+/**
+ * Build the atomic follow-up payload: the activity plus the status it unlocks. Returns null
+ * when invalid so a caller cannot post an empty follow-up; the server re-validates.
+ */
+export function buildFollowUpActivity(data, { actor, now } = {}) {
+  if (!isFollowUpValid(data)) return null
+  const doc = data || {}
+  return {
+    status: FOLLOW_UP_STATUS,
+    activity: {
+      type: 'follow_up',
+      timestamp: now || new Date().toISOString(),
+      actor: actor || null,
+      follow_up_date: String(doc.follow_up_date).trim(),
+      follow_up_context: String(doc.follow_up_context).trim(),
+    },
+  }
+}
+
+/**
+ * Prompt for the follow-up, then atomically save the follow-up note and the Follow-up status.
+ *
+ * Resolves with the server's response, or null when the user cancels — a cancel posts nothing,
+ * so the Lead's status is left untouched.
+ */
+export async function scheduleFollowUp(lead, { actor, now } = {}) {
+  const isoNow = now || new Date().toISOString()
+
+  const data = await renderFieldLayoutDialog({
+    title: __('Schedule a follow-up'),
+    fields: followUpFields(),
+    required: requiredFollowUpFields(),
+    submitLabel: __('Schedule follow-up'),
+    cancelLabel: __('Cancel'),
+  })
+
+  // Cancel (or an invalid payload the dialog should have blocked): do not touch status.
+  if (!data) return null
+
+  const payload = buildFollowUpActivity(data, { actor, now: isoNow })
+  if (!payload) return null
+
+  // Imported lazily so the pure helpers above stay unit-testable without dragging frappe-ui's
+  // resource plugin into the test environment.
+  const { call } = await import('frappe-ui')
+
+  return await call('crm.txb.api.actions.schedule_follow_up', {
+    lead,
+    status: payload.status,
+    activity: payload.activity,
+  })
+}
+
+// -----------------------------------------------------------------------------------------
+// Nurture the lead (TXB-210): entering "Nurture"
+// -----------------------------------------------------------------------------------------
+
+/** The warm-resting status a Lead may only enter by recording a nurture plan. Mirrors the
+ * server's LEAD_STATUS_NURTURE (crm/txb/constants.py); the atomic status+note save lives behind
+ * crm.txb.api.actions.set_nurture, and require_nurture_context refuses any other write into it.
+ * A discovery meeting can also rest a lead here through run_discovery_meeting, which is exempt
+ * from the guard because it is itself an authoritative note-recording action. */
+export const NURTURE_STATUS = 'Nurture'
+
+/**
+ * Does moving from `fromStatus` to `toStatus` require recording a nurture plan?
+ *
+ * Entering Nurture (from anywhere but Nurture itself) is the only gate. Re-saving a Lead already
+ * resting in Nurture, or moving it onward, does not re-prompt. A target-only caller whose
+ * in-memory status was already mutated optimistically passes `fromStatus` as undefined; the entry
+ * gate still fires so it too routes through the modal instead of writing a bare status.
+ */
+export function requiresNurture(fromStatus, toStatus) {
+  if (normalizeStatus(toStatus) !== NURTURE_STATUS) return false
+  return normalizeStatus(fromStatus) !== NURTURE_STATUS
+}
+
+/** Fields the Nurture dialog renders. Nurture context and next action are both required; the
+ * next-action date-time is optional, mirroring the server's NURTURE_REQUIRED_FIELDS. */
+export function nurtureFields() {
+  return [
+    {
+      fieldname: 'nurture_context',
+      label: __('Nurture context'),
+      fieldtype: 'Small Text',
+      reqd: 1,
+    },
+    {
+      fieldname: 'next_action',
+      label: __('Next action'),
+      fieldtype: 'Small Text',
+      reqd: 1,
+    },
+    {
+      fieldname: 'next_action_date',
+      label: __('Next action date'),
+      fieldtype: 'Datetime',
+      reqd: 0,
+    },
+  ]
+}
+
+/** Fieldnames the server will reject if empty. The optional next-action date is excluded. */
+export function requiredNurtureFields() {
+  return nurtureFields()
+    .filter((field) => field.reqd)
+    .map((field) => field.fieldname)
+}
+
+/**
+ * Validate a Nurture payload. Returns the list of missing required fieldnames; an empty list
+ * means valid. The next-action date is optional and never reported. Whitespace is not a value.
+ */
+export function validateNurture(data) {
+  const doc = data || {}
+  return requiredNurtureFields().filter((fieldname) => !isFilled(doc[fieldname]))
+}
+
+/** True when the Nurture payload has both required fields; the date may stay empty. */
+export function isNurtureValid(data) {
+  return validateNurture(data).length === 0
+}
+
+/**
+ * Build the atomic nurture payload: the activity plus the status it unlocks. The optional
+ * next-action date travels only when supplied, as null otherwise. Returns null when invalid so
+ * a caller cannot post an empty plan; the server re-validates.
+ */
+export function buildNurtureActivity(data, { actor, now } = {}) {
+  if (!isNurtureValid(data)) return null
+  const doc = data || {}
+  const nextActionDate = isFilled(doc.next_action_date)
+    ? String(doc.next_action_date).trim()
+    : null
+  return {
+    status: NURTURE_STATUS,
+    activity: {
+      type: 'nurture',
+      timestamp: now || new Date().toISOString(),
+      actor: actor || null,
+      nurture_context: String(doc.nurture_context).trim(),
+      next_action: String(doc.next_action).trim(),
+      next_action_date: nextActionDate,
+    },
+  }
+}
+
+/**
+ * Prompt for the nurture plan, then atomically save the nurture note and the Nurture status.
+ *
+ * Resolves with the server's response, or null when the user cancels — a cancel posts nothing,
+ * so the Lead's status is left untouched.
+ */
+export async function setNurture(lead, { actor, now } = {}) {
+  const isoNow = now || new Date().toISOString()
+
+  const data = await renderFieldLayoutDialog({
+    title: __('Nurture the lead'),
+    fields: nurtureFields(),
+    required: requiredNurtureFields(),
+    submitLabel: __('Set to nurture'),
+    cancelLabel: __('Cancel'),
+  })
+
+  // Cancel (or an invalid payload the dialog should have blocked): do not touch status.
+  if (!data) return null
+
+  const payload = buildNurtureActivity(data, { actor, now: isoNow })
+  if (!payload) return null
+
+  // Imported lazily so the pure helpers above stay unit-testable without dragging frappe-ui's
+  // resource plugin into the test environment.
+  const { call } = await import('frappe-ui')
+
+  return await call('crm.txb.api.actions.set_nurture', {
+    lead,
+    status: payload.status,
+    activity: payload.activity,
+  })
+}
+
+// -----------------------------------------------------------------------------------------
+// Retired Lead statuses (TXB-210 migration / TXB-211 option filtering)
+// -----------------------------------------------------------------------------------------
+
+/**
+ * The two Lead statuses retired by crm/patches/v1_0/migrate_qualified_and_no_answer_lead_statuses:
+ * "Qualified" folds onto Contacted, and the legacy "No Answer" *Lead status* folds onto Contact
+ * attempted. Neither may be selected on any Lead status surface anymore, so the central option
+ * source (statusesStore().statusOptions) filters them out. A record still carrying one during a
+ * mixed-version cutover keeps it readable — the option source retains only the record's own
+ * current value. This is the Lead status "No Answer"; the independent CRM Call Log / Log a dial
+ * result "No Answer" (DIAL_RESULTS) is untouched.
+ */
+export const RETIRED_LEAD_STATUSES = ['Qualified', 'No Answer']
+
+/** Whether a Lead status has been retired and must not be offered for selection. */
+export function isRetiredLeadStatus(status) {
+  return RETIRED_LEAD_STATUSES.includes(status)
 }
