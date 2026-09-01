@@ -18,7 +18,16 @@ from crm.txb.pipelines.common import (
 	add_task,
 	apply_deal_fields,
 	lines,
+	set_deal_meeting,
 )
+
+# TXB-209 meeting-flow keys giving each Selling Training meeting its stable Event identity. The
+# discovery and proposal meetings are distinct flows; the training session is one flow whether its
+# datetime arrives with the signed contract or via a later Set Training Date, so both upsert the
+# same Event.
+MEETING_FLOW_DISCOVERY = "training_discovery"
+MEETING_FLOW_PROPOSAL = "training_proposal"
+MEETING_FLOW_TRAINING = "training"
 
 PROPOSAL_STATUSES = ("Draft", "Sent", "Accepted", "Rejected")
 
@@ -49,6 +58,13 @@ STATUS_NOT_INTERESTED = "Training not interested"
 
 def set_discovery_meeting(deal, data):
 	apply_deal_fields(deal, SET_DISCOVERY_MEETING, data)
+
+	set_deal_meeting(
+		deal,
+		flow=MEETING_FLOW_DISCOVERY,
+		subject="Training Discovery Meeting",
+		starts_on=data.get("discovery_datetime"),
+	)
 
 	if data.get("notes"):
 		add_note(deal, "Discovery Meeting Scheduled", data["notes"])
@@ -98,6 +114,13 @@ def run_discovery_meeting(deal, data):
 def set_proposal_meeting(deal, data):
 	apply_deal_fields(deal, SET_PROPOSAL_MEETING, data)
 
+	set_deal_meeting(
+		deal,
+		flow=MEETING_FLOW_PROPOSAL,
+		subject="Training Proposal Meeting",
+		starts_on=data.get("proposal_meeting_datetime"),
+	)
+
 	if data.get("notes"):
 		add_note(deal, "Proposal Meeting Scheduled", data["notes"])
 
@@ -133,6 +156,15 @@ def negotiation_result(deal, data):
 def contract_signed(deal, data):
 	apply_deal_fields(deal, CONTRACT_SIGNED, data)
 
+	# A known training date signed alongside the contract schedules the training session's Event;
+	# a later Set Training Date upserts the same flow, so the two never duplicate.
+	set_deal_meeting(
+		deal,
+		flow=MEETING_FLOW_TRAINING,
+		subject="Training Session",
+		starts_on=data.get("training_datetime"),
+	)
+
 	add_note(
 		deal,
 		"Contract Signed",
@@ -147,6 +179,13 @@ def contract_signed(deal, data):
 
 def set_training_date(deal, data):
 	apply_deal_fields(deal, SET_TRAINING_DATE, data)
+
+	set_deal_meeting(
+		deal,
+		flow=MEETING_FLOW_TRAINING,
+		subject="Training Session",
+		starts_on=data.get("training_datetime"),
+	)
 
 
 def training_run(deal, data):
