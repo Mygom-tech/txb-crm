@@ -17,11 +17,19 @@ from crm.txb.pipelines.common import (
 	add_note,
 	add_task,
 	apply_deal_fields,
+	cancel_deal_meeting,
 	create_coaching_deal,
 	date_part,
 	lines,
 	mark_lost,
+	set_deal_meeting,
 )
+
+# TXB-209 meeting-flow keys. The VCS call is its own meeting; the workshop itself is one flow
+# whether its datetime is confirmed during the VCS call, set directly, or moved by a reschedule,
+# so all of those upsert -- and a cancel mutates -- the same Event.
+MEETING_FLOW_VCS = "vcs_call"
+MEETING_FLOW_WORKSHOP = "workshop"
 
 NOT_INTERESTED_REASONS = (
 	"Prospect declined",
@@ -49,6 +57,13 @@ RESCHEDULE_NEEDS_FOLLOWUP = "No, need to follow up"
 def set_vcs_call(deal, data):
 	apply_deal_fields(deal, SET_VCS_CALL, data)
 
+	set_deal_meeting(
+		deal,
+		flow=MEETING_FLOW_VCS,
+		subject="VCS Call",
+		starts_on=data.get("vcs_datetime"),
+	)
+
 
 def run_vcs_call(deal, data):
 	apply_deal_fields(deal, RUN_VCS_CALL, data)
@@ -59,6 +74,12 @@ def run_vcs_call(deal, data):
 	# workshop_date is derived from it so both the list column and the invariant are fed.
 	if data.get("ws_confirmed") == "Yes" and data.get("confirmed_ws_date"):
 		deal.workshop_date = date_part(data["confirmed_ws_date"])
+		set_deal_meeting(
+			deal,
+			flow=MEETING_FLOW_WORKSHOP,
+			subject="Workshop",
+			starts_on=data["confirmed_ws_date"],
+		)
 
 	add_note(
 		deal,
@@ -83,6 +104,12 @@ def set_workshop(deal, data):
 
 	if data.get("ws_datetime"):
 		deal.workshop_date = date_part(data["ws_datetime"])
+		set_deal_meeting(
+			deal,
+			flow=MEETING_FLOW_WORKSHOP,
+			subject="Workshop",
+			starts_on=data["ws_datetime"],
+		)
 
 
 def run_workshop(deal, data):
@@ -148,6 +175,13 @@ def reschedule_workshop(deal, data):
 	if data.get("reschedule_type") == RESCHEDULE_HAS_DATE:
 		deal.custom_workshop_scheduled_at = data.get("new_datetime")
 		deal.workshop_date = date_part(data.get("new_datetime"))
+		# A known new date moves the same workshop Event, preserving its audit history.
+		set_deal_meeting(
+			deal,
+			flow=MEETING_FLOW_WORKSHOP,
+			subject="Workshop",
+			starts_on=data.get("new_datetime"),
+		)
 		note.append(f"New date: {data.get('new_datetime')}")
 		if data.get("reschedule_notes"):
 			note.append(f"Notes: {data['reschedule_notes']}")
@@ -170,6 +204,9 @@ def reschedule_workshop(deal, data):
 
 def cancel_workshop(deal, data):
 	mark_lost(deal, "Workshop Cancelled", data.get("cancellation_notes") or "")
+
+	# Cancelling the deal cancels its workshop Event in place, preserving its lifecycle history.
+	cancel_deal_meeting(deal, flow=MEETING_FLOW_WORKSHOP)
 
 	if data.get("schedule_followup") and data.get("followup_type") == "Task":
 		add_task(

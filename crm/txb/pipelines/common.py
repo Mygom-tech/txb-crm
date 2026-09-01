@@ -8,6 +8,7 @@ behaviour and keeps them inside the caller's transaction.
 import frappe
 from frappe.utils import nowdate
 
+from crm.txb import meetings
 from crm.txb.constants import (
 	FIELD_DELIVERY_DEAL,
 	FIELD_SALES_SOURCE_DEAL,
@@ -53,6 +54,34 @@ def add_task(deal, title: str, description: str, assigned_to=None, due_date=None
 			"status": TASK_BACKLOG,
 		}
 	).insert(ignore_permissions=True)
+
+
+def set_deal_meeting(deal, *, flow, subject, starts_on, meeting_type=None, link=None, address=None):
+	"""Upsert the one canonical Event for an Opportunity meeting flow (TXB-209).
+
+	Thin boundary over `crm.txb.meetings.sync_meeting_event`: it links the Event to the exact CRM
+	Deal, carries the deal's Contacts as participants, and lets a re-run or reschedule mutate the
+	same Event under the caller's action transaction instead of creating a duplicate. A blank
+	datetime is a no-op, so a branch that did not actually schedule a meeting records no Event.
+	"""
+	if not starts_on:
+		return
+	meetings.sync_meeting_event(
+		reference_doctype=DEAL_DOCTYPE,
+		reference_docname=deal.name,
+		flow=flow,
+		subject=subject,
+		starts_on=starts_on,
+		meeting_type=meeting_type,
+		link=link,
+		address=address,
+		participants=meetings.deal_participants(deal),
+	)
+
+
+def cancel_deal_meeting(deal, *, flow):
+	"""Cancel an Opportunity meeting flow's canonical Event in place, preserving its history."""
+	meetings.cancel_meeting_event(DEAL_DOCTYPE, deal.name, flow)
 
 
 def lines(*parts) -> str:

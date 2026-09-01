@@ -11,6 +11,7 @@ import json
 import frappe
 from frappe import _
 
+from crm.txb.meetings import sync_meeting_event
 from crm.txb.permissions import can_change_status, is_admin
 from crm.txb.pipelines.actions import find_action, get_actions, resolve_to_state
 
@@ -34,6 +35,9 @@ DISCOVERY_STATUS = "Discovery meeting set"
 DISCOVERY_REQUIRED_FIELDS = ("meeting_date", "meeting_time", "meeting_type")
 DISCOVERY_TYPE_VIRTUAL = "Virtual"
 DISCOVERY_TYPE_ONSITE = "Onsite"
+# TXB-209: the meeting-flow key that gives a Lead's Discovery meeting its stable Event identity,
+# so a reschedule or a repeated submit updates the one canonical Event rather than duplicating it.
+DISCOVERY_MEETING_FLOW = "lead_discovery"
 
 
 @frappe.whitelist()
@@ -326,12 +330,37 @@ def schedule_discovery(lead: str, status: str | None = None, activity: str | dic
 		# Timeline first, status second, one save: both share the request transaction, so a
 		# validation throw inside save() rolls the scheduling comment back with the status.
 		doc.add_comment("Info", discovery_timeline_html(values))
+		# TXB-209: the same scheduling details also upsert the one canonical Event linked to this
+		# Lead, so the meeting is visible on the Lead's Events/Activity surface. It shares this
+		# request transaction, so a save() throw rolls the Event back with the comment and status;
+		# a re-submit or reschedule mutates the same Event rather than creating a duplicate.
+		sync_meeting_event(
+			reference_doctype=LEAD_DOCTYPE,
+			reference_docname=doc.name,
+			flow=DISCOVERY_MEETING_FLOW,
+			subject=_("Discovery Meeting"),
+			starts_on=discovery_starts_on(values),
+			meeting_type=values.get("meeting_type"),
+			link=values.get("meeting_link"),
+			address=values.get("meeting_address"),
+		)
 		doc.status = DISCOVERY_STATUS
 		doc.save()
 	finally:
 		frappe.flags.txb_action = None
 
 	return {"lead": doc.name, "status": doc.status}
+
+
+def discovery_starts_on(values: dict) -> str:
+	"""Combine the submitted meeting date and time into one datetime for the Event.
+
+	Both are already required by `validate_discovery`, so this only ever runs on a complete
+	schedule. The time half tolerates the browser's HH:MM or HH:MM:SS formatting.
+	"""
+	date = str(values.get("meeting_date", "")).strip()
+	time = str(values.get("meeting_time", "")).strip()
+	return f"{date} {time}".strip()
 
 
 def validate_discovery(values: dict):

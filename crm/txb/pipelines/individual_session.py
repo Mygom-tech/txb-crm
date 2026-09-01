@@ -15,10 +15,16 @@ from crm.txb.pipelines.common import (
 	add_note,
 	add_task,
 	apply_deal_fields,
+	cancel_deal_meeting,
 	create_coaching_deal,
 	lines,
 	mark_lost,
+	set_deal_meeting,
 )
+
+# TXB-209 meeting-flow key. Booking, rescheduling and cancelling all act on the one BAP session
+# Event, so a reschedule moves it and a cancel closes it rather than creating a second.
+MEETING_FLOW_BAP = "bap"
 
 BAP_TYPES = ("Sales", "Leadership")
 LOCATION_TYPES = ("On-Site", "Virtual")
@@ -54,8 +60,22 @@ RESCHEDULE_NEEDS_FOLLOWUP = "No, need to follow up"
 # --------------------------------------------------------------------------------------
 
 
+def bap_address(*parts) -> str:
+	"""Join the supplied On-Site address parts (street, city, country), dropping the blanks."""
+	return ", ".join(str(part).strip() for part in parts if part and str(part).strip())
+
+
 def book_bap(deal, data):
 	apply_deal_fields(deal, BOOK_BAP, data)
+
+	set_deal_meeting(
+		deal,
+		flow=MEETING_FLOW_BAP,
+		subject="BAP Session",
+		starts_on=data.get("bap_datetime"),
+		meeting_type=data.get("bap_location_type"),
+		address=bap_address(data.get("bap_street"), data.get("bap_city"), data.get("bap_country")),
+	)
 
 
 def run_bap(deal, data):
@@ -85,6 +105,15 @@ def reschedule_bap(deal, data):
 		if data.get("new_location_type"):
 			deal.custom_bap_location_type = data["new_location_type"]
 
+		# A known new date moves the same BAP Event, preserving its audit history.
+		set_deal_meeting(
+			deal,
+			flow=MEETING_FLOW_BAP,
+			subject="BAP Session",
+			starts_on=data.get("new_bap_datetime"),
+			meeting_type=data.get("new_location_type"),
+		)
+
 		note.append(f"New date: {data.get('new_bap_datetime')}")
 		if data.get("reschedule_notes"):
 			note.append(f"Notes: {data['reschedule_notes']}")
@@ -112,6 +141,9 @@ def cancel_bap(deal, data):
 		detail = f"{detail} - {data['cancel_notes']}"
 
 	mark_lost(deal, "BAP Cancelled", detail)
+
+	# Cancelling the session cancels its BAP Event in place, preserving its lifecycle history.
+	cancel_deal_meeting(deal, flow=MEETING_FLOW_BAP)
 
 	add_note(
 		deal,

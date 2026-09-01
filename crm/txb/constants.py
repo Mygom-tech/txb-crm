@@ -162,6 +162,15 @@ DISCOVERY_TERMINAL_OUTCOMES = (LEAD_STATUS_NOT_INTERESTED, LEAD_STATUS_DISQUALIF
 FIELD_REGISTRATION_TOKEN = "custom_registration_token"
 FIELD_REGISTRATION_LINK = "custom_registration_link"
 
+# TXB-209 stable meeting identity on Frappe Event. Every TxB scheduling action upserts one
+# canonical Event carrying `<reference_doctype>:<reference_docname>:<flow>` here, so a repeated
+# submit, a reschedule or a cancel finds and mutates the same Event instead of spawning a
+# duplicate. Database-UNIQUE (see crm.patches.v1_0.add_meeting_event_key_field): that constraint
+# is the idempotency guarantee -- at most one Event per (source, meeting flow) -- and it is what
+# recovers a duplicate-key race in `crm.txb.meetings.sync_meeting_event`. Installed by that patch;
+# every consumer guards on `has_field` so a site that has not yet run it still schedules.
+FIELD_MEETING_KEY = "custom_txb_meeting_key"
+
 # The scheduled workshop date and time, collected by the native Set Workshop action. A
 # Workshop deal may not rest in "Workshop set" without it; see
 # `crm.txb.doc_events.deal.require_workshop_schedule`.
