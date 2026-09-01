@@ -1284,15 +1284,11 @@ class TestCoachingAdminTask(FrappeTestCase):
 
 	def test_handover_won_creates_one_admin_task_with_a_deal_link(self):
 		from crm.txb.api.actions import execute_action
+		from crm.txb.pipelines.common import deal_link
 
-		source = frappe.get_doc(
-			{
-				"doctype": "CRM Deal",
-				"pipeline_type": PIPELINE_WORKSHOP,
-				"status": "Workshop ran",
-				"deal_owner": "Administrator",
-			}
-		).insert(ignore_permissions=True)
+		source = self.make_deal(
+			pipeline_type=PIPELINE_WORKSHOP, status="Workshop ran", deal_owner="Administrator"
+		)
 
 		execute_action(source.name, "workshop_won", {"coaching_notes": ""})
 
@@ -1305,19 +1301,16 @@ class TestCoachingAdminTask(FrappeTestCase):
 		self.assertEqual(len(created), 1)
 		self.assertEqual(created[0].assigned_to, self.approver)
 		self.assertIn("delivering coaching deal", created[0].title)
-		self.assertIn(f'/crm/deals/{delivery[0]}', created[0].description)
+		self.assertIn(deal_link(delivery[0]), created[0].description)
 
 	def test_retried_handover_does_not_create_a_second_task(self):
 		from crm.txb.pipelines.common import create_coaching_deal
 
-		source = frappe.get_doc(
-			{
-				"doctype": "CRM Deal",
-				"pipeline_type": PIPELINE_INDIVIDUAL_SESSION,
-				"status": "Session Run",
-				"deal_owner": "Administrator",
-			}
-		).insert(ignore_permissions=True)
+		source = self.make_deal(
+			pipeline_type=PIPELINE_INDIVIDUAL_SESSION,
+			status="Session Run",
+			deal_owner="Administrator",
+		)
 
 		first = create_coaching_deal(source)
 		source.reload()
@@ -1334,29 +1327,18 @@ class TestCoachingAdminTask(FrappeTestCase):
 		self.assertEqual(created[0].assigned_to, self.approver)
 
 	def test_registration_candidate_deal_creates_no_task(self):
-		"""A Workshop QR attendee candidate carries `custom_source_deal`; one task per
-		registrant would bury the Admin, so the hook skips them."""
-		source = frappe.get_doc(
-			{
-				"doctype": "CRM Deal",
-				"pipeline_type": PIPELINE_WORKSHOP,
-				"status": "Workshop ran",
-			}
-		).insert(ignore_permissions=True)
+		"""A Workshop QR attendee candidate carries the registration source link; one task
+		per registrant would bury the Admin, so the hook skips them. The end-to-end
+		registration flow is covered in test_registration.py."""
+		from crm.txb.constants import FIELD_REGISTRATION_SOURCE_DEAL
 
-		candidate = self.make_deal(
-			status="Waiting on Review", custom_source_deal=source.name
-		)
+		source = self.make_deal(pipeline_type=PIPELINE_WORKSHOP, status="Workshop ran")
+
+		candidate = self.make_deal(**{FIELD_REGISTRATION_SOURCE_DEAL: source.name})
 		self.assertEqual(self.tasks(candidate.name), [])
 
 	def test_other_pipelines_create_no_task(self):
-		deal = frappe.get_doc(
-			{
-				"doctype": "CRM Deal",
-				"pipeline_type": PIPELINE_WORKSHOP,
-				"status": "Workshop submitted",
-			}
-		).insert(ignore_permissions=True)
+		deal = self.make_deal(pipeline_type=PIPELINE_WORKSHOP, status="Workshop submitted")
 		self.assertEqual(self.tasks(deal.name), [])
 
 

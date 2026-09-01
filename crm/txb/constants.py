@@ -194,6 +194,11 @@ FIELD_DELIVERY_COACH_NAME = "custom_delivery_coach_name"
 FIELD_SALES_SOURCE_DEAL = "custom_sales_source_deal"
 FIELD_DELIVERY_DEAL = "custom_delivery_deal"
 
+# The Workshop QR registration link described above: lives on each attendee candidate deal
+# and points back to the source workshop. Also how those candidates are recognised, e.g. by
+# the TXB-208 Admin-task hook, which must not fire once per registrant.
+FIELD_REGISTRATION_SOURCE_DEAL = "custom_source_deal"
+
 # TXB-132 Lead-conversion result metadata. One conversion event records, on the archived
 # Lead itself, the Contact it created/reused, the initial Opportunity it created, and when.
 # These are the single-execution authority: `convert_to_deal` reads FIELD_CONVERTED_DEAL

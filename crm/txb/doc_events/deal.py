@@ -10,11 +10,13 @@ import frappe
 from frappe import _
 from frappe.utils import get_url
 
+from crm.txb.api.ownership import approver
 from crm.txb.constants import (
 	ADMIN_ROLE,
 	FIELD_DELIVERY_COACH,
 	FIELD_DELIVERY_COACH_NAME,
 	FIELD_REGISTRATION_LINK,
+	FIELD_REGISTRATION_SOURCE_DEAL,
 	FIELD_REGISTRATION_TOKEN,
 	FIELD_WORKSHOP_SCHEDULED_AT,
 	PIPELINE_DELIVERING_COACHING,
@@ -23,6 +25,7 @@ from crm.txb.constants import (
 	REGISTRATION_TOKEN_BYTES,
 	STATUS_WORKSHOP_SET,
 )
+from crm.txb.pipelines.common import add_task, deal_link
 
 
 def require_workshop_schedule(doc, method=None):
@@ -144,15 +147,10 @@ def create_coaching_admin_task(doc, method=None):
 	"""
 	if doc.pipeline_type != PIPELINE_DELIVERING_COACHING:
 		return
-	if doc.get("custom_source_deal"):
+	if doc.get(FIELD_REGISTRATION_SOURCE_DEAL):
 		return
 
 	try:
-		# Local imports: ownership pulls in permissions, common pulls in constants; keeping
-		# them out of module scope avoids a hooks-load cycle (cf. TXB-201).
-		from crm.txb.api.ownership import approver
-		from crm.txb.pipelines.common import add_task, deal_link
-
 		assignee = approver()
 		first_name = frappe.db.get_value("User", assignee, "first_name") or assignee
 		message = f"{first_name}, įkrito naujas delivering coaching deal'as"
@@ -165,5 +163,5 @@ def create_coaching_admin_task(doc, method=None):
 	except Exception as e:
 		frappe.log_error(
 			title="create_coaching_admin_task",
-			message=f"[create_coaching_admin_task] Failed to create Admin task for {doc.name}. {e}",
+			message=f"Failed to create Admin task for {doc.name}. {e}",
 		)
