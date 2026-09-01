@@ -143,6 +143,9 @@ class TestWorkshopRegistration(FrappeTestCase):
 			frappe.db.get_value("CRM Organization", deal.organization, "organization_name"), "Imone UAB"
 		)
 		self.assertTrue(next(c for c in deal.contacts if c.is_primary).contact == contact.name)
+		# The TXB-208 Admin-task hook must skip attendee candidates: one task per registrant
+		# would bury the Admin. Only the aggregate handover deal tasks her.
+		self.assertFalse(frappe.db.exists("CRM Task", {"reference_docname": deal.name}))
 		self.assertTrue(
 			frappe.db.exists(
 				"FCRM Note", {"reference_docname": deal.name, "title": ["like", "Registration comments%"]}

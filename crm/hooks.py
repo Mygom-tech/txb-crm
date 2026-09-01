@@ -243,6 +243,8 @@ doc_events = {
 			"crm.txb.permissions.guard_admin_only_fields",
 		],
 		"before_insert": ["crm.txb.ownership.claim_owner_on_insert"],
+		# A new Delivering Coaching deal drops a linked task into the Admin's list (TXB-208).
+		"after_insert": ["crm.txb.doc_events.deal.create_coaching_admin_task"],
 		"before_validate": [
 			"crm.txb.doc_events.deal.generate_registration_token",
 			"crm.txb.doc_events.deal.sync_contact_name",

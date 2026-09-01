@@ -10,18 +10,22 @@ import frappe
 from frappe import _
 from frappe.utils import get_url
 
+from crm.txb.api.ownership import approver
 from crm.txb.constants import (
 	ADMIN_ROLE,
 	FIELD_DELIVERY_COACH,
 	FIELD_DELIVERY_COACH_NAME,
 	FIELD_REGISTRATION_LINK,
+	FIELD_REGISTRATION_SOURCE_DEAL,
 	FIELD_REGISTRATION_TOKEN,
 	FIELD_WORKSHOP_SCHEDULED_AT,
+	PIPELINE_DELIVERING_COACHING,
 	PIPELINE_WORKSHOP,
 	REGISTRATION_PAGE_ROUTE,
 	REGISTRATION_TOKEN_BYTES,
 	STATUS_WORKSHOP_SET,
 )
+from crm.txb.pipelines.common import add_task, deal_link
 
 
 def require_workshop_schedule(doc, method=None):
@@ -128,3 +132,36 @@ def sync_delivery_coach_name(doc, method=None):
 	coach = doc.get(FIELD_DELIVERY_COACH)
 	full_name = frappe.db.get_value("User", coach, "full_name")
 	doc.set(FIELD_DELIVERY_COACH_NAME, full_name or coach)
+
+
+def create_coaching_admin_task(doc, method=None):
+	"""A new Delivering Coaching deal lands in the Admin's task list (TXB-208).
+
+	Fires on every real insert, which is what makes it idempotent: the handover flow
+	dedupes by reusing the canonical delivery deal, so a retry never re-inserts and never
+	re-tasks. Workshop QR registration deals (also this pipeline, one per attendee) are
+	excluded -- a task per registrant would bury the Admin; they are recognisable by
+	``custom_source_deal``, which only the registration path writes.
+
+	Best-effort: the deal must never fail to create because the task could not.
+	"""
+	if doc.pipeline_type != PIPELINE_DELIVERING_COACHING:
+		return
+	if doc.get(FIELD_REGISTRATION_SOURCE_DEAL):
+		return
+
+	try:
+		assignee = approver()
+		first_name = frappe.db.get_value("User", assignee, "first_name") or assignee
+		message = f"{first_name}, įkrito naujas delivering coaching deal'as"
+		add_task(
+			doc,
+			title=message,
+			description=f"{message} - {deal_link(doc.name)}",
+			assigned_to=assignee,
+		)
+	except Exception as e:
+		frappe.log_error(
+			title="create_coaching_admin_task",
+			message=f"Failed to create Admin task for {doc.name}. {e}",
+		)

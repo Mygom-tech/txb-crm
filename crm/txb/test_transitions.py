@@ -574,6 +574,9 @@ class TestLogCoachingCall(FrappeTestCase):
 		from crm.txb.api.actions import execute_action
 
 		deal = self.make_deal(owner=COACH, total_completed_calls=4)
+		# The insert itself tasks the Admin (TXB-208); the atomicity claim is about the
+		# rejected action adding nothing on top of that baseline.
+		tasks_before = self.task_count(deal.name)
 		frappe.set_user(COACH)
 
 		with self.assertRaises(frappe.MandatoryError):
@@ -594,7 +597,7 @@ class TestLogCoachingCall(FrappeTestCase):
 			frappe.db.get_value("CRM Deal", deal.name, "total_completed_calls"), 4
 		)
 		self.assertEqual(self.note_count(deal.name), 0)
-		self.assertEqual(self.task_count(deal.name), 0)
+		self.assertEqual(self.task_count(deal.name), tasks_before)
 
 	def test_a_non_last_call_with_a_next_date_logs_and_schedules_the_follow_up(self):
 		from crm.txb.api.actions import execute_action
@@ -1232,6 +1235,111 @@ class TestCoachingHandover(FrappeTestCase):
 		# Exactly one aggregate handover exists, and it is not the candidate.
 		created = self.delivery_deals(source.name)
 		self.assertEqual([c.name for c in created], [delivery])
+
+
+class TestCoachingAdminTask(FrappeTestCase):
+	"""TXB-208: a new Delivering Coaching deal drops one linked task into the Admin's list.
+
+	The hook rides ``after_insert``, so idempotency is the handover's own: a retried Won
+	reuses the canonical delivery deal, never re-inserts, and therefore never re-tasks.
+	Workshop QR registration deals (recognised by ``custom_source_deal``) are excluded.
+	"""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		cls.skip = not frappe.get_meta("CRM Deal").has_field(FIELD_SALES_SOURCE_DEAL)
+
+	def setUp(self):
+		if self.skip:
+			self.skipTest(f"{FIELD_SALES_SOURCE_DEAL} is not installed on this site")
+		# approver() refuses to resolve on a site with no enabled Admin besides the
+		# Administrator account; make sure one exists so the hook has someone to task.
+		ensure_user(ADMIN, [ADMIN_ROLE])
+		from crm.txb.api.ownership import approver
+
+		self.approver = approver()
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+		frappe.flags.txb_action = None
+		frappe.db.rollback()
+
+	def tasks(self, deal_name):
+		return frappe.get_all(
+			"CRM Task",
+			filters={"reference_doctype": "CRM Deal", "reference_docname": deal_name},
+			fields=["name", "title", "description", "assigned_to", "status"],
+		)
+
+	def make_deal(self, **overrides):
+		doc = {
+			"doctype": "CRM Deal",
+			"pipeline_type": PIPELINE_DELIVERING_COACHING,
+			"status": "Submitted",
+			"first_name": "Coachee",
+		}
+		doc.update(overrides)
+		return frappe.get_doc(doc).insert(ignore_permissions=True)
+
+	def test_handover_won_creates_one_admin_task_with_a_deal_link(self):
+		from crm.txb.api.actions import execute_action
+		from crm.txb.pipelines.common import deal_link
+
+		source = self.make_deal(
+			pipeline_type=PIPELINE_WORKSHOP, status="Workshop ran", deal_owner="Administrator"
+		)
+
+		execute_action(source.name, "workshop_won", {"coaching_notes": ""})
+
+		delivery = frappe.get_all(
+			"CRM Deal", filters={FIELD_SALES_SOURCE_DEAL: source.name}, pluck="name"
+		)
+		self.assertEqual(len(delivery), 1)
+
+		created = self.tasks(delivery[0])
+		self.assertEqual(len(created), 1)
+		self.assertEqual(created[0].assigned_to, self.approver)
+		self.assertIn("delivering coaching deal", created[0].title)
+		self.assertIn(deal_link(delivery[0]), created[0].description)
+
+	def test_retried_handover_does_not_create_a_second_task(self):
+		from crm.txb.pipelines.common import create_coaching_deal
+
+		source = self.make_deal(
+			pipeline_type=PIPELINE_INDIVIDUAL_SESSION,
+			status="Session Run",
+			deal_owner="Administrator",
+		)
+
+		first = create_coaching_deal(source)
+		source.reload()
+		second = create_coaching_deal(source)
+
+		self.assertEqual(first, second)
+		self.assertEqual(len(self.tasks(first)), 1)
+
+	def test_direct_delivering_coaching_insert_creates_the_task(self):
+		"""The Contact -> Deal modal path is a bare insert with the pipeline set."""
+		deal = self.make_deal()
+		created = self.tasks(deal.name)
+		self.assertEqual(len(created), 1)
+		self.assertEqual(created[0].assigned_to, self.approver)
+
+	def test_registration_candidate_deal_creates_no_task(self):
+		"""A Workshop QR attendee candidate carries the registration source link; one task
+		per registrant would bury the Admin, so the hook skips them. The end-to-end
+		registration flow is covered in test_registration.py."""
+		from crm.txb.constants import FIELD_REGISTRATION_SOURCE_DEAL
+
+		source = self.make_deal(pipeline_type=PIPELINE_WORKSHOP, status="Workshop ran")
+
+		candidate = self.make_deal(**{FIELD_REGISTRATION_SOURCE_DEAL: source.name})
+		self.assertEqual(self.tasks(candidate.name), [])
+
+	def test_other_pipelines_create_no_task(self):
+		deal = self.make_deal(pipeline_type=PIPELINE_WORKSHOP, status="Workshop submitted")
+		self.assertEqual(self.tasks(deal.name), [])
 
 
 class TestHandoverLinkFieldsPatch(FrappeTestCase):
