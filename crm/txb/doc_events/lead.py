@@ -8,6 +8,7 @@ that were deliberately carried over rather than fixed here.
 import frappe
 from frappe import _
 
+from crm.txb.constants import LEAD_STATUS_FOLLOW_UP, LEAD_STATUS_NURTURE
 from crm.txb.people import find_exact_duplicate
 
 STATUS_DISQUALIFIED = "Disqualified"
@@ -21,6 +22,13 @@ STATUS_CONTACTED = "Contacted"
 # TXB-129: the status a scheduled Discovery meeting unlocks. Every transition into it must go
 # through ``crm.txb.api.actions.schedule_discovery``; see ``require_discovery_details``.
 STATUS_DISCOVERY = "Discovery meeting set"
+
+# TXB-210: the two governed warm-resting statuses. Every transition into Follow-up must go
+# through ``crm.txb.api.actions.schedule_follow_up`` and into Nurture through
+# ``crm.txb.api.actions.set_nurture`` (or, for Nurture, the discovery-meeting outcome in
+# ``crm.txb.lead_actions.run_discovery_meeting``); see the two guards below.
+STATUS_FOLLOW_UP = LEAD_STATUS_FOLLOW_UP
+STATUS_NURTURE = LEAD_STATUS_NURTURE
 
 
 def require_discovery_details(doc, method=None):
@@ -101,6 +109,85 @@ def require_reach_for_contacted(doc, method=None):
 		),
 		frappe.ValidationError,
 		title=_("Log a reach"),
+	)
+
+
+def require_follow_up_context(doc, method=None):
+	"""Entering Follow-up must go through ``crm.txb.api.actions.schedule_follow_up`` (TXB-210).
+
+	Follow-up carries a mandatory scheduled follow-up -- a required follow-up date-time and
+	context recorded as a canonical linked Lead note. The browser dialogs prompt for it, but the
+	browser is not a security boundary: a Kanban drag, the mobile status control, a bulk edit or a
+	crafted ``frappe.client.set_value`` would otherwise land a lead in Follow-up with nothing
+	recorded. This guard makes the server the single enforcement point -- every status->Follow-up
+	write that is not the flagged ``schedule_follow_up`` save is refused -- so no entrypoint,
+	present or future, can silently bypass the gate.
+
+	``schedule_follow_up`` arms ``frappe.flags.txb_action`` with this document's name (mirroring
+	the reach and discovery guards), which is the one exemption. Inserts are exempt too: a lead
+	created directly in the status (an import, or a seed) is not a transition into it.
+	"""
+	if doc.is_new():
+		return
+
+	if not doc.has_value_changed("status"):
+		return
+
+	if doc.status != STATUS_FOLLOW_UP:
+		return
+
+	# The action scopes the flag to this document's name, so the exemption cannot leak onto
+	# another CRM Lead saved inside the same request.
+	if frappe.flags.get("txb_action") == doc.name:
+		return
+
+	frappe.throw(
+		_(
+			"Schedule a follow-up to move a lead into Follow-up, so the follow-up date and "
+			"context that justify the change are recorded."
+		),
+		frappe.ValidationError,
+		title=_("Schedule a follow-up"),
+	)
+
+
+def require_nurture_context(doc, method=None):
+	"""Entering Nurture must go through an authoritative note-recording action (TXB-210).
+
+	Nurture carries a mandatory nurture context and next action, recorded as a canonical linked
+	Lead note. The browser dialogs prompt for it, but the browser is not a security boundary: a
+	Kanban drag, the mobile status control, a bulk edit or a crafted ``frappe.client.set_value``
+	would otherwise land a lead in Nurture with nothing recorded. This guard makes the server the
+	single enforcement point -- every status->Nurture write that is not a flagged action save is
+	refused -- so no entrypoint, present or future, can silently bypass the gate.
+
+	Two writers arm ``frappe.flags.txb_action`` with this document's name and are exempt:
+	``crm.txb.api.actions.set_nurture`` (the dedicated action), and
+	``crm.txb.lead_actions.run_discovery_meeting`` when a discovery meeting closes on the Nurture
+	outcome -- both record a canonical note before saving. Inserts are exempt too: a lead created
+	directly in the status (an import, or a seed) is not a transition into it.
+	"""
+	if doc.is_new():
+		return
+
+	if not doc.has_value_changed("status"):
+		return
+
+	if doc.status != STATUS_NURTURE:
+		return
+
+	# The action scopes the flag to this document's name, so the exemption cannot leak onto
+	# another CRM Lead saved inside the same request.
+	if frappe.flags.get("txb_action") == doc.name:
+		return
+
+	frappe.throw(
+		_(
+			"Set Nurture through its action to move a lead into Nurture, so the nurture context "
+			"and next action that justify the change are recorded."
+		),
+		frappe.ValidationError,
+		title=_("Nurture the lead"),
 	)
 
 

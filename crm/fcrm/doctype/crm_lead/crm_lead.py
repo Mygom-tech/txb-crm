@@ -588,8 +588,13 @@ def convert_to_deal(
 	frappe.flags.txb_conversion = lead.name
 	frappe.db.savepoint(CONVERSION_SAVEPOINT)
 	try:
-		if frappe.db.exists("CRM Lead Status", "Qualified"):
-			lead.db_set("status", "Qualified")
+		# TXB-210: conversion rests the archived Lead at "Converted", the dedicated Won-type
+		# status for a converted lead, rather than the "Qualified" intermediate it used before.
+		# "Qualified" is retired by migrate_qualified_and_no_answer_lead_statuses; existing
+		# Qualified leads are folded onto "Contacted" there. Guarded on the status existing so a
+		# site that has not yet seeded it still converts.
+		if frappe.db.exists("CRM Lead Status", "Converted"):
+			lead.db_set("status", "Converted")
 		lead.db_set("converted", 1)
 		if lead.sla and frappe.db.exists("CRM Communication Status", "Replied"):
 			lead.db_set("communication_status", "Replied")

@@ -18,6 +18,8 @@ from crm.txb.doc_events.deal import primary_contact, sync_contact_name
 from crm.txb.doc_events.lead import (
 	default_disqualified_reason,
 	require_discovery_details,
+	require_follow_up_context,
+	require_nurture_context,
 	require_reach_for_contacted,
 )
 
@@ -133,6 +135,91 @@ class TestRequireReachForContacted(FrappeTestCase):
 	def test_moving_to_another_status_is_unaffected(self):
 		doc = FakeLead(status="Nurture", status_changed=True)
 		require_reach_for_contacted(doc)  # must not raise
+
+
+class TestRequireFollowUpContext(FrappeTestCase):
+	"""TXB-210: the server is the single enforcement point for entering Follow-up.
+
+	The browser dialog only prompts for the follow-up; the guard is what stops a Kanban drag, the
+	mobile control, a bulk edit or a raw API write from reaching Follow-up with nothing recorded.
+	These exercise the guard directly, so every bypassing route is covered by the one rule.
+	"""
+
+	def tearDown(self):
+		frappe.flags.txb_action = None
+
+	def test_bare_move_to_follow_up_is_rejected(self):
+		frappe.flags.txb_action = None
+		doc = FakeLead(status="Follow-up", status_changed=True)
+		with self.assertRaises(frappe.ValidationError):
+			require_follow_up_context(doc)
+
+	def test_schedule_follow_up_save_is_allowed(self):
+		"""The action arms the flag with the lead's own name, so its save passes."""
+		doc = FakeLead(name="CRM-LEAD-0007", status="Follow-up", status_changed=True)
+		frappe.flags.txb_action = "CRM-LEAD-0007"
+		require_follow_up_context(doc)  # must not raise
+
+	def test_flag_for_another_lead_does_not_exempt(self):
+		"""The exemption is scoped to the document, so it cannot leak across a request."""
+		doc = FakeLead(name="CRM-LEAD-0007", status="Follow-up", status_changed=True)
+		frappe.flags.txb_action = "CRM-LEAD-0009"
+		with self.assertRaises(frappe.ValidationError):
+			require_follow_up_context(doc)
+
+	def test_unchanged_status_is_ignored(self):
+		doc = FakeLead(status="Follow-up", status_changed=False)
+		require_follow_up_context(doc)  # must not raise
+
+	def test_insert_in_follow_up_is_exempt(self):
+		doc = FakeLead(status="Follow-up", is_new=True, status_changed=True)
+		require_follow_up_context(doc)  # must not raise
+
+	def test_moving_to_another_status_is_unaffected(self):
+		doc = FakeLead(status="Nurture", status_changed=True)
+		require_follow_up_context(doc)  # must not raise
+
+
+class TestRequireNurtureContext(FrappeTestCase):
+	"""TXB-210: the server is the single enforcement point for entering Nurture.
+
+	The browser dialog only prompts for the nurture plan; the guard is what stops a Kanban drag,
+	the mobile control, a bulk edit or a raw API write from reaching Nurture with nothing recorded.
+	The dedicated action and the discovery-meeting Nurture outcome both arm the flag, so both pass.
+	"""
+
+	def tearDown(self):
+		frappe.flags.txb_action = None
+
+	def test_bare_move_to_nurture_is_rejected(self):
+		frappe.flags.txb_action = None
+		doc = FakeLead(status="Nurture", status_changed=True)
+		with self.assertRaises(frappe.ValidationError):
+			require_nurture_context(doc)
+
+	def test_action_save_is_allowed(self):
+		"""set_nurture / run_discovery_meeting arm the flag with the lead's own name, so it passes."""
+		doc = FakeLead(name="CRM-LEAD-0007", status="Nurture", status_changed=True)
+		frappe.flags.txb_action = "CRM-LEAD-0007"
+		require_nurture_context(doc)  # must not raise
+
+	def test_flag_for_another_lead_does_not_exempt(self):
+		doc = FakeLead(name="CRM-LEAD-0007", status="Nurture", status_changed=True)
+		frappe.flags.txb_action = "CRM-LEAD-0009"
+		with self.assertRaises(frappe.ValidationError):
+			require_nurture_context(doc)
+
+	def test_unchanged_status_is_ignored(self):
+		doc = FakeLead(status="Nurture", status_changed=False)
+		require_nurture_context(doc)  # must not raise
+
+	def test_insert_in_nurture_is_exempt(self):
+		doc = FakeLead(status="Nurture", is_new=True, status_changed=True)
+		require_nurture_context(doc)  # must not raise
+
+	def test_moving_to_another_status_is_unaffected(self):
+		doc = FakeLead(status="Follow-up", status_changed=True)
+		require_nurture_context(doc)  # must not raise
 
 
 class TestRequireDiscoveryDetails(FrappeTestCase):

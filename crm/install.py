@@ -73,6 +73,15 @@ def add_default_lead_statuses():
 			"type": "Ongoing",
 			"position": 4,
 		},
+		# TXB-210: the warm resting status a scheduled follow-up lands on. Reached only through
+		# crm.txb.api.actions.schedule_follow_up; crm.txb.doc_events.lead.require_follow_up_context
+		# refuses any other write into it. Seeded idempotently so the guarded transition has a
+		# target -- installs that already carry this status keep their own configuration.
+		"Follow-up": {
+			"color": "blue",
+			"type": "Ongoing",
+			"position": 13,
+		},
 		# The booked-meeting state Run Discovery Meeting (crm.txb.lead_actions) acts from, and the
 		# two terminal outcomes it can close on. Seeded idempotently -- like Contact attempted --
 		# so the guarded action has a from-state and valid targets; installs that already carry

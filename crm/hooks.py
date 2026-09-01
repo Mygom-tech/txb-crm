@@ -186,6 +186,12 @@ doc_events = {
 			# crm.txb.api.actions.schedule_discovery; every other write to that status is
 			# refused here (TXB-129).
 			"crm.txb.doc_events.lead.require_discovery_details",
+			# Follow-up is reachable only through crm.txb.api.actions.schedule_follow_up and
+			# Nurture only through crm.txb.api.actions.set_nurture (or, for Nurture, the
+			# discovery-meeting outcome); every other write to those statuses is refused
+			# here (TXB-210).
+			"crm.txb.doc_events.lead.require_follow_up_context",
+			"crm.txb.doc_events.lead.require_nurture_context",
 			"crm.txb.ownership.guard_owner_change",
 			# Contact attempted is reachable only through crm.txb.lead_actions.log_a_dial;
 			# every other write to that status is refused here.

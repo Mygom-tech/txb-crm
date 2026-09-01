@@ -363,8 +363,18 @@ def run_discovery_meeting(
 	# Non-conversion: rest the lead at the outcome's status. Saved through validate so SLA,
 	# ownership and status-log hooks still run; the guard only fires when reopening a terminal
 	# status, so moving *into* one here is unaffected.
-	doc.status = DISCOVERY_STATUS_OUTCOMES[outcome]
-	doc.save()
+	#
+	# TXB-210: the Nurture outcome lands on a guarded status (require_nurture_context), so this
+	# authoritative save arms frappe.flags.txb_action with the lead's name -- exactly as the reach,
+	# discovery and follow-up actions do -- to identify itself as a note-recording action rather
+	# than a bare write. The meeting note recorded above is the durable justification. Scoped to
+	# this document's name and cleared in `finally` so the exemption cannot leak or survive a throw.
+	frappe.flags.txb_action = doc.name
+	try:
+		doc.status = DISCOVERY_STATUS_OUTCOMES[outcome]
+		doc.save()
+	finally:
+		frappe.flags.txb_action = None
 
 	return {
 		"outcome": outcome,
