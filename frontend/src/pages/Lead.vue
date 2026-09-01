@@ -489,7 +489,7 @@ const statuses = computed(() => {
   let customStatuses = document.statuses?.length
     ? document.statuses
     : document._statuses || []
-  return statusOptions('lead', customStatuses, triggerStatusChange)
+  return statusOptions('lead', customStatuses, triggerStatusChange, doc.value?.status)
 })
 
 usePageMeta(() => {
