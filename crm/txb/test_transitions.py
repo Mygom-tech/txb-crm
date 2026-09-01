@@ -931,6 +931,193 @@ class TestLogReachNote(FrappeTestCase):
 		self.assertEqual(frappe.db.get_value("CRM Lead", lead.name, "status"), "New")
 
 
+class TestFollowUpAndNurtureActions(FrappeTestCase):
+	"""TXB-210: Follow-up and Nurture are governed, atomic, note-recording transitions.
+
+	Each endpoint requires its approved fields, records exactly one canonical linked FCRM Note, and
+	moves the status in the same transaction; an incomplete submission or a status-save failure
+	writes nothing, and a bare write into either status (no action flag) is refused by the guard.
+	These mirror the Log a reach contract (TestLogReachNote) for the two new statuses.
+	"""
+
+	NOTE_DOCTYPE = "FCRM Note"
+
+	def setUp(self):
+		# The guarded transitions need their target statuses to exist; a persistent test site may
+		# predate install.py seeding them, so ensure both idempotently.
+		for status, position in (("Follow-up", 13), ("Nurture", 4)):
+			if not frappe.db.exists("CRM Lead Status", status):
+				frappe.get_doc(
+					{
+						"doctype": "CRM Lead Status",
+						"lead_status": status,
+						"color": "blue",
+						"type": "Ongoing",
+						"position": position,
+					}
+				).insert(ignore_permissions=True)
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+		frappe.flags.txb_action = None
+		frappe.db.rollback()
+
+	def make_lead(self, status="New"):
+		return frappe.get_doc(
+			{"doctype": "CRM Lead", "first_name": "Warm", "status": status}
+		).insert(ignore_permissions=True)
+
+	def linked_notes(self, lead_name):
+		return frappe.db.get_all(
+			self.NOTE_DOCTYPE,
+			filters={"reference_doctype": "CRM Lead", "reference_docname": lead_name},
+			fields=["name", "title", "content"],
+		)
+
+	# --- Follow-up -----------------------------------------------------------------------
+
+	def test_a_valid_follow_up_creates_one_linked_note_and_moves_the_status(self):
+		from crm.txb.api.actions import FOLLOW_UP_STATUS, schedule_follow_up
+
+		lead = self.make_lead()
+
+		result = schedule_follow_up(
+			lead.name,
+			activity={
+				"follow_up_date": "2026-09-15 10:30:00",
+				"follow_up_context": "<b>Check budget</b>",
+			},
+		)
+
+		notes = self.linked_notes(lead.name)
+		self.assertEqual(len(notes), 1)
+		note = notes[0]
+		self.assertEqual(note["title"], "Follow-up scheduled")
+		self.assertEqual(result["note"], note["name"])
+		self.assertEqual(result["status"], FOLLOW_UP_STATUS)
+
+		content = note["content"]
+		self.assertIn("Follow-up date", content)
+		self.assertIn("Follow-up context", content)
+		self.assertIn("2026-09-15 10:30:00", content)
+		# User text is escaped rather than rendered.
+		self.assertIn("&lt;b&gt;Check budget&lt;/b&gt;", content)
+		self.assertNotIn("<b>Check budget", content)
+
+		self.assertEqual(frappe.db.get_value("CRM Lead", lead.name, "status"), FOLLOW_UP_STATUS)
+
+	def test_a_blank_follow_up_is_rejected_and_writes_nothing(self):
+		from crm.txb.api.actions import schedule_follow_up
+
+		lead = self.make_lead()
+
+		with self.assertRaises(frappe.MandatoryError):
+			schedule_follow_up(
+				lead.name,
+				activity={"follow_up_date": "   ", "follow_up_context": "Check budget"},
+			)
+
+		self.assertEqual(self.linked_notes(lead.name), [])
+		self.assertEqual(frappe.db.get_value("CRM Lead", lead.name, "status"), "New")
+
+	def test_a_follow_up_status_save_failure_rolls_the_note_back(self):
+		from crm.txb.api import actions
+		from crm.txb.api.actions import schedule_follow_up
+
+		lead = self.make_lead()
+
+		original = actions.FOLLOW_UP_STATUS
+		actions.FOLLOW_UP_STATUS = "Nonexistent Follow-up Status"
+		try:
+			with self.assertRaises(Exception):
+				schedule_follow_up(
+					lead.name,
+					activity={
+						"follow_up_date": "2026-09-15 10:30:00",
+						"follow_up_context": "Check budget",
+					},
+				)
+		finally:
+			actions.FOLLOW_UP_STATUS = original
+
+		self.assertEqual(self.linked_notes(lead.name), [])
+		self.assertEqual(frappe.db.get_value("CRM Lead", lead.name, "status"), "New")
+
+	def test_a_bare_write_into_follow_up_is_refused(self):
+		"""No action flag armed: a raw status set (Kanban/mobile/bulk) cannot reach Follow-up."""
+		lead = self.make_lead()
+		lead.status = "Follow-up"
+		with self.assertRaises(frappe.ValidationError):
+			lead.save(ignore_permissions=True)
+
+	# --- Nurture -------------------------------------------------------------------------
+
+	def test_a_valid_nurture_creates_one_linked_note_and_moves_the_status(self):
+		from crm.txb.api.actions import NURTURE_STATUS, set_nurture
+
+		lead = self.make_lead()
+
+		result = set_nurture(
+			lead.name,
+			activity={
+				"nurture_context": "Not ready this quarter",
+				"next_action": "<i>Re-engage in Q1</i>",
+				"next_action_date": "2026-12-01 09:00:00",
+			},
+		)
+
+		notes = self.linked_notes(lead.name)
+		self.assertEqual(len(notes), 1)
+		note = notes[0]
+		self.assertEqual(note["title"], "Nurture plan")
+		self.assertEqual(result["note"], note["name"])
+		self.assertEqual(result["status"], NURTURE_STATUS)
+
+		content = note["content"]
+		self.assertIn("Nurture context", content)
+		self.assertIn("Next action", content)
+		self.assertIn("Next action date", content)
+		self.assertIn("2026-12-01 09:00:00", content)
+		self.assertIn("&lt;i&gt;Re-engage in Q1&lt;/i&gt;", content)
+
+		self.assertEqual(frappe.db.get_value("CRM Lead", lead.name, "status"), NURTURE_STATUS)
+
+	def test_an_absent_next_action_date_renders_a_clear_not_set_marker(self):
+		from crm.txb.api.actions import set_nurture
+
+		lead = self.make_lead()
+
+		set_nurture(
+			lead.name,
+			activity={"nurture_context": "Not ready", "next_action": "Re-engage later"},
+		)
+
+		note = self.linked_notes(lead.name)[0]
+		self.assertIn("Next action date", note["content"])
+		self.assertIn("Not set", note["content"])
+
+	def test_a_blank_nurture_is_rejected_and_writes_nothing(self):
+		from crm.txb.api.actions import set_nurture
+
+		lead = self.make_lead()
+
+		with self.assertRaises(frappe.MandatoryError):
+			set_nurture(
+				lead.name,
+				activity={"nurture_context": "Not ready", "next_action": "   "},
+			)
+
+		self.assertEqual(self.linked_notes(lead.name), [])
+		self.assertEqual(frappe.db.get_value("CRM Lead", lead.name, "status"), "New")
+
+	def test_a_bare_write_into_nurture_is_refused(self):
+		"""No action flag armed: a raw status set (Kanban/mobile/bulk) cannot reach Nurture."""
+		lead = self.make_lead()
+		lead.status = "Nurture"
+		with self.assertRaises(frappe.ValidationError):
+			lead.save(ignore_permissions=True)
+
+
 class TestCoachingHandover(FrappeTestCase):
 	"""TXB-126: a Won sales Opportunity hands over to one linked Delivering Coaching deal.
 

@@ -141,6 +141,18 @@ LEAD_STATUS_NURTURE = "Nurture"
 LEAD_STATUS_NOT_INTERESTED = "Not interested"
 LEAD_STATUS_DISQUALIFIED = "Disqualified"
 
+# TXB-210: the two governed "warm resting" Lead statuses the server owns the transition into.
+# Follow-up carries a scheduled follow-up (a required date-time and context); Nurture carries a
+# required nurture context and next action (with an optional next-action date-time). A move into
+# either must go through crm.txb.api.actions.schedule_follow_up / set_nurture, which records the
+# canonical linked Lead note and changes the status atomically;
+# crm.txb.doc_events.lead.require_follow_up_context / require_nurture_context refuse every other
+# write into them. Named once so the actions' targets, the guards and the seeded statuses cannot
+# drift. LEAD_STATUS_NURTURE above is the same status a discovery meeting can also rest a lead at
+# through crm.txb.lead_actions.run_discovery_meeting, which is exempt from the guard because it is
+# itself an authoritative note-recording action.
+LEAD_STATUS_FOLLOW_UP = "Follow-up"
+
 # A discovery meeting closes on exactly one of six outcomes. Three keep the lead as a lead
 # (mapped here to the resting Lead status each lands on); the other three convert it into a
 # pipeline-correct Opportunity and reuse the existing conversion authority

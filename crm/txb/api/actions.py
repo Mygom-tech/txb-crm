@@ -11,6 +11,7 @@ import json
 import frappe
 from frappe import _
 
+from crm.txb.constants import LEAD_STATUS_FOLLOW_UP, LEAD_STATUS_NURTURE
 from crm.txb.meetings import sync_meeting_event
 from crm.txb.permissions import can_change_status, is_admin
 from crm.txb.pipelines.actions import find_action, get_actions, resolve_to_state
@@ -38,6 +39,20 @@ DISCOVERY_TYPE_ONSITE = "Onsite"
 # TXB-209: the meeting-flow key that gives a Lead's Discovery meeting its stable Event identity,
 # so a reschedule or a repeated submit updates the one canonical Event rather than duplicating it.
 DISCOVERY_MEETING_FLOW = "lead_discovery"
+
+# TXB-210: the Follow-up transition. A follow-up date-time and context are both required and are
+# recorded as one canonical linked Lead note committed atomically with the status; the note insert
+# and the status write share a savepoint so a failure on either rolls both back.
+FOLLOW_UP_STATUS = LEAD_STATUS_FOLLOW_UP
+FOLLOW_UP_REQUIRED_FIELDS = ("follow_up_date", "follow_up_context")
+FOLLOW_UP_SAVEPOINT = "txb_follow_up"
+
+# TXB-210: the Nurture transition. Nurture context and next action are both required; a
+# next-action date-time is optional. The three are recorded as one canonical linked Lead note
+# committed atomically with the status under a shared savepoint, exactly as the reach gate is.
+NURTURE_STATUS = LEAD_STATUS_NURTURE
+NURTURE_REQUIRED_FIELDS = ("nurture_context", "next_action")
+NURTURE_SAVEPOINT = "txb_nurture"
 
 
 @frappe.whitelist()
@@ -292,6 +307,190 @@ def reach_note_html(values: dict) -> str:
 			f"<div><b>{_('Reach summary')}:</b> {escape(values['summary'].strip())}</div>",
 			f"<div><b>{_('Follow-up context')}:</b> {escape(values['follow_up_context'].strip())}</div>",
 			f"<div><b>{_('Follow-up date')}:</b> {follow_up_date_value}</div>",
+		]
+	)
+
+
+@frappe.whitelist()
+def schedule_follow_up(lead: str, status: str | None = None, activity: str | dict | None = None) -> dict:
+	"""Move a Lead into "Follow-up" and record the follow-up that justifies it, atomically (TXB-210).
+
+	Entering Follow-up is never a bare status flip: the browser posts the follow-up here, and the
+	status changes only if it is complete. A follow-up date-time and context are both required and
+	re-checked server-side -- the browser is not a security boundary -- so a direct API call (or a
+	Kanban drag) cannot slip an empty follow-up past the dialog. The follow-up is stored as a native
+	FCRM Note linked to the Lead so it surfaces under the Notes tab, and the status is set on one
+	in-memory document; both share one savepoint so a persistence failure on either rolls both back,
+	leaving no partial note and the prior status untouched. Cancelling in the browser posts nothing,
+	so the status is likewise unchanged.
+
+	`status` is accepted for symmetry with the browser payload but ignored: this endpoint only ever
+	unlocks Follow-up, and trusting a caller-supplied target would let it set an arbitrary status
+	without its own gate.
+	"""
+	frappe.has_permission(LEAD_DOCTYPE, "write", lead, throw=True)
+
+	values = parse_data(activity)
+	validate_follow_up(values)
+
+	doc = frappe.get_doc(LEAD_DOCTYPE, lead)
+
+	# Tells `require_follow_up_context` this status->Follow-up write is the follow-up save rather
+	# than a bare status set. Scoped to this document's name, not just truthy, so the exemption
+	# cannot leak onto another CRM Lead saved inside the same request. Cleared in `finally` so a
+	# throw cannot leave it armed for the rest of the request.
+	frappe.flags.txb_action = doc.name
+	try:
+		# Note first, status second, under one savepoint: the two writes commit together or not at
+		# all, so a status-save throw cannot strand a partial note and the prior status is untouched.
+		frappe.db.savepoint(FOLLOW_UP_SAVEPOINT)
+		try:
+			note = frappe.get_doc(
+				{
+					"doctype": "FCRM Note",
+					"title": _("Follow-up scheduled"),
+					"content": follow_up_note_html(values),
+					"reference_doctype": LEAD_DOCTYPE,
+					"reference_docname": doc.name,
+				}
+			)
+			note.insert()
+			doc.status = FOLLOW_UP_STATUS
+			doc.save()
+		except Exception:
+			frappe.db.rollback(save_point=FOLLOW_UP_SAVEPOINT)
+			raise
+	finally:
+		frappe.flags.txb_action = None
+
+	return {"lead": doc.name, "status": doc.status, "note": note.name}
+
+
+def validate_follow_up(values: dict):
+	"""Require the follow-up date-time and context, with whitespace-only treated as blank.
+
+	Mirrors `validate_required`'s emptiness rule (see `_is_blank`) so a follow-up submitted straight
+	to the API meets exactly what the Follow-up dialog enforces in the browser.
+	"""
+	labels = {
+		"follow_up_date": _("Follow-up date and time"),
+		"follow_up_context": _("Follow-up context"),
+	}
+	missing = [labels[field] for field in FOLLOW_UP_REQUIRED_FIELDS if _is_blank(values.get(field))]
+	if missing:
+		frappe.throw(
+			_("{0} is required.").format(", ".join(missing)),
+			frappe.MandatoryError,
+			title=_("Schedule a follow-up"),
+		)
+
+
+def follow_up_note_html(values: dict) -> str:
+	"""Render the follow-up as the body of its FCRM Note, escaping every user-supplied value."""
+	escape = frappe.utils.escape_html
+	return "".join(
+		[
+			f"<div><b>{_('Follow-up date')}:</b> {escape(str(values['follow_up_date']).strip())}</div>",
+			f"<div><b>{_('Follow-up context')}:</b> {escape(values['follow_up_context'].strip())}</div>",
+		]
+	)
+
+
+@frappe.whitelist()
+def set_nurture(lead: str, status: str | None = None, activity: str | dict | None = None) -> dict:
+	"""Move a Lead into "Nurture" and record the nurture plan that justifies it, atomically (TXB-210).
+
+	Entering Nurture is never a bare status flip: the browser posts the nurture plan here, and the
+	status changes only if it is complete. A nurture context and a next action are both required and
+	re-checked server-side -- the browser is not a security boundary -- so a direct API call (or a
+	Kanban drag) cannot slip an empty plan past the dialog; a next-action date-time is optional and
+	recorded verbatim when supplied, as a clear not-set marker when blank. The plan is stored as a
+	native FCRM Note linked to the Lead so it surfaces under the Notes tab, and the status is set on
+	one in-memory document; both share one savepoint so a persistence failure on either rolls both
+	back, leaving no partial note and the prior status untouched. Cancelling in the browser posts
+	nothing, so the status is likewise unchanged.
+
+	`status` is accepted for symmetry with the browser payload but ignored: this endpoint only ever
+	unlocks Nurture, and trusting a caller-supplied target would let it set an arbitrary status
+	without its own gate.
+	"""
+	frappe.has_permission(LEAD_DOCTYPE, "write", lead, throw=True)
+
+	values = parse_data(activity)
+	validate_nurture(values)
+
+	doc = frappe.get_doc(LEAD_DOCTYPE, lead)
+
+	# Tells `require_nurture_context` this status->Nurture write is the nurture save rather than a
+	# bare status set. Scoped to this document's name, not just truthy, so the exemption cannot leak
+	# onto another CRM Lead saved inside the same request. Cleared in `finally` so a throw cannot
+	# leave it armed for the rest of the request.
+	frappe.flags.txb_action = doc.name
+	try:
+		# Note first, status second, under one savepoint: the two writes commit together or not at
+		# all, so a status-save throw cannot strand a partial note and the prior status is untouched.
+		frappe.db.savepoint(NURTURE_SAVEPOINT)
+		try:
+			note = frappe.get_doc(
+				{
+					"doctype": "FCRM Note",
+					"title": _("Nurture plan"),
+					"content": nurture_note_html(values),
+					"reference_doctype": LEAD_DOCTYPE,
+					"reference_docname": doc.name,
+				}
+			)
+			note.insert()
+			doc.status = NURTURE_STATUS
+			doc.save()
+		except Exception:
+			frappe.db.rollback(save_point=NURTURE_SAVEPOINT)
+			raise
+	finally:
+		frappe.flags.txb_action = None
+
+	return {"lead": doc.name, "status": doc.status, "note": note.name}
+
+
+def validate_nurture(values: dict):
+	"""Require the nurture context and next action, with whitespace-only treated as blank.
+
+	Mirrors `validate_required`'s emptiness rule (see `_is_blank`) so a nurture plan submitted
+	straight to the API meets exactly what the Nurture dialog enforces in the browser. The
+	next-action date-time is optional and not checked here.
+	"""
+	labels = {
+		"nurture_context": _("Nurture context"),
+		"next_action": _("Next action"),
+	}
+	missing = [labels[field] for field in NURTURE_REQUIRED_FIELDS if _is_blank(values.get(field))]
+	if missing:
+		frappe.throw(
+			_("{0} is required.").format(", ".join(missing)),
+			frappe.MandatoryError,
+			title=_("Nurture the lead"),
+		)
+
+
+def nurture_note_html(values: dict) -> str:
+	"""Render the nurture plan as the body of its FCRM Note, preserving every submitted field.
+
+	The note always carries explicit Nurture context, Next action and Next action date labels so the
+	card reads the same however it was created. The optional next-action date is shown verbatim when
+	supplied and as a clear not-set marker when blank, rather than being dropped. Every user-supplied
+	value is escaped so it is recorded as text rather than interpreted as markup.
+	"""
+	escape = frappe.utils.escape_html
+	next_action_date = values.get("next_action_date")
+	if next_action_date and str(next_action_date).strip():
+		next_action_date_value = escape(str(next_action_date).strip())
+	else:
+		next_action_date_value = f"<i>{_('Not set')}</i>"
+	return "".join(
+		[
+			f"<div><b>{_('Nurture context')}:</b> {escape(values['nurture_context'].strip())}</div>",
+			f"<div><b>{_('Next action')}:</b> {escape(values['next_action'].strip())}</div>",
+			f"<div><b>{_('Next action date')}:</b> {next_action_date_value}</div>",
 		]
 	)
 
