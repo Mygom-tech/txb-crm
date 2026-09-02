@@ -88,6 +88,10 @@ def sync_meeting_event(
 	event = _find_meeting_event(key)
 	if event is not None:
 		_apply(event, values)
+		# TXB-212: reconcile required attendees on every existing-Event save (reschedule, retry,
+		# plain update) -- not only on first insert -- so a meeting that gained a resolvable owner
+		# or target since it was created acquires them without spawning a second Event.
+		_reconcile_participants(event, participants)
 		event.save(ignore_permissions=True)
 		return event.name
 
@@ -118,18 +122,112 @@ def cancel_meeting_event(reference_doctype: str, reference_docname: str, flow: s
 
 
 def deal_participants(deal) -> list[dict]:
-	"""The Event participants derivable from a Deal: its linked Contacts.
+	"""The required Event attendees derivable from a Deal: its owner and its linked Contacts.
 
-	Each Contact row becomes an Event Participant referencing the same Contact, so the meeting
-	carries the people it is with when they are known. Owners/trainers are captured on the deal's
-	own fields and in the description rather than forced into the participants table.
+	TXB-212: the Deal owner (a User) is the source-record owner and every linked Contact is a
+	customer target, so both belong on the meeting when they resolve. The owner is emitted first,
+	then each Contact row as an Event Participant referencing that Contact. An owner with no
+	resolvable email is omitted rather than blocking the meeting; blank Contact rows are skipped.
 	"""
 	participants = []
+	owner = _owner_participant(deal.get("deal_owner"))
+	if owner:
+		participants.append(owner)
 	for row in deal.get("contacts") or []:
 		contact = row.get("contact") if hasattr(row, "get") else getattr(row, "contact", None)
 		if contact:
 			participants.append({"reference_doctype": "Contact", "reference_docname": contact})
 	return participants
+
+
+def lead_participants(lead) -> list[dict]:
+	"""The required Event attendees derivable from a Lead: its owner and the Lead target.
+
+	TXB-212: the owner comes from `lead_owner` (a User) and the customer target is the Lead itself,
+	carrying its resolvable email. Either is omitted when its email cannot be resolved, so a Lead
+	with no owner or no email still schedules its meeting -- just with fewer attendees.
+	"""
+	participants = []
+	owner = _owner_participant(lead.get("lead_owner"))
+	if owner:
+		participants.append(owner)
+	target = _lead_target_participant(lead)
+	if target:
+		participants.append(target)
+	return participants
+
+
+def _owner_participant(owner: str | None) -> dict | None:
+	"""An Event Participant for a source-record owner (a User), or None when it cannot resolve.
+
+	The owner is a User link, so the participant references that User and carries the User's email
+	for deduplication against a target or a manually added attendee. Returns None when there is no
+	owner or the User has no resolvable email -- the missing-attendee case never blocks the meeting.
+	"""
+	if not owner:
+		return None
+	email = _user_email(owner)
+	if not email:
+		return None
+	return {"reference_doctype": "User", "reference_docname": owner, "email": email}
+
+
+def _lead_target_participant(lead) -> dict | None:
+	"""An Event Participant for a Lead's customer target: the Lead itself with its email.
+
+	The Lead is not yet a Contact, so the resolvable reference is the Lead record carrying its
+	primary email. Returns None when the Lead has no email, omitting only this attendee.
+	"""
+	email = lead.get("email")
+	if not _normalize_email(email):
+		return None
+	return {"reference_doctype": "CRM Lead", "reference_docname": lead.get("name"), "email": email}
+
+
+def _user_email(user: str | None) -> str | None:
+	"""The email address for a User, from its `email` field, falling back to an email-shaped id."""
+	if not user:
+		return None
+	email = frappe.db.get_value("User", user, "email")
+	if email:
+		return email
+	return user if "@" in user else None
+
+
+def _normalize_email(email: str | None) -> str:
+	"""A canonical form for email comparison: trimmed and lower-cased, or empty when absent."""
+	return email.strip().lower() if email else ""
+
+
+def _reconcile_participants(event, participants: list[dict] | None):
+	"""Add required attendees to an Event without removing any it already carries (TXB-212).
+
+	Additive and idempotent: an attendee already present -- by canonical reference
+	(reference_doctype + reference_docname) or by normalized email -- is skipped, so a repeat sync
+	adds nothing and manually added participants survive. Deduplicates the incoming list against
+	itself too, collapsing an owner and target that share a reference or email into one row.
+	"""
+	seen_refs = set()
+	seen_emails = set()
+	for existing in event.get("event_participants") or []:
+		if existing.reference_docname:
+			seen_refs.add((existing.reference_doctype, existing.reference_docname))
+		email = _normalize_email(existing.get("email"))
+		if email:
+			seen_emails.add(email)
+
+	for part in participants or []:
+		ref = (part.get("reference_doctype"), part.get("reference_docname"))
+		email = _normalize_email(part.get("email"))
+		if part.get("reference_docname") and ref in seen_refs:
+			continue
+		if email and email in seen_emails:
+			continue
+		event.append("event_participants", part)
+		if part.get("reference_docname"):
+			seen_refs.add(ref)
+		if email:
+			seen_emails.add(email)
 
 
 def _insert_meeting_event(
@@ -147,8 +245,7 @@ def _insert_meeting_event(
 	event.event_type = "Private"
 	event.event_category = "Meeting"
 	_apply(event, values)
-	for participant in participants or []:
-		event.append("event_participants", participant)
+	_reconcile_participants(event, participants)
 
 	frappe.db.savepoint(MEETING_SAVEPOINT)
 	try:
@@ -162,6 +259,9 @@ def _insert_meeting_event(
 		if not winner:
 			raise
 		_apply(winner, values)
+		# TXB-212: the winner is an existing Event too, so it gets the same additive attendee
+		# reconciliation -- the race loser's required attendees are not silently dropped.
+		_reconcile_participants(winner, participants)
 		winner.save(ignore_permissions=True)
 		return winner.name
 

@@ -27,8 +27,11 @@ from crm.txb.api.actions import (
 )
 from crm.txb.constants import FIELD_MEETING_KEY
 from crm.txb.meetings import (
+	_normalize_email,
+	_reconcile_participants,
 	cancel_meeting_event,
 	deal_participants,
+	lead_participants,
 	meeting_key,
 	sync_meeting_event,
 )
@@ -79,6 +82,43 @@ class FakeDeal:
 		return getattr(self, key, default)
 
 
+class FakeLead:
+	def __init__(self, name=None, email=None, lead_owner=None):
+		self.name = name
+		self.email = email
+		self.lead_owner = lead_owner
+
+	def get(self, key, default=None):
+		return getattr(self, key, default)
+
+
+class FakeParticipant:
+	"""Stands in for a saved Event Participant child row in the pure reconcile tests."""
+
+	def __init__(self, reference_doctype=None, reference_docname=None, email=None):
+		self.reference_doctype = reference_doctype
+		self.reference_docname = reference_docname
+		self.email = email
+
+	def get(self, key, default=None):
+		return getattr(self, key, default)
+
+
+class FakeEvent:
+	"""A minimal Event exposing only the participant table access `_reconcile_participants` uses."""
+
+	def __init__(self, participants=None):
+		self.event_participants = list(participants or [])
+
+	def get(self, key, default=None):
+		return getattr(self, key, default)
+
+	def append(self, table, row):
+		self.event_participants.append(
+			FakeParticipant(row.get("reference_doctype"), row.get("reference_docname"), row.get("email"))
+		)
+
+
 class TestMeetingIdentity(FrappeTestCase):
 	"""The pure identity, description and participant logic -- no database required."""
 
@@ -119,6 +159,63 @@ class TestMeetingIdentity(FrappeTestCase):
 			deal_participants(deal),
 			[{"reference_doctype": "Contact", "reference_docname": "Contact-A"}],
 		)
+
+	def test_lead_participants_target_only_when_no_owner(self):
+		"""TXB-212: with only an email, the Lead itself is the resolvable customer target."""
+		lead = FakeLead(name="LEAD-1", email="who@example.com")
+		self.assertEqual(
+			lead_participants(lead),
+			[{"reference_doctype": "CRM Lead", "reference_docname": "LEAD-1", "email": "who@example.com"}],
+		)
+
+	def test_lead_participants_empty_when_no_owner_or_email(self):
+		"""TXB-212: an unresolvable owner and target omit both attendees rather than blocking."""
+		self.assertEqual(lead_participants(FakeLead(name="LEAD-2")), [])
+
+	def test_deal_participants_omit_owner_when_unresolvable(self):
+		"""TXB-212: a Deal with no owner still yields its Contacts -- the owner is simply absent."""
+		deal = FakeDeal(contacts=[FakeRow("Contact-A")])
+		self.assertEqual(
+			deal_participants(deal),
+			[{"reference_doctype": "Contact", "reference_docname": "Contact-A"}],
+		)
+
+	def test_normalize_email_trims_and_lowercases(self):
+		self.assertEqual(_normalize_email("  Who@Example.COM "), "who@example.com")
+		self.assertEqual(_normalize_email(None), "")
+
+	def test_reconcile_is_additive_and_dedupes(self):
+		"""TXB-212: required attendees are added once; existing manual rows survive untouched."""
+		manual = FakeParticipant("Contact", "Manual-Contact", "manual@example.com")
+		event = FakeEvent([manual])
+
+		required = [
+			{"reference_doctype": "User", "reference_docname": "owner@example.com", "email": "owner@example.com"},
+			{"reference_doctype": "CRM Lead", "reference_docname": "LEAD-1", "email": "lead@example.com"},
+		]
+		_reconcile_participants(event, required)
+		refs = {(p.reference_doctype, p.reference_docname) for p in event.event_participants}
+		self.assertEqual(
+			refs,
+			{("Contact", "Manual-Contact"), ("User", "owner@example.com"), ("CRM Lead", "LEAD-1")},
+		)
+
+		# A second reconcile with the same required set adds nothing -- idempotent by reference.
+		_reconcile_participants(event, required)
+		self.assertEqual(len(event.event_participants), 3)
+
+	def test_reconcile_collapses_shared_email_to_one_row(self):
+		"""TXB-212: an owner and target that share a normalized email produce a single participant."""
+		event = FakeEvent()
+		_reconcile_participants(
+			event,
+			[
+				{"reference_doctype": "User", "reference_docname": "same@example.com", "email": "Same@example.com"},
+				{"reference_doctype": "CRM Lead", "reference_docname": "LEAD-1", "email": "same@example.com"},
+			],
+		)
+		self.assertEqual(len(event.event_participants), 1)
+		self.assertEqual(event.event_participants[0].reference_doctype, "User")
 
 	def test_bap_address_joins_present_parts(self):
 		self.assertEqual(bap_address("1 St", "", "LT"), "1 St, LT")
@@ -167,6 +264,17 @@ class TestMeetingLifecycle(FrappeTestCase):
 				"contacts": contacts or [],
 			}
 		).insert(ignore_permissions=True)
+
+	def make_user(self, email):
+		if frappe.db.exists("User", email):
+			return frappe.get_doc("User", email)
+		return frappe.get_doc(
+			{"doctype": "User", "email": email, "first_name": "TXB212", "send_welcome_email": 0}
+		).insert(ignore_permissions=True)
+
+	def participants_of(self, event_name):
+		event = frappe.get_doc("Event", event_name)
+		return event.event_participants
 
 	def events_for(self, doctype, name, flow=None):
 		filters = {"reference_doctype": doctype, "reference_docname": name}
@@ -218,6 +326,103 @@ class TestMeetingLifecycle(FrappeTestCase):
 		event = frappe.get_doc("Event", event_name)
 		refs = [(p.reference_doctype, p.reference_docname) for p in event.event_participants]
 		self.assertIn(("Contact", contact.name), refs)
+
+	# -- ac-1: required owner + target attendees (TXB-212) ------------------------------
+
+	def test_lead_discovery_adds_owner_and_target_attendees(self):
+		owner = self.make_user("txb212-owner@example.com")
+		lead = frappe.get_doc(
+			{
+				"doctype": LEAD_DOCTYPE,
+				"first_name": "TXB212",
+				"status": "New",
+				"lead_owner": owner.name,
+				"email": "txb212-lead@example.com",
+			}
+		).insert(ignore_permissions=True)
+
+		schedule_discovery(
+			lead.name,
+			activity={
+				"meeting_date": "2026-09-10",
+				"meeting_time": "14:30:00",
+				"meeting_type": "Virtual",
+				"meeting_link": "https://meet.example/abc",
+			},
+		)
+
+		event_name = self.events_for(LEAD_DOCTYPE, lead.name, DISCOVERY_MEETING_FLOW)[0]["name"]
+		refs = {(p.reference_doctype, p.reference_docname) for p in self.participants_of(event_name)}
+		self.assertIn(("User", owner.name), refs)
+		self.assertIn((LEAD_DOCTYPE, lead.name), refs)
+
+	def test_lead_attendees_dedupe_shared_email(self):
+		"""Owner and target that resolve to the same email land as one participant."""
+		owner = self.make_user("shared212@example.com")
+		lead = frappe.get_doc(
+			{
+				"doctype": LEAD_DOCTYPE,
+				"first_name": "TXB212",
+				"status": "New",
+				"lead_owner": owner.name,
+				"email": "shared212@example.com",
+			}
+		).insert(ignore_permissions=True)
+
+		schedule_discovery(
+			lead.name,
+			activity={"meeting_date": "2026-09-10", "meeting_time": "14:30:00", "meeting_type": "Onsite", "meeting_address": "HQ"},
+		)
+
+		event_name = self.events_for(LEAD_DOCTYPE, lead.name, DISCOVERY_MEETING_FLOW)[0]["name"]
+		shared = [p for p in self.participants_of(event_name) if _normalize_email(p.email) == "shared212@example.com"]
+		self.assertEqual(len(shared), 1)
+
+	def test_opportunity_meeting_adds_owner_and_contacts(self):
+		owner = self.make_user("deal212-owner@example.com")
+		contact = frappe.get_doc(
+			{"doctype": "Contact", "first_name": "TXB212 Contact"}
+		).insert(ignore_permissions=True)
+		deal = self.make_deal("Individual Session", "Submitted", contacts=[{"contact": contact.name}])
+		deal.deal_owner = owner.name
+
+		book_bap(deal, {"bap_datetime": "2026-09-11 09:00:00", "bap_location_type": "Virtual"})
+
+		event_name = self.events_for(DEAL_DOCTYPE, deal.name, MEETING_FLOW_BAP)[0]["name"]
+		refs = {(p.reference_doctype, p.reference_docname) for p in self.participants_of(event_name)}
+		self.assertIn(("User", owner.name), refs)
+		self.assertIn(("Contact", contact.name), refs)
+
+	# -- ac-3: partial resolution never blocks the meeting ------------------------------
+
+	def test_partial_resolution_owner_only(self):
+		"""A Lead with an owner but no email schedules its meeting with just the owner attendee."""
+		owner = self.make_user("partial212-owner@example.com")
+		lead = frappe.get_doc(
+			{"doctype": LEAD_DOCTYPE, "first_name": "TXB212", "status": "New", "lead_owner": owner.name}
+		).insert(ignore_permissions=True)
+
+		schedule_discovery(
+			lead.name,
+			activity={"meeting_date": "2026-09-10", "meeting_time": "14:30:00", "meeting_type": "Onsite", "meeting_address": "HQ"},
+		)
+
+		events = self.events_for(LEAD_DOCTYPE, lead.name, DISCOVERY_MEETING_FLOW)
+		self.assertEqual(len(events), 1)
+		refs = {(p.reference_doctype, p.reference_docname) for p in self.participants_of(events[0]["name"])}
+		self.assertIn(("User", owner.name), refs)
+		self.assertNotIn((LEAD_DOCTYPE, lead.name), refs)
+
+	def test_no_resolvable_attendee_still_schedules(self):
+		"""Neither owner nor email resolves, yet the meeting Event is still created."""
+		lead = self.make_lead()
+
+		schedule_discovery(
+			lead.name,
+			activity={"meeting_date": "2026-09-10", "meeting_time": "14:30:00", "meeting_type": "Onsite", "meeting_address": "HQ"},
+		)
+
+		self.assertEqual(len(self.events_for(LEAD_DOCTYPE, lead.name, DISCOVERY_MEETING_FLOW)), 1)
 
 	# -- ac-1: complete meeting-flow mapping --------------------------------------------
 
@@ -325,6 +530,43 @@ class TestMeetingLifecycle(FrappeTestCase):
 		self.assertEqual(len(events), 1)
 		self.assertEqual(events[0]["name"], first)
 		self.assertEqual(str(events[0]["starts_on"]), "2026-09-11 16:00:00")
+
+	def test_reschedule_adds_newly_resolvable_owner_and_keeps_manual(self):
+		"""ac-2: a reschedule reconciles a now-resolvable owner onto the same Event without
+		creating another and without dropping a manually added participant."""
+		lead = frappe.get_doc(
+			{"doctype": LEAD_DOCTYPE, "first_name": "TXB212", "status": "New", "email": "resched212@example.com"}
+		).insert(ignore_permissions=True)
+
+		schedule_discovery(
+			lead.name,
+			activity={"meeting_date": "2026-09-10", "meeting_time": "14:30:00", "meeting_type": "Onsite", "meeting_address": "HQ"},
+		)
+		event_name = self.events_for(LEAD_DOCTYPE, lead.name, DISCOVERY_MEETING_FLOW)[0]["name"]
+
+		# A user manually adds an unrelated attendee to the canonical Event.
+		manual = frappe.get_doc({"doctype": "Contact", "first_name": "TXB212 Manual"}).insert(
+			ignore_permissions=True
+		)
+		event = frappe.get_doc("Event", event_name)
+		event.append("event_participants", {"reference_doctype": "Contact", "reference_docname": manual.name})
+		event.save(ignore_permissions=True)
+
+		# The Lead gains an owner, then the meeting is rescheduled.
+		owner = self.make_user("resched212-owner@example.com")
+		frappe.db.set_value(LEAD_DOCTYPE, lead.name, "lead_owner", owner.name)
+		schedule_discovery(
+			lead.name,
+			activity={"meeting_date": "2026-09-12", "meeting_time": "10:00:00", "meeting_type": "Onsite", "meeting_address": "HQ"},
+		)
+
+		events = self.events_for(LEAD_DOCTYPE, lead.name, DISCOVERY_MEETING_FLOW)
+		self.assertEqual(len(events), 1)
+		self.assertEqual(events[0]["name"], event_name)
+		refs = {(p.reference_doctype, p.reference_docname) for p in self.participants_of(event_name)}
+		self.assertIn(("User", owner.name), refs)  # newly resolvable owner reconciled in
+		self.assertIn((LEAD_DOCTYPE, lead.name), refs)  # target still present
+		self.assertIn(("Contact", manual.name), refs)  # manual participant survived
 
 	def test_bap_reschedule_then_cancel_preserve_one_event(self):
 		deal = self.make_deal("Individual Session", "Session Set")

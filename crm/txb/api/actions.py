@@ -12,6 +12,7 @@ import frappe
 from frappe import _
 
 from crm.txb.constants import LEAD_STATUS_FOLLOW_UP, LEAD_STATUS_NURTURE
+from crm.txb import meetings
 from crm.txb.meetings import sync_meeting_event
 from crm.txb.permissions import can_change_status, is_admin
 from crm.txb.pipelines.actions import find_action, get_actions, resolve_to_state
@@ -542,6 +543,10 @@ def schedule_discovery(lead: str, status: str | None = None, activity: str | dic
 			meeting_type=values.get("meeting_type"),
 			link=values.get("meeting_link"),
 			address=values.get("meeting_address"),
+			# TXB-212: carry the Lead's resolvable owner and target so the meeting Event's attendee
+			# list is not empty. Reconciliation is additive and idempotent, so a reschedule keeps
+			# any manually added participants while ensuring the required ones are present.
+			participants=meetings.lead_participants(doc),
 		)
 		doc.status = DISCOVERY_STATUS
 		doc.save()
