@@ -25,6 +25,14 @@ from frappe.utils import add_to_date, escape_html, get_datetime
 from crm.txb.constants import FIELD_MEETING_KEY
 
 EVENT_DOCTYPE = "Event"
+LEAD_DOCTYPE = "CRM Lead"
+DEAL_DOCTYPE = "CRM Deal"
+CONTACT_DOCTYPE = "Contact"
+
+# TXB-213: joins the flow's base meeting title and the resolved customer name in a generated
+# Event subject, composing `<meeting title> — <customer name>`. An em dash, matching the format
+# the meeting brief specifies.
+SUBJECT_NAME_SEPARATOR = " — "
 
 # Status the Event rests in while the meeting is live. Frappe ships Open/Completed/Closed and
 # (via customisation) Cancelled; the activity reader treats Cancelled as the cancellation moment.
@@ -74,6 +82,13 @@ def sync_meeting_event(
 	key = meeting_key(reference_doctype, reference_docname, flow)
 	starts_on = get_datetime(starts_on)
 	ends_on = get_datetime(ends_on) if ends_on else add_to_date(starts_on, hours=DEFAULT_DURATION_HOURS)
+
+	# TXB-213: name the customer in the generated Event's subject so it reads
+	# `<meeting title> — <Lead or Contact name>` wherever the Event surfaces. Composed here, on the
+	# shared boundary, so both insert and existing-Event update paths apply the same subject on
+	# creation, retry and reschedule -- and every flow keeps supplying only its translatable base
+	# title.
+	subject = _compose_subject(subject, reference_doctype, reference_docname)
 
 	values = {
 		"subject": subject,
@@ -284,6 +299,92 @@ def _apply(event, values: dict):
 def _meeting_key_installed() -> bool:
 	"""Whether this site has run the meeting-key patch; guarded so an un-migrated site still works."""
 	return frappe.get_meta(EVENT_DOCTYPE).has_field(FIELD_MEETING_KEY)
+
+
+def _compose_subject(subject: str, reference_doctype: str, reference_docname: str) -> str:
+	"""Append the resolved customer name to the base meeting title (TXB-213).
+
+	Composes `<meeting title> — <customer name>` so a generated Event identifies the Lead or the
+	Opportunity's Contact. When no person name resolves the base subject is returned unchanged --
+	never a dangling separator, an internal document id or placeholder text -- so the fallback is
+	exactly the flow's existing generic title.
+	"""
+	name = _customer_display_name(reference_doctype, reference_docname)
+	if not name:
+		return subject
+	return f"{subject}{SUBJECT_NAME_SEPARATOR}{name}"
+
+
+def _customer_display_name(reference_doctype: str, reference_docname: str) -> str:
+	"""The customer person name for a generated meeting's owning record, or "" when none resolves.
+
+	A Lead resolves to its own display/full name; a Deal resolves to its primary linked Contact,
+	falling back to the first linked Contact that has a resolvable name. Any other source, or an
+	unresolvable name, yields "" so the caller keeps the generic title.
+	"""
+	if reference_doctype == LEAD_DOCTYPE:
+		return _lead_display_name(reference_docname)
+	if reference_doctype == DEAL_DOCTYPE:
+		return _deal_contact_display_name(reference_docname)
+	return ""
+
+
+def _lead_display_name(lead: str) -> str:
+	"""A Lead's display name: its `lead_name`, else its first/last name, else "" (TXB-213)."""
+	row = frappe.db.get_value(
+		LEAD_DOCTYPE, lead, ["lead_name", "first_name", "last_name"], as_dict=True
+	)
+	if not row:
+		return ""
+	return _format_person_name(row.get("lead_name")) or _format_person_name(
+		row.get("first_name"), row.get("last_name")
+	)
+
+
+def _deal_contact_display_name(deal: str) -> str:
+	"""A Deal's customer name from its linked Contacts, preferring the primary one (TXB-213).
+
+	Contacts are considered primary-first, then in table order, and the first that resolves to a
+	real person name wins. Returns "" when the Deal has no linked Contact with a resolvable name.
+	"""
+	doc = frappe.get_doc(DEAL_DOCTYPE, deal)
+	for row in _primary_first(doc.get("contacts") or []):
+		contact = row.get("contact") if hasattr(row, "get") else getattr(row, "contact", None)
+		name = _contact_display_name(contact)
+		if name:
+			return name
+	return ""
+
+
+def _primary_first(rows: list) -> list:
+	"""Deal Contact rows ordered primary-first, otherwise preserving their table order (TXB-213).
+
+	`sorted` is stable, so a non-primary row keeps its original position relative to its peers,
+	making the first resolvable name deterministic: the primary Contact, else the first listed.
+	"""
+	return sorted(rows, key=lambda row: 0 if _row_is_primary(row) else 1)
+
+
+def _row_is_primary(row) -> bool:
+	value = row.get("is_primary") if hasattr(row, "get") else getattr(row, "is_primary", 0)
+	return bool(value)
+
+
+def _contact_display_name(contact: str | None) -> str:
+	"""A Contact's display name from its first/last name, or "" when it cannot resolve (TXB-213)."""
+	if not contact:
+		return ""
+	row = frappe.db.get_value(
+		CONTACT_DOCTYPE, contact, ["first_name", "last_name"], as_dict=True
+	)
+	if not row:
+		return ""
+	return _format_person_name(row.get("first_name"), row.get("last_name"))
+
+
+def _format_person_name(*parts: str | None) -> str:
+	"""Join present, stripped name parts with a single space; "" when none resolve (TXB-213)."""
+	return " ".join(part.strip() for part in parts if part and part.strip())
 
 
 def _meeting_description(meeting_type: str | None, link: str | None, address: str | None) -> str:
