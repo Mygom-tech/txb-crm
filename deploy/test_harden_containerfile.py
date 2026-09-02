@@ -71,9 +71,42 @@ def test_already_hardened_fails_loudly():
     raise AssertionError("expected SystemExit when http.version is already set")
 
 
+def _read(name):
+    with open(os.path.join(_HERE, name), encoding="utf-8") as fh:
+        return fh.read()
+
+
+def test_hardened_containerfile_lives_in_build_context():
+    """TXB-215 regression: the generated Containerfile must be allocated inside
+    the $FD_DIR build context, never in global /tmp.
+
+    `docker build -f <dockerfile>` makes BuildKit's sender traverse the
+    dockerfile's own parent directory as part of the context transfer. A bare
+    `mktemp` (/tmp/tmp.*) therefore drags in unrelated protected /tmp siblings
+    (e.g. /tmp/.forticlient) and aborts the build before any stage runs. Both
+    the release build and the no-push probe must keep the derivative under the
+    canonical build context so the sender only ever reads frappe_docker.
+    """
+    expected = 'HARDENED_CONTAINERFILE="$(mktemp "$FD_DIR/.txb-hardened.Containerfile.XXXXXX")"'
+    for script in ("build.sh", "verify-git-transport.sh"):
+        src = _read(script)
+        assert expected in src, (
+            f"{script}: hardened Containerfile must be mktemp'd under $FD_DIR "
+            "(the build context), not global /tmp"
+        )
+        # A bare mktemp with no template lands in global /tmp — the regression.
+        assert 'HARDENED_CONTAINERFILE="$(mktemp)"' not in src, (
+            f"{script}: bare `mktemp` puts the Containerfile in global /tmp"
+        )
+        # And the in-context path is what `docker build -f` actually consumes,
+        # with $FD_DIR as the context, so COPY paths still resolve.
+        assert '-f "$HARDENED_CONTAINERFILE"' in src
+
+
 if __name__ == "__main__":
     test_single_injection_before_bench_init()
     test_missing_anchor_fails_loudly()
     test_ambiguous_anchor_fails_loudly()
     test_already_hardened_fails_loudly()
+    test_hardened_containerfile_lives_in_build_context()
     print("ok: harden_containerfile probe tests passed")

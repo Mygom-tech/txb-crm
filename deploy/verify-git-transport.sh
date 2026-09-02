@@ -33,7 +33,13 @@ fi
 # exercises the exact `git ls-remote https://github.com/frappe/frappe
 # version-15` path that fails without the transport fix.
 APPS_JSON_FILE="$(mktemp)"
-HARDENED_CONTAINERFILE="$(mktemp)"
+# The hardened Containerfile must live inside $FD_DIR (the build context), not
+# global /tmp: `docker build -f <dockerfile>` makes BuildKit's sender traverse
+# the dockerfile's own parent, so a /tmp/tmp.* path aborts on unrelated
+# protected /tmp siblings (e.g. /tmp/.forticlient) before the build starts
+# (TXB-215). Keeping it under $FD_DIR isolates the context to frappe_docker; the
+# hidden `.txb-hardened.*` name stays untracked and the trap removes it.
+HARDENED_CONTAINERFILE="$(mktemp "$FD_DIR/.txb-hardened.Containerfile.XXXXXX")"
 trap 'rm -f "$APPS_JSON_FILE" "$HARDENED_CONTAINERFILE"' EXIT
 
 python3 "$REPO_ROOT/deploy/harden_containerfile.py" \
