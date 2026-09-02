@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@framework/ui": "link:../../frappe/ui",
-    "@tiptap/core": "^3.26.0",
+    "@tiptap/core": "^3.30.4",
     "@tiptap/extension-paragraph": "^3.26.0",
     "@tiptap/pm": "^3.26.0",
     "@tiptap/vue-3": "^3.26.0",
