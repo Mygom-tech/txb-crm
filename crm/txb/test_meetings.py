@@ -27,7 +27,11 @@ from crm.txb.api.actions import (
 )
 from crm.txb.constants import FIELD_MEETING_KEY
 from crm.txb.meetings import (
+	SUBJECT_NAME_SEPARATOR,
+	_compose_subject,
+	_format_person_name,
 	_normalize_email,
+	_primary_first,
 	_reconcile_participants,
 	cancel_meeting_event,
 	deal_participants,
@@ -224,6 +228,30 @@ class TestMeetingIdentity(FrappeTestCase):
 	def test_discovery_starts_on_combines_date_and_time(self):
 		starts = discovery_starts_on({"meeting_date": "2026-09-10", "meeting_time": "14:30:00"})
 		self.assertEqual(starts, "2026-09-10 14:30:00")
+
+	# -- TXB-213: customer-name subject composition (pure) ------------------------------
+
+	def test_format_person_name_joins_present_parts(self):
+		self.assertEqual(_format_person_name("  Ada  ", "Lovelace"), "Ada Lovelace")
+		self.assertEqual(_format_person_name("Ada", None, ""), "Ada")
+
+	def test_format_person_name_empty_when_nothing_resolves(self):
+		"""No blank separators or stray whitespace when every part is absent."""
+		self.assertEqual(_format_person_name(None, "", "   "), "")
+
+	def test_primary_first_prefers_primary_then_keeps_table_order(self):
+		"""The primary Contact sorts first; the rest keep their original listed order."""
+		rows = [FakeRow("Contact-A"), FakeRow("Contact-B", is_primary=1), FakeRow("Contact-C")]
+		self.assertEqual([r.contact for r in _primary_first(rows)], ["Contact-B", "Contact-A", "Contact-C"])
+
+	def test_primary_first_without_primary_preserves_order(self):
+		rows = [FakeRow("Contact-A"), FakeRow("Contact-B")]
+		self.assertEqual([r.contact for r in _primary_first(rows)], ["Contact-A", "Contact-B"])
+
+	def test_compose_subject_appends_nothing_for_unknown_source(self):
+		"""A non-TXB source resolves no customer name, so the base title is returned unchanged --
+		no dangling separator."""
+		self.assertEqual(_compose_subject("Discovery Meeting", "ToDo", "X"), "Discovery Meeting")
 
 	def test_no_google_calendar_dependency_in_helper(self):
 		"""The Non-goal: no calendar provider is introduced. The helper never mentions one."""
@@ -668,3 +696,100 @@ class TestMeetingLifecycle(FrappeTestCase):
 		event = frappe.get_doc("Event", self.events_for(DEAL_DOCTYPE, deal.name, MEETING_FLOW_VCS)[0]["name"])
 		# No Google Calendar sync is requested on the Event we create.
 		self.assertFalse(event.get("sync_with_google_calendar"))
+
+	# -- TXB-213: generated Event subjects name the customer ----------------------------
+
+	def make_contact(self, first_name, last_name=None):
+		return frappe.get_doc(
+			{"doctype": "Contact", "first_name": first_name, "last_name": last_name}
+		).insert(ignore_permissions=True)
+
+	def test_lead_meeting_subject_names_the_lead(self):
+		"""ac-1: a Lead meeting reads `<meeting title> — <Lead display name>`."""
+		lead = frappe.get_doc(
+			{"doctype": LEAD_DOCTYPE, "first_name": "Ada", "last_name": "Lovelace", "status": "New"}
+		).insert(ignore_permissions=True)
+
+		schedule_discovery(
+			lead.name,
+			activity={"meeting_date": "2026-09-10", "meeting_time": "14:30:00", "meeting_type": "Onsite", "meeting_address": "HQ"},
+		)
+
+		subject = self.events_for(LEAD_DOCTYPE, lead.name, DISCOVERY_MEETING_FLOW)[0]["subject"]
+		self.assertTrue(subject.startswith(f"Discovery Meeting{SUBJECT_NAME_SEPARATOR}"), subject)
+		self.assertIn("Ada", subject)
+		self.assertIn("Lovelace", subject)
+
+	def test_opportunity_meeting_subject_names_primary_contact(self):
+		"""ac-1: an Opportunity meeting names the primary linked Contact, not the first listed."""
+		first = self.make_contact("First", "Listed")
+		primary = self.make_contact("Primary", "Choice")
+		deal = self.make_deal(
+			"Individual Session",
+			"Submitted",
+			contacts=[{"contact": first.name}, {"contact": primary.name, "is_primary": 1}],
+		)
+
+		book_bap(deal, {"bap_datetime": "2026-09-11 09:00:00", "bap_location_type": "Virtual"})
+
+		subject = self.events_for(DEAL_DOCTYPE, deal.name, MEETING_FLOW_BAP)[0]["subject"]
+		self.assertTrue(subject.endswith(f"{SUBJECT_NAME_SEPARATOR}Primary Choice"), subject)
+
+	def test_opportunity_meeting_subject_falls_back_to_first_contact(self):
+		"""ac-1: with no primary Contact, the first linked Contact names the meeting."""
+		first = self.make_contact("First", "Listed")
+		second = self.make_contact("Second", "Listed")
+		deal = self.make_deal(
+			"Individual Session",
+			"Submitted",
+			contacts=[{"contact": first.name}, {"contact": second.name}],
+		)
+
+		book_bap(deal, {"bap_datetime": "2026-09-11 09:00:00", "bap_location_type": "Virtual"})
+
+		subject = self.events_for(DEAL_DOCTYPE, deal.name, MEETING_FLOW_BAP)[0]["subject"]
+		self.assertTrue(subject.endswith(f"{SUBJECT_NAME_SEPARATOR}First Listed"), subject)
+
+	def test_opportunity_meeting_subject_keeps_generic_title_without_contacts(self):
+		"""ac-2: no resolvable customer name leaves the flow's generic title untouched."""
+		deal = self.make_deal("Workshop", "Workshop submitted")
+
+		set_vcs_call(deal, {"vcs_datetime": "2026-09-15 09:00:00"})
+
+		subject = self.events_for(DEAL_DOCTYPE, deal.name, MEETING_FLOW_VCS)[0]["subject"]
+		self.assertNotIn(SUBJECT_NAME_SEPARATOR, subject)
+		self.assertTrue(subject.strip())
+
+	def test_reschedule_updates_subject_with_current_primary_contact(self):
+		"""ac-3: a reschedule re-resolves the customer name onto the same Event identity."""
+		alpha = self.make_contact("Alpha", "One")
+		bravo = self.make_contact("Bravo", "Two")
+		deal = self.make_deal(
+			"Individual Session",
+			"Session Set",
+			contacts=[{"contact": alpha.name, "is_primary": 1}, {"contact": bravo.name}],
+		)
+
+		book_bap(deal, {"bap_datetime": "2026-09-18 09:00:00", "bap_location_type": "Virtual"})
+		original = self.events_for(DEAL_DOCTYPE, deal.name, MEETING_FLOW_BAP)[0]
+		self.assertTrue(original["subject"].endswith(f"{SUBJECT_NAME_SEPARATOR}Alpha One"), original["subject"])
+
+		# The primary Contact changes, then the meeting is rescheduled.
+		deal = frappe.get_doc(DEAL_DOCTYPE, deal.name)
+		for row in deal.contacts:
+			row.is_primary = 1 if row.contact == bravo.name else 0
+		deal.save(ignore_permissions=True)
+		reschedule_bap(
+			deal,
+			{
+				"reschedule_type": "Yes, I have a new date",
+				"reschedule_reason": "clash",
+				"new_bap_datetime": "2026-09-19 10:00:00",
+				"new_location_type": "Virtual",
+			},
+		)
+
+		events = self.events_for(DEAL_DOCTYPE, deal.name, MEETING_FLOW_BAP)
+		self.assertEqual(len(events), 1)
+		self.assertEqual(events[0]["name"], original["name"])  # same canonical Event
+		self.assertTrue(events[0]["subject"].endswith(f"{SUBJECT_NAME_SEPARATOR}Bravo Two"), events[0]["subject"])
