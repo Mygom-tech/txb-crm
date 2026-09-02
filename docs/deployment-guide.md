@@ -176,6 +176,17 @@ Notes:
   actually runs — see the production-cutover runbook's pre-conditions.
 - frappe_docker moves occasionally — if `images/layered/Containerfile` is
   renamed upstream, check their `docs/custom-apps.md` for the current path.
+- The builder image `frappe/build:version-15` ships Git 2.39.5, whose default
+  HTTP/2 transport fails public GitHub ref discovery inside `bench init`
+  (see Troubleshooting). `deploy/build.sh` therefore does **not** build from the
+  upstream Containerfile directly: `deploy/harden_containerfile.py` copies it to
+  a `mktemp` path and injects one `RUN git config --global http.version HTTP/1.1`
+  as the `frappe` builder user, immediately before `bench init`. The transform
+  asserts **exactly one** builder-stage anchor and hard-fails if upstream's
+  layout shifts (so we never silently ship an unhardened, broken image); the
+  temp Containerfile is cleaned up by the same trap as the apps.json secret. To
+  prove the fix locally without pushing, run `./deploy/verify-git-transport.sh`
+  (builds only `--target builder` with an empty secret; no `GH_TOKEN` needed).
 - If manual builds ever become a bottleneck or get forgotten, the same build
   translates 1:1 into a ~40-line GitHub Actions workflow (build-push-action
   with the same build args, `GITHUB_TOKEN` instead of PAT #1).
@@ -435,6 +446,7 @@ volume grows with file uploads); MariaDB storage/connections on the DB side.
 | Traefik `404 page not found` (plain text) on the domain                                                                           | No router matches the Host — domain changed but Coolify/Traefik labels didn't                                                                                                                                                                                            | Update the frontend service's domain in Coolify; keep https + letsencrypt                                                                                                                                                      |
 | Frappe stack traces `AppNotInstalledError` / `'ErrorPage' object has no attribute 'app_path'` on random paths like `/config/.env` | Request Host resolves to no (or a half-provisioned) bench site; scanners trigger it constantly                                                                                                                                                                           | Set `FRAPPE_SITE_NAME_HEADER: <site>` on frontend; fix the site itself if it's every request                                                                                                                                   |
 | Local build fails: `error getting credentials` on public images                                                                   | Docker Desktop's WSL credential helper (`credsStore: desktop.exe`) broken                                                                                                                                                                                                | Remove `credsStore` from `~/.docker/config.json`, `docker login ghcr.io` again                                                                                                                                                 |
+| Build dies in `bench init` / `is_valid_frappe_branch` with `fatal: could not read Username for 'https://github.com'` then `fatal: expected flush after ref listing` — yet the host reaches GitHub fine                                | `frappe/build:version-15`'s Git 2.39.5 negotiates HTTP/2 for `git ls-remote https://github.com/frappe/frappe version-15` and the discovery response is truncated; Git misreads it as an auth prompt. Forcing HTTP/1.1 fixes it (`git -c http.version=HTTP/1.1 ls-remote …` succeeds)                                                                                | Already handled: `deploy/build.sh` builds from `deploy/harden_containerfile.py`'s derivative, which injects `git config --global http.version HTTP/1.1` before `bench init`. If it recurs, confirm the injection with `./deploy/verify-git-transport.sh`; a hard-fail there means the upstream anchor moved                                                                                                              |
 | git commands resolve to a bizarre repo root (`/`, home dir)                                                                       | Stray `.git` directory in an ancestor (accidental `git init`)                                                                                                                                                                                                            | Find with `git rev-parse --show-toplevel` from the puzzled directory; delete the stray `.git`                                                                                                                                  |
 
 ## Release pipeline — staging → production
