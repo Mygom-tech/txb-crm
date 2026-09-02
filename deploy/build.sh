@@ -37,7 +37,17 @@ APPS_JSON_FILE="$(mktemp)"
 # 'https://github.com'" / "expected flush after ref listing"). We keep the
 # upstream frappe_docker checkout pristine and instead build from a temporary
 # Containerfile derivative that forces the builder onto HTTP/1.1 (TXB-214).
-HARDENED_CONTAINERFILE="$(mktemp)"
+#
+# The derivative MUST live inside $FD_DIR (the build context), not global /tmp:
+# BuildKit's `docker build -f <dockerfile>` sends the dockerfile's own parent as
+# part of the context transfer, so a /tmp/tmp.* path makes the sender traverse
+# global /tmp and abort on unrelated protected siblings like /tmp/.forticlient
+# ("error from sender: open /tmp/.forticlient: permission denied") before any
+# build stage runs (TXB-215). $FD_DIR already exists here (cloned/pulled above),
+# and the hidden `.txb-hardened.*` name stays untracked in the frappe_docker
+# checkout; the EXIT trap removes it on success and failure so it is never left
+# behind or committed.
+HARDENED_CONTAINERFILE="$(mktemp "$FD_DIR/.txb-hardened.Containerfile.XXXXXX")"
 # One trap owns both temp files so the secret and generated Containerfile are
 # removed on success and on any failure.
 trap 'rm -f "$APPS_JSON_FILE" "$HARDENED_CONTAINERFILE"' EXIT
