@@ -32,14 +32,30 @@ fi
 # build arg — an unconsumed arg builds a frappe-only image with zero errors
 # (we learned this in production). The secret is never written to image layers.
 APPS_JSON_FILE="$(mktemp)"
-trap 'rm -f "$APPS_JSON_FILE"' EXIT
+# frappe/build:version-15 ships Git 2.39.5, whose default HTTP/2 transport fails
+# public GitHub ref discovery inside `bench init` ("could not read Username for
+# 'https://github.com'" / "expected flush after ref listing"). We keep the
+# upstream frappe_docker checkout pristine and instead build from a temporary
+# Containerfile derivative that forces the builder onto HTTP/1.1 (TXB-214).
+HARDENED_CONTAINERFILE="$(mktemp)"
+# One trap owns both temp files so the secret and generated Containerfile are
+# removed on success and on any failure.
+trap 'rm -f "$APPS_JSON_FILE" "$HARDENED_CONTAINERFILE"' EXIT
 chmod 600 "$APPS_JSON_FILE"
 # Substitute ONLY ${GH_TOKEN} so other $-signs in apps.json survive verbatim
 GH_TOKEN="$GH_TOKEN" envsubst '$GH_TOKEN' \
   < "$REPO_ROOT/deploy/apps.json" > "$APPS_JSON_FILE"
 
+# Inject the HTTP/1.1 git-config RUN before bench init. The transform asserts a
+# single builder-stage anchor and hard-fails if the upstream layout shifts, so
+# we never silently build an unhardened image.
+python3 "$REPO_ROOT/deploy/harden_containerfile.py" \
+  "$FD_DIR/images/layered/Containerfile" "$HARDENED_CONTAINERFILE"
+
+# Context stays $FD_DIR (COPY paths + base images resolve against it); only the
+# Dockerfile is swapped for the hardened derivative.
 DOCKER_BUILDKIT=1 docker build "$FD_DIR" \
-  -f "$FD_DIR/images/layered/Containerfile" \
+  -f "$HARDENED_CONTAINERFILE" \
   --secret "id=apps_json,src=$APPS_JSON_FILE" \
   --build-arg FRAPPE_PATH=https://github.com/frappe/frappe \
   --build-arg FRAPPE_BRANCH="$FRAPPE_BRANCH" \
