@@ -394,6 +394,9 @@ after_migrate = [
 	# Re-asserted on every migrate, not once via a patch: a Patch Log entry cannot undo a
 	# script someone re-enabled afterwards. See crm/txb/retired_scripts.py.
 	"crm.txb.retired_scripts.retire_scripts",
+	# Same reasoning for a drifted CRM Call Log `status` options override that would otherwise
+	# reject the canonical "No Answer" dial result. See crm/txb/call_log_status.py.
+	"crm.txb.call_log_status.reconcile_call_log_status_options",
 ]
 
 standard_dropdown_items = [

@@ -9,6 +9,7 @@ from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 from crm.domain_enrichment.install import seed_default_rules_and_mappings
 from crm.fcrm.doctype.crm_dashboard.crm_dashboard import create_default_manager_dashboard
 from crm.fcrm.doctype.crm_products.crm_products import create_product_details_script
+from crm.txb.call_log_status import reconcile_call_log_status_options
 from crm.txb.registration_setup import ensure_registration_setup
 
 
@@ -36,6 +37,9 @@ def after_install(force=False):
 	create_assignment_rule_custom_fields()
 	add_assignment_rule_property_setters()
 	seed_default_rules_and_mappings()
+	# Clear any drifted CRM Call Log `status` options override so a manually logged "No Answer"
+	# dial passes Frappe's Select validation. Idempotent; re-asserted on every migrate too.
+	reconcile_call_log_status_options()
 	frappe.db.commit()
 
 

@@ -114,9 +114,29 @@ CONVERSION_PIPELINE_INITIAL_STATUS = {
 # browser's requiresDial() check cannot drift.
 LEAD_STATUS_CONTACT_ATTEMPTED = "Contact attempted"
 
+# The full CRM Call Log `status` lifecycle, in display order. Canonical and identical to the
+# field's committed options in crm/fcrm/doctype/crm_call_log/crm_call_log.json: transient provider
+# states (Initiated, Ringing, In Progress, Queued) followed by the terminal outcomes. Pinned here
+# as the single source of truth so crm.txb.call_log_status can reconcile a drifted runtime override
+# (a Property Setter reporting a foreign set such as "Completed/Missed/No Charge") back to exactly
+# this set, and so DIAL_RESULTS below can be asserted a subset of it.
+CALL_LOG_STATUS_OPTIONS = (
+	"Initiated",
+	"Ringing",
+	"In Progress",
+	"Completed",
+	"Failed",
+	"Busy",
+	"No Answer",
+	"Queued",
+	"Canceled",
+)
+
 # Final CRM Call Log statuses a user may select when manually logging a completed dial attempt.
 # Transient telephony states (Initiated, Ringing, In Progress, Queued) are intentionally excluded:
-# Log a dial records what happened after the attempt, not a live provider lifecycle state.
+# Log a dial records what happened after the attempt, not a live provider lifecycle state. Every
+# value is a member of CALL_LOG_STATUS_OPTIONS, so an approved dial result is always a valid
+# effective CRM Call Log status.
 DIAL_RESULTS = ("Completed", "Failed", "Busy", "No Answer", "Canceled")
 
 # The Lead status a booked discovery meeting rests at before it is run. "Run Discovery Meeting"
