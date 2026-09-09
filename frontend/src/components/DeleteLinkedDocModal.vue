@@ -9,7 +9,7 @@
           <div>
             <h3 class="text-3xl-semibold leading-6 text-ink-gray-9">
               {{
-                linkedDocs?.length == 0
+                !hasLinkedDocs
                   ? __('Delete')
                   : __('Delete or unlink linked documents')
               }}
@@ -20,7 +20,7 @@
           </div>
         </div>
         <div>
-          <div v-if="linkedDocs?.length > 0">
+          <div v-if="hasLinkedDocs">
             <span class="text-ink-gray-5 text-base">
               {{
                 __(
@@ -50,7 +50,7 @@
               "
             />
           </div>
-          <div v-if="linkedDocs?.length == 0" class="text-ink-gray-5 text-base">
+          <div v-if="!hasLinkedDocs" class="text-ink-gray-5 text-base">
             {{
               __('Are you sure you want to delete {0} - {1}?', [
                 props.doctype,
@@ -63,7 +63,7 @@
       <div v-if="!confirmDeleteInfo.show" class="px-4 pb-7 pt-0 sm:px-6">
         <div class="flex flex-row-reverse gap-2">
           <Button
-            v-if="linkedDocs?.length > 0"
+            v-if="hasLinkedDocs"
             :label="
               viewControls?.selections?.length == 0
                 ? __('Delete All')
@@ -75,7 +75,7 @@
             @click="confirmDelete()"
           />
           <Button
-            v-if="linkedDocs?.length > 0"
+            v-if="hasLinkedDocs"
             :label="
               viewControls?.selections?.length == 0
                 ? __('Unlink All')
@@ -87,11 +87,11 @@
             @click="confirmUnlink()"
           />
           <Button
-            v-if="linkedDocs?.length == 0"
+            v-if="!hasLinkedDocs"
             variant="solid"
             icon-left="lucide-trash-2"
             :label="__('Delete')"
-            :loading="isDealCreating"
+            :loading="deleting"
             theme="red"
             @click="deleteDoc()"
           />
@@ -178,6 +178,15 @@ const linkedDocs = computed(() => {
   )
 })
 
+// A CRM Deal deletion is routed through the authoritative crm.api.doc.delete_deal path, which
+// detaches and preserves the converted Lead and its Contacts itself. Bypass the generic
+// unlink-first list so a Deal always deletes from a single confirmation (TXB-218).
+const isDeal = computed(() => props.doctype === 'CRM Deal')
+
+const hasLinkedDocs = computed(() => !isDeal.value && linkedDocs.value?.length > 0)
+
+const deleting = ref(false)
+
 const cancel = () => {
   confirmDeleteInfo.value.show = false
   viewControls.value.updateSelections([])
@@ -249,11 +258,22 @@ const removeDocLinks = () => {
 }
 
 const deleteDoc = async () => {
-  await call('frappe.client.delete', {
-    doctype: props.doctype,
-    name: props.docname,
-  })
-  router.push({ name: props.name })
-  props?.reload?.()
+  deleting.value = true
+  try {
+    if (isDeal.value) {
+      // Authoritative Deal deletion: preserves the Lead (archived) and Contacts, and surfaces
+      // any failure rather than reporting a misleading success.
+      await call('crm.api.doc.delete_deal', { name: props.docname })
+    } else {
+      await call('frappe.client.delete', {
+        doctype: props.doctype,
+        name: props.docname,
+      })
+    }
+    router.push({ name: props.name })
+    props?.reload?.()
+  } finally {
+    deleting.value = false
+  }
 }
 </script>

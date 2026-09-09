@@ -579,9 +579,21 @@ def convert_to_deal(
 	prior_deal = existing.get(FIELD_CONVERTED_DEAL)
 	if prior_deal and frappe.db.exists("CRM Deal", prior_deal):
 		# The persisted initial Opportunity is the retry authority: a repeated request resolves
-		# to it (identifying the existing result) and never creates another. A recorded deal
-		# that no longer exists is treated as unconverted so the Lead can self-heal.
+		# to it (identifying the existing result) and never creates another.
 		return prior_deal
+
+	# Conversion is a single durable event: an already-converted Lead is permanently archived
+	# (TXB-132). If its recorded initial Opportunity was later deleted -- clearing
+	# ``converted_deal`` while ``converted`` stays 1 (TXB-218) -- the retry must NOT self-heal
+	# into a replacement Deal. Reject it here, before any write, so no second Opportunity is
+	# created. A future Opportunity remains creatable directly from the preserved Contact and
+	# may still carry the archived Lead as provenance.
+	if frappe.db.get_value("CRM Lead", lead.name, "converted"):
+		frappe.throw(
+			_("This lead has already been converted; a deleted Deal cannot be recreated from it."),
+			frappe.ValidationError,
+			title=_("Lead Converted"),
+		)
 
 	# Flag scopes the archived-write guard's exemption to this Lead for this request, so the
 	# conversion's own writes pass while unrelated user edits to converted Leads stay refused.

@@ -830,6 +830,115 @@ class TestCRMLead(FrappeTestCase):
 		# Two Opportunities now reference the one archived Lead.
 		self.assertEqual(frappe.db.count("CRM Deal", {"lead": lead.name}), 2)
 
+	# ── TXB-218: delete Deals while preserving archived Leads and Contacts ────────────────
+
+	def test_deleting_original_conversion_deal_preserves_archived_lead_and_contact(self):
+		"""Deleting the original conversion Deal removes it, detaches only its ``converted_deal``
+		backlink, and leaves the Lead permanently archived (converted, status, converted_contact,
+		converted_at and history) with its Contact intact."""
+		from crm.api.doc import delete_deal
+
+		ensure_conversion_result_fields()
+		ensure_deal_statuses()
+		lead = create_lead(first_name="Keep", email="keep@convert.com", organization="Keep Co")
+		deal_name = lead.convert_to_deal()
+		lead.reload()
+
+		contact = lead.get(FIELD_CONVERTED_CONTACT)
+		converted_at = lead.get(FIELD_CONVERTED_AT)
+		status = lead.status
+		self.assertEqual(lead.get(FIELD_CONVERTED_DEAL), deal_name)
+		# A note recorded against the Lead is its history and must survive the Deal deletion.
+		note = add_activity_note("CRM Lead", lead.name, "lead-history")
+
+		delete_deal(deal_name)
+
+		self.assertFalse(frappe.db.exists("CRM Deal", deal_name))
+
+		lead.reload()
+		self.assertEqual(lead.converted, 1)
+		self.assertEqual(lead.status, status)
+		self.assertEqual(lead.get(FIELD_CONVERTED_CONTACT), contact)
+		self.assertEqual(lead.get(FIELD_CONVERTED_AT), converted_at)
+		# No surviving converted_deal reference points to the deleted Deal.
+		self.assertFalse(lead.get(FIELD_CONVERTED_DEAL))
+		self.assertFalse(frappe.db.exists("CRM Lead", {FIELD_CONVERTED_DEAL: deal_name}))
+		# Contact and Lead history are preserved.
+		self.assertTrue(frappe.db.exists("Contact", contact))
+		self.assertTrue(frappe.db.exists("FCRM Note", note.name))
+
+		# The Lead stays read-only: a user-originated save is still refused.
+		lead.job_title = "Edited"
+		with self.assertRaises(frappe.exceptions.ValidationError):
+			lead.save()
+
+	def test_deleting_later_opportunity_leaves_conversion_record_intact(self):
+		"""Deleting a later Opportunity linked to an archived Lead succeeds without reactivating
+		or mutating the Lead's conversion record and without deleting the Contact; a future
+		Opportunity can still be created from that Contact."""
+		from crm.api.doc import delete_deal
+
+		ensure_conversion_result_fields()
+		ensure_deal_statuses()
+		lead = create_lead(first_name="Later", email="later@convert.com", organization="Later Co")
+		original = lead.convert_to_deal()
+		lead.reload()
+		contact = lead.get(FIELD_CONVERTED_CONTACT)
+
+		later = frappe.get_doc(
+			{
+				"doctype": "CRM Deal",
+				"pipeline_type": PIPELINE_INDIVIDUAL_SESSION,
+				"status": "Submitted",
+				"lead": lead.name,
+				"contacts": [{"contact": contact}],
+			}
+		).insert(ignore_permissions=True)
+
+		delete_deal(later.name)
+
+		self.assertFalse(frappe.db.exists("CRM Deal", later.name))
+		lead.reload()
+		# Conversion record untouched: still archived and still pointing at the original Deal.
+		self.assertEqual(lead.converted, 1)
+		self.assertEqual(lead.get(FIELD_CONVERTED_DEAL), original)
+		self.assertEqual(lead.get(FIELD_CONVERTED_CONTACT), contact)
+		self.assertTrue(frappe.db.exists("CRM Deal", original))
+		self.assertTrue(frappe.db.exists("Contact", contact))
+
+		# Future Opportunities can still be created from the preserved Contact.
+		future = frappe.get_doc(
+			{
+				"doctype": "CRM Deal",
+				"pipeline_type": PIPELINE_INDIVIDUAL_SESSION,
+				"status": "Submitted",
+				"lead": lead.name,
+				"contacts": [{"contact": contact}],
+			}
+		).insert(ignore_permissions=True)
+		self.assertTrue(frappe.db.exists("CRM Deal", future.name))
+
+	def test_reconversion_rejected_after_original_deal_deleted(self):
+		"""A later conversion request for an archived Lead whose original Deal was deleted is
+		rejected and creates no replacement Deal."""
+		from crm.api.doc import delete_deal
+
+		ensure_conversion_result_fields()
+		ensure_deal_statuses()
+		lead = create_lead(first_name="NoRedo", email="noredo@convert.com", organization="NoRedo Co")
+		original = lead.convert_to_deal()
+
+		delete_deal(original)
+		self.assertFalse(frappe.db.exists("CRM Deal", original))
+
+		before = frappe.db.count("CRM Deal", {"lead": lead.name})
+		with self.assertRaises(frappe.exceptions.ValidationError) as ctx:
+			convert_to_deal(lead=lead.name)
+		self.assertIn("converted", str(ctx.exception).lower())
+
+		# No replacement Deal was created.
+		self.assertEqual(frappe.db.count("CRM Deal", {"lead": lead.name}), before)
+
 
 def ensure_conversion_result_fields():
 	"""Install the TXB-132 conversion-result fields, mirroring the registered patch.

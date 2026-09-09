@@ -12,6 +12,7 @@ from pypika import Criterion
 
 from crm.api.views import get_views
 from crm.fcrm.doctype.crm_form_script.crm_form_script import get_form_script
+from crm.txb.constants import FIELD_CONVERTED_DEAL
 from crm.utils import is_frappe_version
 
 COUNT_NAME = (
@@ -797,6 +798,46 @@ def remove_linked_doc_reference(items: str | list, remove_contact: bool = False,
 			# Skip if document doesn't exist or has validation errors
 			continue
 
+	return "success"
+
+
+@frappe.whitelist()
+def delete_deal(name: str):
+	"""Delete a CRM Deal while preserving its converted Lead and linked Contacts (TXB-218).
+
+	A Deal is either the *original conversion Deal* -- the initial Opportunity an archived Lead
+	records in ``converted_deal`` -- or a *later Opportunity* that only carries the Lead as
+	ordinary provenance through ``CRM Deal.lead``. The two are distinguished here: only the
+	``converted_deal`` backlink is a Link *into* the Deal and blocks its deletion, so it is the
+	one reference cleared. ``CRM Deal.lead`` and the Deal's own Contact rows point *outward*, so
+	they neither block deletion nor cascade -- the Lead and every Contact (with their history)
+	survive untouched.
+
+	The original backlink is cleared with ``frappe.db.set_value`` -- a tightly scoped internal
+	write that does not run the CRM Lead document lifecycle, so ``guard_archived_lead`` is
+	neither invoked nor weakened. Every other conversion field (``converted``, the Converted
+	status, ``converted_contact``, ``converted_at``) and all Lead history are left intact: the
+	Lead stays permanently archived, not reactivated.
+
+	Runs inside the request transaction and lets any permission, link-integrity or delete
+	failure propagate, so a caller never receives a misleading success.
+	"""
+	if not name:
+		frappe.throw(_("Deal name is required"))
+
+	if not frappe.has_permission("CRM Deal", "delete", doc=name):
+		frappe.throw(_("Not permitted to delete this Deal"), frappe.PermissionError)
+
+	# Detach only the original conversion backlink so link integrity does not block the delete,
+	# leaving the archived Lead otherwise fully converted. Later Opportunities that reference the
+	# Lead as provenance (CRM Deal.lead) are forward links and are not touched.
+	if frappe.get_meta("CRM Lead").has_field(FIELD_CONVERTED_DEAL):
+		for lead_name in frappe.get_all(
+			"CRM Lead", filters={FIELD_CONVERTED_DEAL: name}, pluck="name"
+		):
+			frappe.db.set_value("CRM Lead", lead_name, FIELD_CONVERTED_DEAL, None)
+
+	frappe.delete_doc("CRM Deal", name)
 	return "success"
 
 
