@@ -78,7 +78,12 @@ import { showQuickEntryModal, quickEntryProps } from '@/composables/modals'
 import { useOnboarding, useTelemetry } from 'frappe-ui/frappe'
 import { createResource, call, toast } from 'frappe-ui'
 import { useDocument } from '@/data/document'
-import { computed, onMounted, ref, nextTick } from 'vue'
+import {
+  validateLeadEmail,
+  validateLeadContact,
+  INVALID_EMAIL_MESSAGE,
+} from '@/utils/leadContact'
+import { computed, onMounted, ref, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
 const props = defineProps({
@@ -98,6 +103,23 @@ const isLeadCreating = ref(false)
 const duplicateBlocked = ref(false)
 
 const { document: lead, triggerOnBeforeCreate } = useDocument('CRM Lead')
+
+// Validate the Email field as soon as it loses focus. FieldLayout writes the
+// value back on the native change event (i.e. on blur), so watching the bound
+// value gives us blur-time feedback without redesigning the modal. Malformed
+// input surfaces the inline error while preserving the user's value for
+// correction; the error clears once the address becomes valid.
+watch(
+  () => lead.doc.email,
+  (value) => {
+    const emailError = validateLeadEmail(value)
+    if (emailError) {
+      error.value = __(emailError)
+    } else if (error.value === __(INVALID_EMAIL_MESSAGE)) {
+      error.value = null
+    }
+  },
+)
 
 const isEnriching = ref(false)
 
@@ -219,8 +241,16 @@ async function createNewLead() {
           error.value = __('Mobile number should be a number')
           return error.value
         }
-        if (lead.doc.email && !lead.doc.email.includes('@')) {
-          error.value = __('Invalid email address')
+        // Shared contactability rule: a valid email or a Mobile No. is required,
+        // and a supplied email must be well-formed (a malformed address blocks
+        // creation even when Mobile No. is present). Mirrors the CRM Lead backend
+        // guard so the modal and the API agree.
+        const contactError = validateLeadContact({
+          email: lead.doc.email,
+          mobile_no: lead.doc.mobile_no,
+        })
+        if (contactError) {
+          error.value = __(contactError)
           return error.value
         }
         if (!lead.doc.status) {

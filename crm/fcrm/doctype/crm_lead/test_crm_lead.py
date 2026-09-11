@@ -76,6 +76,34 @@ class TestCRMLead(FrappeTestCase):
 				email="not-an-email",
 			)
 
+	def test_lead_requires_email_or_mobile(self):
+		"""A new Lead with neither email nor mobile_no is rejected; phone alone is not enough."""
+		with self.assertRaises(frappe.exceptions.ValidationError) as context:
+			create_lead(first_name="NoContact", email="", phone="+0987654321")
+		self.assertIn(
+			"Either email or phone number is required to create a Lead.", str(context.exception)
+		)
+
+	def test_whitespace_contact_is_rejected(self):
+		"""Whitespace-only email and mobile_no do not satisfy the contactability rule."""
+		with self.assertRaises(frappe.exceptions.ValidationError) as context:
+			create_lead(first_name="Blank", email="   ", mobile_no="   ")
+		self.assertIn(
+			"Either email or phone number is required to create a Lead.", str(context.exception)
+		)
+
+	def test_lead_mobile_only_is_accepted(self):
+		"""Mobile No. alone satisfies the contactability rule for a new Lead."""
+		lead = create_lead(first_name="MobileOnly", email="", mobile_no="+1234567890")
+		self.assertTrue(lead.name)
+		self.assertFalse(lead.email)
+		self.assertEqual(lead.mobile_no, "+1234567890")
+
+	def test_malformed_email_blocks_even_with_mobile(self):
+		"""A malformed supplied email still blocks creation even when Mobile No. is present."""
+		with self.assertRaises(frappe.exceptions.ValidationError):
+			create_lead(first_name="BadEmail", email="not-an-email", mobile_no="+1234567890")
+
 	def test_set_lead_name_scenarios(self):
 		"""Test various scenarios for setting lead_name"""
 		# Test 1: lead_name from organization when no first_name
