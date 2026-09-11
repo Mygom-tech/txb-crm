@@ -178,10 +178,19 @@
          `fieldChange` never ran, the value never committed to the FieldLayout `data`, and the
          dialog snapshotted an empty `meeting_time`. Committing through `update:modelValue` lands
          the value synchronously before FieldLayoutDialog snapshots `localDoc` on submit. -->
+    <!-- TXB-241: a standalone Time field that declares `time_options_start`
+         (Schedule Discovery Meeting's `meeting_time`) feeds the real TimePicker
+         the generated 07:00–23:45 option list, so its dropdown starts at the
+         business hour instead of frappe-ui's default 00:00. Fields without the
+         metadata pass `null` and keep the picker's default option list. The
+         list only constrains the displayed options — TimePicker stays typeable,
+         so earlier manual exceptions still commit through the same
+         `update:modelValue` route (TXB-236). -->
     <TimePicker
       v-else-if="field.fieldtype === 'Time'"
       v-bind="timePickerAttrs()"
       :model-value="data[field.fieldname]"
+      :options="timeFieldOptions(field)"
       :format="getFormat('', '', false, true, false)"
       :placeholder="getPlaceholder(field)"
       input-class="border-none"
@@ -373,7 +382,7 @@ import {
 import { isDealNavLink, navigateToDeal } from '@/utils/dealHandoverLinks'
 import { usersStore } from '@/stores/users'
 import { useDocument } from '@/data/document'
-import { timePickerAttrs } from '@/utils/timePicker'
+import { timePickerAttrs, generateTimeOptions } from '@/utils/timePicker'
 import { useRouter } from 'vue-router'
 
 import {
@@ -639,6 +648,19 @@ const getPlaceholder = (field) => {
   } else {
     return __('Enter {0}', [__(field.label)])
   }
+}
+
+// TXB-241: option list for a standalone Time field. A field that declares
+// `time_options_start` (Discovery's `meeting_time`) gets the generated
+// 07:00–23:45 `{ value, label }` list frappe-ui's TimePicker renders as its
+// dropdown; every other Time field returns `null` and keeps the picker's
+// default option list untouched.
+const timeFieldOptions = (field) => {
+  if (!field.time_options_start) return null
+  return generateTimeOptions(field.time_options_start).map((time) => ({
+    value: time,
+    label: time,
+  }))
 }
 
 const getOptions = (options) => {
