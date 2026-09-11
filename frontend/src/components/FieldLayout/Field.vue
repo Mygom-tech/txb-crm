@@ -172,14 +172,20 @@
       :disabled="Boolean(field.read_only)"
       @update:modelValue="(v) => fieldChange(v, field, data)"
     />
+    <!-- TXB-236: bind the Time control on frappe-ui's canonical modelValue/update:modelValue
+         contract. The installed frappe-ui TimePicker no longer emits the deprecated `change`
+         event, so the old `:value`/`@change` pair silently dropped a selected or typed time:
+         `fieldChange` never ran, the value never committed to the FieldLayout `data`, and the
+         dialog snapshotted an empty `meeting_time`. Committing through `update:modelValue` lands
+         the value synchronously before FieldLayoutDialog snapshots `localDoc` on submit. -->
     <TimePicker
       v-else-if="field.fieldtype === 'Time'"
       v-bind="timePickerAttrs()"
-      :value="data[field.fieldname]"
+      :model-value="data[field.fieldname]"
       :format="getFormat('', '', false, true, false)"
       :placeholder="getPlaceholder(field)"
       input-class="border-none"
-      @change="(v) => fieldChange(v, field)"
+      @update:model-value="(v) => fieldChange(v, field)"
     />
     <DateTimePicker
       v-else-if="field.fieldtype === 'Datetime'"
