@@ -556,6 +556,116 @@ class TestLogCoachingCall(FrappeTestCase):
 		self.assertEqual(row["total_completed_calls"], 2)
 		self.assertEqual(self.note_count(deal.name), 1)
 
+	# ── TXB-240: the note title carries the submitted Delivery Date and Topic ──
+
+	def note_titles(self, deal_name):
+		from crm.txb.pipelines.common import DEAL_DOCTYPE, NOTE_DOCTYPE
+
+		return frappe.get_all(
+			NOTE_DOCTYPE,
+			filters={"reference_doctype": DEAL_DOCTYPE, "reference_docname": deal_name},
+			pluck="title",
+			order_by="creation asc",
+		)
+
+	def test_the_title_stores_the_submitted_delivery_date_and_topic_not_today(self):
+		"""The persisted title is `Coaching Call #X - <delivery date> - <topic>`.
+
+		The Delivery Date is deliberately in the past so it cannot be confused with the
+		creation date; the title must reflect the submitted date, not `nowdate()`.
+		"""
+		from crm.txb.api.actions import execute_action
+
+		deal = self.make_deal(owner=COACH, total_completed_calls=0)
+		frappe.set_user(COACH)
+
+		execute_action(
+			deal.name,
+			"log_coaching_call",
+			{
+				"call_status": "Completed",
+				"delivery_date": "2026-08-17",
+				"topic": "Leadership styles",
+				"call_notes": "Reviewed DISC results",
+				"is_last_call": 1,
+			},
+		)
+
+		# Read straight from the database so the assertion is against the persisted,
+		# reloaded value rather than any in-memory document.
+		self.assertEqual(
+			self.note_titles(deal.name),
+			["Coaching Call #1 - 2026-08-17 - Leadership styles"],
+		)
+
+	def test_the_call_number_follows_the_per_opportunity_sequence(self):
+		"""X counts existing Coaching Call notes on this deal; each log advances it by one."""
+		from crm.txb.api.actions import execute_action
+
+		deal = self.make_deal(owner=COACH, total_completed_calls=0)
+		frappe.set_user(COACH)
+
+		for topic in ("First topic", "Second topic"):
+			execute_action(
+				deal.name,
+				"log_coaching_call",
+				{
+					"call_status": "Completed",
+					"delivery_date": "2026-08-17",
+					"topic": topic,
+					"call_notes": "notes",
+					"is_last_call": 1,
+				},
+			)
+
+		self.assertEqual(
+			self.note_titles(deal.name),
+			[
+				"Coaching Call #1 - 2026-08-17 - First topic",
+				"Coaching Call #2 - 2026-08-17 - Second topic",
+			],
+		)
+
+	def test_logging_a_call_leaves_pre_existing_notes_untouched(self):
+		"""A historical note keeps its exact title after a new call is logged (no rewrite)."""
+		from crm.txb.api.actions import execute_action
+		from crm.txb.pipelines.common import DEAL_DOCTYPE, NOTE_DOCTYPE
+
+		deal = self.make_deal(owner=COACH, total_completed_calls=0)
+		legacy = frappe.get_doc(
+			{
+				"doctype": NOTE_DOCTYPE,
+				"reference_doctype": DEAL_DOCTYPE,
+				"reference_docname": deal.name,
+				"title": "Coaching Call #1 - 2020-01-01",
+				"content": "historical body",
+			}
+		).insert(ignore_permissions=True)
+		frappe.set_user(COACH)
+
+		execute_action(
+			deal.name,
+			"log_coaching_call",
+			{
+				"call_status": "Completed",
+				"delivery_date": "2026-08-17",
+				"topic": "Leadership styles",
+				"call_notes": "Reviewed DISC results",
+				"is_last_call": 1,
+			},
+		)
+
+		row = frappe.db.get_value(
+			NOTE_DOCTYPE, legacy.name, ["title", "content"], as_dict=True
+		)
+		self.assertEqual(row["title"], "Coaching Call #1 - 2020-01-01")
+		self.assertEqual(row["content"], "historical body")
+		# The new note sequences after the untouched historical one.
+		self.assertIn(
+			"Coaching Call #2 - 2026-08-17 - Leadership styles",
+			self.note_titles(deal.name),
+		)
+
 	# ── TXB-153: Next Coaching Call Date is conditional on the last-call checkbox ──
 
 	def test_next_call_date_is_conditionally_visible_and_mandatory_in_the_schema(self):

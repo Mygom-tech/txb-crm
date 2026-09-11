@@ -6,7 +6,7 @@ behaviour and keeps them inside the caller's transaction.
 """
 
 import frappe
-from frappe.utils import nowdate
+from frappe.utils import getdate, nowdate
 
 from crm.txb import meetings
 from crm.txb.constants import (
@@ -27,14 +27,24 @@ TASK_BACKLOG = "Backlog"
 YES_NO = "Yes\nNo"
 
 
-def add_note(deal, title: str, content: str):
-	"""Attach a note. Titles carry the date, matching the previous behaviour."""
+def add_note(deal, title: str, content: str, *, title_date: str = None, title_suffix: str = None):
+	"""Attach a note. Titles carry the date, matching the previous behaviour.
+
+	`title_date` overrides the default creation date (`nowdate()`) with an explicit,
+	submitted date, canonicalised to `YYYY-MM-DD`; `title_suffix` appends a trailing
+	` - <suffix>` segment. Both are opt-in, so existing callers keep the current
+	`title - <today>` shape unchanged.
+	"""
+	date = getdate(title_date) if title_date else nowdate()
+	full_title = f"{title} - {date}"
+	if title_suffix:
+		full_title = f"{full_title} - {title_suffix}"
 	frappe.get_doc(
 		{
 			"doctype": NOTE_DOCTYPE,
 			"reference_doctype": DEAL_DOCTYPE,
 			"reference_docname": deal.name,
-			"title": f"{title} - {nowdate()}",
+			"title": full_title,
 			"content": content,
 		}
 	).insert(ignore_permissions=True)
