@@ -187,6 +187,17 @@
       input-class="border-none"
       @update:model-value="(v) => fieldChange(v, field)"
     />
+    <!-- TXB-238: Datetime fields that declare `time_options_start` (the two coaching
+         call-date fields) render through the CRM control so the time menu starts at
+         business hours; every other Datetime field keeps the shared DateTimePicker. -->
+    <DateTimeWithOptions
+      v-else-if="field.fieldtype === 'Datetime' && field.time_options_start"
+      :value="data[field.fieldname]"
+      :date-format="getFormat('', '', true, false, false)"
+      :options-start="field.time_options_start"
+      :placeholder="getPlaceholder(field)"
+      @change="(v) => fieldChange(v, field)"
+    />
     <DateTimePicker
       v-else-if="field.fieldtype === 'Datetime'"
       v-bind="timePickerAttrs()"
@@ -343,6 +354,7 @@ import UserAvatar from '@/components/UserAvatar.vue'
 import TableMultiselectInput from '@/components/Controls/TableMultiselectInput.vue'
 import Link from '@/components/Controls/Link.vue'
 import Grid from '@/components/Controls/Grid.vue'
+import DateTimeWithOptions from '@/components/Controls/DateTimeWithOptions.vue'
 import { createDocument } from '@/composables/document'
 import {
   getFormat,
