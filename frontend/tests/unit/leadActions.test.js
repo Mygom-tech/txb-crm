@@ -1,7 +1,45 @@
-import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// TXB-236: the Discovery scheduling regressions below drive the REAL logDiscovery and the shared
+// resolveLeadStatusTransition / requestKanbanTransition routing, mocking only the two outermost
+// seams — frappe-ui's `call` (the server round trip) and renderFieldLayoutDialog (the shared
+// dialog). The dialog mock is driven with the exact snapshot a committed TimePicker selection /
+// typed time produces and reproduces FieldLayoutDialog's submit semantics (run onSubmit; a throw
+// keeps it open and posts nothing; otherwise resolve the localDoc snapshot). The pure-helper
+// suites above never touch these seams, so the mocks do not affect them.
+const discoveryMocks = vi.hoisted(() => ({
+  call: vi.fn(),
+  dialogDoc: { current: null }, // the committed localDoc; `null` models a cancel/dismiss
+}))
+
+vi.mock('frappe-ui', () => ({ call: discoveryMocks.call }))
+
+vi.mock('@/utils/renderFieldLayoutDialog', () => ({
+  renderFieldLayoutDialog: async (options) => {
+    const doc = discoveryMocks.dialogDoc.current
+    if (doc === null) return null
+    try {
+      if (options.onSubmit) await options.onSubmit({ ...doc })
+    } catch {
+      return null // validation threw: dialog stays open, nothing posted
+    }
+    return { ...doc } // the submit snapshot FieldLayoutDialog emits on success
+  },
+}))
+
+// Kanban pulls in the generic-confirm dialog seam; stub it as kanbanTransitions.test.js does.
+vi.mock('@/utils/dialogs', () => ({ createDialog: vi.fn() }))
 
 import {
   CONTACT_ATTEMPTED_STATUS,
+  DISCOVERY_STATUS,
+  logDiscovery,
+  resolveLeadStatusTransition,
+  LEAD_TRANSITION_SAVED,
+  LEAD_TRANSITION_CANCELLED,
+  LEAD_TRANSITION_FAILED,
   LOG_A_DIAL,
   requiresDial,
   requiredDialFields,
@@ -26,6 +64,7 @@ import {
   isRetiredLeadStatus,
   RETIRED_LEAD_STATUSES,
 } from '@/utils/leadActions'
+import { requestKanbanTransition } from '@/utils/kanbanTransitions'
 
 // The Log a dial contract is the single shared gate every surface -- desktop Lead.vue, the
 // responsive MobileLead.vue header and Details/Data controls, and the Kanban board -- routes
@@ -208,5 +247,280 @@ describe('retired Lead statuses are recognised centrally', () => {
     expect(isRetiredLeadStatus(CONTACT_ATTEMPTED_STATUS)).toBe(false)
     expect(isRetiredLeadStatus(FOLLOW_UP_STATUS)).toBe(false)
     expect(isRetiredLeadStatus(NURTURE_STATUS)).toBe(false)
+  })
+})
+
+// -----------------------------------------------------------------------------------------
+// TXB-236: Persist the Discovery meeting time through every existing scheduling entry point.
+//
+// Regression for the TXB-234 defect — a selected or typed meeting time silently disappeared on
+// submit because the shared FieldLayout Time control was bound on the deprecated frappe-ui
+// TimePicker `:value`/`@change` contract while the installed TimePicker only emits
+// `update:modelValue`: fieldChange never ran, the value never committed to the dialog's reactive
+// localDoc, and FieldLayoutDialog snapshotted an empty meeting_time.
+//
+// These exercise the real production path from the dialog submit snapshot onward — logDiscovery →
+// buildDiscoveryActivity/validateDiscovery → the single crm.txb.api.actions.schedule_discovery
+// endpoint — through BOTH existing routing surfaces: Lead detail/Take Action
+// (resolveLeadStatusTransition) and the Kanban board (requestKanbanTransition). The
+// one-canonical-Event idempotency on retry/reschedule is owned and proven server-side by the
+// TXB-209 sync_meeting_event upsert (crm/txb/test_meetings.py::test_repeated_submit_is_idempotent
+// and ::test_reschedule_moves_the_same_event); the client's obligation, asserted here, is that
+// every retry routes through that one endpoint with the identical payload.
+// -----------------------------------------------------------------------------------------
+
+const DISCOVERY_LEAD = 'CRM-LEAD-01'
+const DISCOVERY_NOW = '2026-09-11T00:00:00'
+
+// A Virtual schedule carrying a TYPED valid time that is not a round value the dialog might
+// helpfully default — it must survive verbatim.
+const TYPED_VIRTUAL = {
+  meeting_date: '2026-09-10',
+  meeting_time: '14:37:00',
+  meeting_type: 'Virtual',
+  meeting_link: 'https://meet.example/xyz',
+}
+
+// An Onsite schedule carrying a picker-selected time, proving the type-dependent address (never a
+// link) travels for the other meeting type.
+const SELECTED_ONSITE = {
+  meeting_date: '2026-09-12',
+  meeting_time: '09:15:00',
+  meeting_type: 'Onsite',
+  meeting_address: '1 Example Plaza, Floor 3',
+}
+
+function discoveryKanbanCtx(overrides = {}) {
+  return {
+    doctype: 'CRM Lead',
+    itemName: DISCOVERY_LEAD,
+    fieldname: 'status',
+    fieldLabel: 'Status',
+    from: 'Contacted',
+    to: DISCOVERY_STATUS,
+    ...overrides,
+  }
+}
+
+/** The latest payload posted to the one canonical scheduling endpoint. */
+function lastSchedulePayload() {
+  const posted = discoveryMocks.call.mock.calls.filter(
+    (args) => args[0] === 'crm.txb.api.actions.schedule_discovery',
+  )
+  expect(posted.length).toBeGreaterThan(0)
+  return posted.at(-1)[1]
+}
+
+describe('TXB-236 ac-1 — a selected/typed meeting time survives to the canonical payload', () => {
+  beforeEach(() => {
+    discoveryMocks.call.mockReset()
+    discoveryMocks.call.mockResolvedValue({ lead: DISCOVERY_LEAD, status: DISCOVERY_STATUS })
+    discoveryMocks.dialogDoc.current = null
+  })
+
+  it('carries a typed Virtual time and link verbatim from the Lead-detail/Take Action path', async () => {
+    discoveryMocks.dialogDoc.current = { ...TYPED_VIRTUAL }
+
+    const routed = await resolveLeadStatusTransition('Contacted', DISCOVERY_STATUS, DISCOVERY_LEAD, {
+      now: DISCOVERY_NOW,
+    })
+
+    expect(routed.outcome).toBe(LEAD_TRANSITION_SAVED)
+    expect(routed.status).toBe(DISCOVERY_STATUS)
+
+    const payload = lastSchedulePayload()
+    expect(payload.lead).toBe(DISCOVERY_LEAD)
+    expect(payload.status).toBe(DISCOVERY_STATUS)
+    // The exact typed time is retained — the heart of the TXB-234 regression.
+    expect(payload.activity.meeting_time).toBe('14:37:00')
+    expect(payload.activity.meeting_date).toBe('2026-09-10')
+    expect(payload.activity.meeting_type).toBe('Virtual')
+    expect(payload.activity.meeting_link).toBe('https://meet.example/xyz')
+    expect(payload.activity.meeting_address).toBeNull() // Virtual never carries an address
+  })
+
+  it('carries a picker-selected Onsite time and address from the Kanban path', async () => {
+    discoveryMocks.dialogDoc.current = { ...SELECTED_ONSITE }
+
+    const result = await requestKanbanTransition(discoveryKanbanCtx())
+
+    expect(result).toEqual({
+      proceed: true,
+      alreadySaved: true,
+      finalStatus: DISCOVERY_STATUS,
+    })
+
+    const payload = lastSchedulePayload()
+    expect(payload.activity.meeting_time).toBe('09:15:00')
+    expect(payload.activity.meeting_type).toBe('Onsite')
+    expect(payload.activity.meeting_address).toBe('1 Example Plaza, Floor 3')
+    expect(payload.activity.meeting_link).toBeNull() // Onsite never carries a link
+  })
+
+  it('routes both surfaces to the identical payload for the same committed time', async () => {
+    discoveryMocks.dialogDoc.current = { ...TYPED_VIRTUAL }
+    await resolveLeadStatusTransition('Contacted', DISCOVERY_STATUS, DISCOVERY_LEAD, {
+      now: DISCOVERY_NOW,
+    })
+    const detail = lastSchedulePayload().activity
+
+    discoveryMocks.call.mockClear()
+    discoveryMocks.dialogDoc.current = { ...TYPED_VIRTUAL }
+    await requestKanbanTransition(discoveryKanbanCtx())
+    const kanban = lastSchedulePayload().activity
+
+    expect(kanban.meeting_date).toBe(detail.meeting_date)
+    expect(kanban.meeting_time).toBe(detail.meeting_time)
+    expect(kanban.meeting_type).toBe(detail.meeting_type)
+    expect(kanban.meeting_link).toBe(detail.meeting_link)
+  })
+})
+
+describe('TXB-236 ac-2 — fail closed before the status transition, no partial write', () => {
+  beforeEach(() => {
+    discoveryMocks.call.mockReset()
+    discoveryMocks.call.mockResolvedValue({ lead: DISCOVERY_LEAD, status: DISCOVERY_STATUS })
+    discoveryMocks.dialogDoc.current = null
+  })
+
+  it('leaves the prior status unchanged and posts nothing on cancel', async () => {
+    discoveryMocks.dialogDoc.current = null // dismissed
+
+    const routed = await resolveLeadStatusTransition('Contacted', DISCOVERY_STATUS, DISCOVERY_LEAD, {
+      now: DISCOVERY_NOW,
+    })
+
+    expect(routed.outcome).toBe(LEAD_TRANSITION_CANCELLED)
+    expect(routed.status).toBe('Contacted')
+    expect(discoveryMocks.call).not.toHaveBeenCalled()
+  })
+
+  it('blocks an incomplete schedule (Virtual without a link) at the dialog and posts nothing', async () => {
+    // FieldLayoutDialog's onSubmit gate throws on the missing location detail and keeps the
+    // dialog open, so nothing commits and no status moves.
+    discoveryMocks.dialogDoc.current = {
+      meeting_date: '2026-09-10',
+      meeting_time: '14:37:00',
+      meeting_type: 'Virtual',
+    }
+
+    const routed = await resolveLeadStatusTransition('Contacted', DISCOVERY_STATUS, DISCOVERY_LEAD, {
+      now: DISCOVERY_NOW,
+    })
+
+    expect(routed.outcome).toBe(LEAD_TRANSITION_CANCELLED)
+    expect(routed.status).toBe('Contacted')
+    expect(discoveryMocks.call).not.toHaveBeenCalled()
+  })
+
+  it('preserves the prior status when persistence fails, with no second write', async () => {
+    discoveryMocks.dialogDoc.current = { ...TYPED_VIRTUAL }
+    const failure = new Error('schedule_discovery failed')
+    discoveryMocks.call.mockRejectedValueOnce(failure)
+
+    const routed = await resolveLeadStatusTransition('Contacted', DISCOVERY_STATUS, DISCOVERY_LEAD, {
+      now: DISCOVERY_NOW,
+    })
+
+    expect(routed.outcome).toBe(LEAD_TRANSITION_FAILED)
+    expect(routed.status).toBe('Contacted')
+    expect(routed.error).toBe(failure)
+    // The one atomic endpoint was attempted exactly once; no optimistic second status write.
+    expect(discoveryMocks.call).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-throws a Kanban persistence failure so the caller reverts the card', async () => {
+    discoveryMocks.dialogDoc.current = { ...SELECTED_ONSITE }
+    discoveryMocks.call.mockRejectedValueOnce(new Error('schedule_discovery failed'))
+
+    await expect(requestKanbanTransition(discoveryKanbanCtx())).rejects.toThrow(
+      'schedule_discovery failed',
+    )
+  })
+})
+
+describe('TXB-236 ac-3 — retry routes through the single canonical endpoint, never a parallel create', () => {
+  beforeEach(() => {
+    discoveryMocks.call.mockReset()
+    discoveryMocks.call.mockResolvedValue({ lead: DISCOVERY_LEAD, status: DISCOVERY_STATUS })
+    discoveryMocks.dialogDoc.current = null
+  })
+
+  it('posts the identical schedule to the same endpoint on repeated submit', async () => {
+    discoveryMocks.dialogDoc.current = { ...TYPED_VIRTUAL }
+    await logDiscovery(DISCOVERY_LEAD, { now: DISCOVERY_NOW })
+    discoveryMocks.dialogDoc.current = { ...TYPED_VIRTUAL }
+    await logDiscovery(DISCOVERY_LEAD, { now: DISCOVERY_NOW })
+
+    const endpoints = discoveryMocks.call.mock.calls.map((args) => args[0])
+    // Both attempts hit the one canonical endpoint — the server's sync_meeting_event upsert then
+    // reuses the single Event (crm/txb/test_meetings.py::test_repeated_submit_is_idempotent).
+    expect(endpoints).toEqual([
+      'crm.txb.api.actions.schedule_discovery',
+      'crm.txb.api.actions.schedule_discovery',
+    ])
+    const [first, second] = discoveryMocks.call.mock.calls.map((args) => args[1].activity)
+    expect(second.meeting_time).toBe(first.meeting_time)
+    expect(second.meeting_date).toBe(first.meeting_date)
+    expect(second.meeting_type).toBe(first.meeting_type)
+    expect(second.meeting_link).toBe(first.meeting_link)
+  })
+
+  it('a reschedule to a new time still targets the one canonical endpoint', async () => {
+    discoveryMocks.dialogDoc.current = { ...TYPED_VIRTUAL }
+    await requestKanbanTransition(discoveryKanbanCtx())
+    expect(lastSchedulePayload().activity.meeting_time).toBe('14:37:00')
+
+    discoveryMocks.call.mockClear()
+    discoveryMocks.dialogDoc.current = { ...TYPED_VIRTUAL, meeting_time: '16:05:00' }
+    await requestKanbanTransition(discoveryKanbanCtx())
+
+    const payload = lastSchedulePayload()
+    expect(payload.activity.meeting_time).toBe('16:05:00')
+    // Still the one endpoint — the reschedule moves the single Event server-side
+    // (crm/txb/test_meetings.py::test_reschedule_moves_the_same_event), never a new create.
+    expect(discoveryMocks.call).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('TXB-236 ac-1/ac-3 — the shared FieldLayout Time control commits before the dialog snapshots', () => {
+  const fieldSource = readFileSync(
+    new URL('../../src/components/FieldLayout/Field.vue', import.meta.url),
+    'utf-8',
+  )
+  const dialogSource = readFileSync(
+    new URL('../../src/components/Modals/FieldLayoutDialog.vue', import.meta.url),
+    'utf-8',
+  )
+
+  // The exact <TimePicker> element rendered for a Time field.
+  const tpStart = fieldSource.indexOf('<TimePicker')
+  const timePickerBlock = fieldSource.slice(
+    tpStart,
+    tpStart + fieldSource.slice(tpStart).indexOf('/>') + 2,
+  )
+
+  it('binds the TimePicker on the canonical modelValue/update:modelValue contract', () => {
+    // The installed frappe-ui TimePicker only emits update:modelValue, so this is the sole
+    // contract that commits a selected/typed time into the FieldLayout data.
+    expect(timePickerBlock).toMatch(/:model-value="data\[field\.fieldname\]"/)
+    expect(timePickerBlock).toMatch(/@update:model-value="\(v\) => fieldChange\(v, field\)"/)
+  })
+
+  it('no longer relies on the deprecated :value/@change contract the picker stopped emitting', () => {
+    // The regression: these were the only bindings before TXB-236, so nothing ever committed.
+    expect(timePickerBlock).not.toMatch(/:value="data\[field\.fieldname\]"/)
+    expect(timePickerBlock).not.toMatch(/@change=/)
+  })
+
+  it('fieldChange commits into the same data the dialog snapshots on submit', () => {
+    // fieldChange → triggerOnChange writes the committed value into the FieldLayout `data`, and
+    // FieldLayoutDialog's submit snapshots that reactive doc ({ ...localDoc }); together they
+    // guarantee a committed time is present in the posted payload.
+    expect(fieldSource).toMatch(/function fieldChange\(value, df\)/)
+    expect(fieldSource).toMatch(/triggerOnChange\(df\.fieldname, value\)/)
+    // The default submit path snapshots the reactive localDoc and resolves it to logDiscovery.
+    expect(dialogSource).toMatch(/const data = \{ \.\.\.localDoc \}/)
+    expect(dialogSource).toMatch(/submit\(data\)/)
   })
 })
