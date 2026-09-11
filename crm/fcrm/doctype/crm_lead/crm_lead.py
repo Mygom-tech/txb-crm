@@ -112,6 +112,7 @@ class CRMLead(Document):
 		self.set_full_name()
 		self.set_lead_name()
 		self.set_title()
+		self.validate_contact_details()
 		self.validate_email()
 		self.validate_lost_reason()
 		if not self.is_new() and self.has_value_changed("lead_owner") and self.lead_owner:
@@ -168,6 +169,23 @@ class CRMLead(Document):
 
 	def set_title(self):
 		self.title = self.organization or self.lead_name
+
+	def validate_contact_details(self):
+		"""Require a contactable email or Mobile No. on new Leads.
+
+		A Lead is only insertable when a trimmed `email` or trimmed `mobile_no` is
+		present; the separate `phone` field deliberately does not satisfy this rule.
+		The guard runs on insert only, so existing Leads and edits are unaffected, and
+		defers to `ignore_mandatory` like `set_lead_name` does (data imports, internal
+		fixtures). Email *format* stays owned by `validate_email`, which runs next.
+		"""
+		if not self.is_new() or self.flags.ignore_mandatory:
+			return
+
+		has_email = bool((self.email or "").strip())
+		has_mobile = bool((self.mobile_no or "").strip())
+		if not has_email and not has_mobile:
+			frappe.throw(_("Either email or phone number is required to create a Lead."))
 
 	def validate_email(self):
 		if self.email:
