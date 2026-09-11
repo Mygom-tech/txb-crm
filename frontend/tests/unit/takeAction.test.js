@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
   actionOptions,
   actionFields,
@@ -8,11 +8,66 @@ import {
 import { findMissingMandatory } from '@/utils/fieldTransforms'
 import { evaluateDependsOnValue } from '@/utils/expressions'
 import {
-  generateTimeOptions,
   splitDatetime,
   combineDatetime,
   DEFAULT_TIME_OPTIONS_END,
 } from '@/utils/timePicker'
+import { createApp, h, reactive } from 'vue'
+
+// TXB-239: the coaching Datetime fields render through the shared DateTimeWithOptions control.
+// Mock the two frappe-ui pickers it composes with faithful render-function stubs — DatePicker
+// `@change` with a date string; TimePicker `@change` with a committed "HH:mm" from either an
+// option click or a typed value — so the mounted tests below drive the REAL control (opening
+// the option list, clicking, typing an early exception) rather than helper arrays alone.
+// `vueRef` bridges Vue's `h` into the hoisted mock factory, since top-level imports are not yet
+// initialised when the factory is registered.
+const vueRef = vi.hoisted(() => ({ h: null }))
+vi.mock('frappe-ui', () => ({
+  DatePicker: {
+    name: 'DatePicker',
+    props: ['value', 'format', 'placeholder', 'inputClass'],
+    emits: ['change'],
+    setup: (props, { emit }) => () =>
+      vueRef.h('input', {
+        'data-testid': 'date-input',
+        value: props.value,
+        onChange: (e) => emit('change', e.target.value),
+      }),
+  },
+  TimePicker: {
+    name: 'TimePicker',
+    props: ['modelValue', 'options', 'interval', 'placeholder', 'inputClass'],
+    emits: ['change', 'update:modelValue'],
+    setup: (props, { emit }) => () =>
+      vueRef.h('div', [
+        vueRef.h('input', {
+          'data-testid': 'time-input',
+          value: props.modelValue,
+          onChange: (e) => emit('change', e.target.value),
+        }),
+        vueRef.h(
+          'ul',
+          { 'data-testid': 'time-list' },
+          (props.options || []).map((o) =>
+            vueRef.h('li', { key: o.value }, [
+              vueRef.h(
+                'button',
+                {
+                  type: 'button',
+                  'data-testid': 'time-option',
+                  'data-value': o.value,
+                  onClick: () => emit('change', o.value),
+                },
+                o.label,
+              ),
+            ]),
+          ),
+        ),
+      ]),
+  },
+}))
+import DateTimeWithOptions from '@/components/Controls/DateTimeWithOptions.vue'
+vueRef.h = h
 
 const LOG_CALL = {
   name: 'log_coaching_call',
@@ -263,19 +318,77 @@ describe('Next Coaching Call Date conditional behavior', () => {
   })
 })
 
-// TXB-238: the coaching call-date Datetime fields declare `time_options_start` and render
-// through the CRM DateTimeWithOptions control, whose option list and date/time value
-// contract live in @/utils/timePicker. These pin the dropdown range (AC-1) and the typed
-// early-time round-trip (AC-2) that the control composes.
-describe('coaching Datetime option and value contract (TXB-238)', () => {
-  it('offers 07:00 through 23:45 in 15-minute steps with nothing earlier (AC-1)', () => {
-    const options = generateTimeOptions('07:00')
+// TXB-239: the coaching call-date Datetime fields (and, from leadActions, Log a Dial's
+// Follow-up Date and the Follow-up transition date-time) declare `time_options_start` and
+// render through the shared DateTimeWithOptions control. These mount the REAL control and
+// exercise the rendered pickers — opening the 07:00 option list, clicking a slot, and typing
+// an earlier exception — pinning the combined-selector experience (AC-1), the preserved early
+// manual entry (AC-2), and clean degradation, rather than asserting the helper arrays alone.
+describe('coaching Datetime option and value contract (TXB-239)', () => {
+  let hosts = []
+
+  // Mount the adapter with a reactive `value` that echoes each emitted change back, as the
+  // FieldLayout parent would, so `state.last` is the exact datetime the field would persist.
+  function mountControl({ value = '', optionsStart = '07:00' } = {}) {
+    const state = reactive({ value, last: undefined })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const app = createApp({
+      render: () =>
+        h(DateTimeWithOptions, {
+          value: state.value,
+          optionsStart,
+          onChange: (v) => {
+            state.last = v
+            state.value = v
+          },
+        }),
+    })
+    app.config.globalProperties.__ = globalThis.__
+    app.mount(container)
+    hosts.push({ app, container })
+    return { container, state }
+  }
+
+  const optionValues = (container) =>
+    Array.from(container.querySelectorAll('[data-testid="time-option"]')).map((b) =>
+      b.getAttribute('data-value'),
+    )
+  const clickOption = (container, value) =>
+    container
+      .querySelector(`[data-testid="time-option"][data-value="${value}"]`)
+      .dispatchEvent(new Event('click', { bubbles: true }))
+  const changeInput = (container, testid, text) => {
+    const input = container.querySelector(`[data-testid="${testid}"]`)
+    input.value = text
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  }
+
+  afterEach(() => {
+    hosts.forEach(({ app, container }) => {
+      app.unmount()
+      container.remove()
+    })
+    hosts = []
+  })
+
+  it('renders one combined control with a date picker and a real time picker, not a bare input (AC-1/AC-2)', () => {
+    const { container } = mountControl({ value: '2026-09-15 07:00:00' })
+    expect(container.querySelector('.crm-datetime-picker')).not.toBeNull()
+    expect(container.querySelector('[data-testid="date-input"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="time-input"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="time-list"]')).not.toBeNull()
+  })
+
+  it('opens a 15-minute time list from 07:00 through 23:45 with nothing earlier (AC-1)', () => {
+    const { container } = mountControl({ value: '2026-09-15 07:00:00' })
+    const options = optionValues(container)
     expect(options[0]).toBe('07:00')
     expect(options[1]).toBe('07:15')
     expect(options.at(-1)).toBe(DEFAULT_TIME_OPTIONS_END)
     expect(DEFAULT_TIME_OPTIONS_END).toBe('23:45')
     // 07:00 … 23:45 inclusive = ((23*60+45) - (7*60)) / 15 + 1 = 68 slots.
-    expect(options.length).toBe(68)
+    expect(options).toHaveLength(68)
     expect(new Set(options).size).toBe(options.length)
     expect(options.every((t) => t >= '07:00')).toBe(true)
     expect(options).not.toContain('06:45')
@@ -283,30 +396,48 @@ describe('coaching Datetime option and value contract (TXB-238)', () => {
   })
 
   it('honours a different declared start', () => {
-    const options = generateTimeOptions('09:30')
+    const { container } = mountControl({ value: '2026-09-15 09:30:00', optionsStart: '09:30' })
+    const options = optionValues(container)
     expect(options[0]).toBe('09:30')
     expect(options.every((t) => t >= '09:30')).toBe(true)
   })
 
-  it('recombines a dropdown pick into a canonical datetime', () => {
-    expect(combineDatetime('2026-09-15', '07:00')).toBe('2026-09-15 07:00:00')
+  it('commits the canonical datetime when a dropdown time is picked (AC-1)', () => {
+    const { container, state } = mountControl({ value: '2026-09-15 07:00:00' })
+    clickOption(container, '09:00')
+    expect(state.last).toBe('2026-09-15 09:00:00')
   })
 
-  it('accepts and preserves an early typed exception (AC-2)', () => {
+  it('preserves an earlier time typed by hand, exactly, so it round-trips on reload (AC-2)', () => {
+    const { container, state } = mountControl({ value: '2026-09-15 07:00:00' })
     // 06:30 is earlier than the 07:00 dropdown start, but a typed value is kept verbatim.
-    expect(combineDatetime('2026-09-15', '06:30')).toBe('2026-09-15 06:30:00')
+    changeInput(container, 'time-input', '06:30')
+    expect(state.last).toBe('2026-09-15 06:30:00')
   })
 
-  it('round-trips an exact datetime through split then combine (AC-2)', () => {
+  it('combines a newly picked date with the already-selected time', () => {
+    const { container, state } = mountControl({ value: '2026-09-15 08:15:00' })
+    changeInput(container, 'date-input', '2026-10-01')
+    expect(state.last).toBe('2026-10-01 08:15:00')
+  })
+
+  it('degrades cleanly with no date yet — a lone time never fabricates a datetime', () => {
+    const { container, state } = mountControl({ value: '' })
+    // The option list still renders, but with no date there is nothing to store.
+    expect(optionValues(container)[0]).toBe('07:00')
+    clickOption(container, '09:00')
+    expect(state.last).toBe('')
+  })
+
+  // The pure split/combine helpers underpin the control above; keep a direct check that the
+  // canonical value contract the FieldLayout persists is exact.
+  it('splits and recombines the stored datetime without drift', () => {
+    expect(splitDatetime('')).toEqual({ date: '', time: '' })
+    expect(splitDatetime(null)).toEqual({ date: '', time: '' })
+    expect(combineDatetime('2026-09-15', '07:00')).toBe('2026-09-15 07:00:00')
+    expect(combineDatetime('2026-09-15', '')).toBe('2026-09-15')
     const stored = '2026-09-15 06:30:00'
     const { date, time } = splitDatetime(stored)
     expect(combineDatetime(date, time)).toBe(stored)
-  })
-
-  it('degrades blank and partial values without losing in-progress edits', () => {
-    expect(splitDatetime('')).toEqual({ date: '', time: '' })
-    expect(splitDatetime(null)).toEqual({ date: '', time: '' })
-    expect(combineDatetime('2026-09-15', '')).toBe('2026-09-15')
-    expect(combineDatetime('', '07:00')).toBe('')
   })
 })

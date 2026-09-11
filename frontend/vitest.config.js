@@ -1,7 +1,11 @@
 import { defineConfig } from 'vitest/config'
+import vue from '@vitejs/plugin-vue'
 import path from 'path'
 
 export default defineConfig({
+  // Compile single-file components so component-mounted interaction tests (e.g.
+  // DateTimeWithOptions) can import and mount real `.vue` controls.
+  plugins: [vue()],
   test: {
     globals: true,
     environment: 'happy-dom',

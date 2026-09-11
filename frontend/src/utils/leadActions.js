@@ -234,6 +234,10 @@ export const LOG_A_DIAL = {
       fieldname: 'follow_up_date',
       label: 'Follow-up Date',
       fieldtype: 'Datetime',
+      // TXB-239: render the combined date + time picker with a business-hour
+      // (07:00) option list, matching the coaching call-date fields. Earlier
+      // times can still be typed and saved.
+      time_options_start: '07:00',
     },
   ],
 }
@@ -902,6 +906,10 @@ export function followUpFields() {
       label: __('Follow-up date and time'),
       fieldtype: 'Datetime',
       reqd: 1,
+      // TXB-239: render the combined date + time picker with a business-hour
+      // (07:00) option list, matching the coaching call-date fields. Earlier
+      // times can still be typed and saved.
+      time_options_start: '07:00',
     },
     {
       fieldname: 'follow_up_context',

@@ -41,6 +41,7 @@ import {
   LEAD_TRANSITION_CANCELLED,
   LEAD_TRANSITION_FAILED,
   LOG_A_DIAL,
+  reachFields,
   requiresDial,
   requiredDialFields,
   dialFields,
@@ -188,6 +189,41 @@ describe('Follow-up requires a datetime and context', () => {
       follow_up_context: 'Send the deck',
       actor: 'agent@txb',
     })
+  })
+})
+
+// TXB-239: the Log a Dial Follow-up Date and the Follow-up transition date-time join the
+// coaching call-date fields in declaring `time_options_start: '07:00'`, so Field.vue routes
+// them through the shared DateTimeWithOptions control (07:00-start option list). Log a Reach's
+// follow-up stays a plain Date and Log a Dial's `dialed_at` stays a plain Datetime, so neither
+// changes its picker. These pin that field-level contract; dateTimeWithOptions.test.js exercises
+// the rendered control the contract selects.
+describe('07:00 datetime option-start metadata (TXB-239)', () => {
+  it('marks Log a Dial Follow-up Date as a 07:00 Datetime without touching its requiredness', () => {
+    const followUp = LOG_A_DIAL.fields.find((f) => f.fieldname === 'follow_up_date')
+    expect(followUp.fieldtype).toBe('Datetime')
+    expect(followUp.time_options_start).toBe('07:00')
+    // Non-goal: requiredness is unchanged — the Follow-up Date stays optional on a dial.
+    expect(followUp.reqd).toBeUndefined()
+  })
+
+  it('marks the Follow-up transition date-time as a 07:00 Datetime, still required', () => {
+    const date = followUpFields().find((f) => f.fieldname === 'follow_up_date')
+    expect(date.fieldtype).toBe('Datetime')
+    expect(date.time_options_start).toBe('07:00')
+    expect(date.reqd).toBe(1)
+  })
+
+  it('leaves Log a Dial\'s dialed_at a plain Datetime on the shared DateTimePicker', () => {
+    const dialedAt = LOG_A_DIAL.fields.find((f) => f.fieldname === 'dialed_at')
+    expect(dialedAt.fieldtype).toBe('Datetime')
+    expect(dialedAt.time_options_start).toBeUndefined()
+  })
+
+  it('keeps Log a Reach\'s follow-up a date-only field with no time options', () => {
+    const followUp = reachFields().find((f) => f.fieldname === 'follow_up_date')
+    expect(followUp.fieldtype).toBe('Date')
+    expect(followUp.time_options_start).toBeUndefined()
   })
 })
 
