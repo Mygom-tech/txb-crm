@@ -35,6 +35,7 @@ vi.mock('@/utils/dialogs', () => ({ createDialog: vi.fn() }))
 import {
   CONTACT_ATTEMPTED_STATUS,
   DISCOVERY_STATUS,
+  discoveryScheduleFields,
   logDiscovery,
   resolveLeadStatusTransition,
   LEAD_TRANSITION_SAVED,
@@ -558,5 +559,114 @@ describe('TXB-236 ac-1/ac-3 — the shared FieldLayout Time control commits befo
     // The default submit path snapshots the reactive localDoc and resolves it to logDiscovery.
     expect(dialogSource).toMatch(/const data = \{ \.\.\.localDoc \}/)
     expect(dialogSource).toMatch(/submit\(data\)/)
+  })
+})
+
+// -----------------------------------------------------------------------------------------
+// TXB-241: Start Discovery meeting time options at 07:00.
+//
+// Discovery renders separate Date and Time fields, so the TXB-239 Datetime-only option-start
+// path never reached its `meeting_time`; the shared standalone TimePicker still generated its
+// default 00:00-start list. The fix declares `time_options_start: '07:00'` on the meeting Time
+// field and teaches Field.vue's standalone Time branch to feed the real frappe-ui TimePicker the
+// generated 07:00–23:45 option list only when that metadata is present. These pin the field-level
+// contract and the Field.vue wiring; discoveryMeetingTime.test.js mounts the rendered picker.
+// -----------------------------------------------------------------------------------------
+describe('TXB-241 — Discovery meeting time option-start metadata', () => {
+  const fields = discoveryScheduleFields()
+  const meetingTime = fields.find((f) => f.fieldname === 'meeting_time')
+
+  it('marks the meeting Time field with a 07:00 option start without touching its requiredness', () => {
+    // Still a standalone Time field — not swapped to Datetime or a manual-only control (AC-3).
+    expect(meetingTime.fieldtype).toBe('Time')
+    expect(meetingTime.reqd).toBe(1)
+    // The declarative hook Field.vue routes on to offer the business-hour dropdown (AC-1).
+    expect(meetingTime.time_options_start).toBe('07:00')
+  })
+
+  it('leaves the sibling Date and Type fields free of time-option metadata (AC-3)', () => {
+    const date = fields.find((f) => f.fieldname === 'meeting_date')
+    const type = fields.find((f) => f.fieldname === 'meeting_type')
+    expect(date.fieldtype).toBe('Date')
+    expect(date.time_options_start).toBeUndefined()
+    expect(type.time_options_start).toBeUndefined()
+  })
+})
+
+describe('TXB-241 — the standalone Time control offers a field-scoped option list', () => {
+  const fieldSource = readFileSync(
+    new URL('../../src/components/FieldLayout/Field.vue', import.meta.url),
+    'utf-8',
+  )
+
+  const tpStart = fieldSource.indexOf('<TimePicker')
+  const timePickerBlock = fieldSource.slice(
+    tpStart,
+    tpStart + fieldSource.slice(tpStart).indexOf('/>') + 2,
+  )
+
+  it('feeds the standalone TimePicker a field-scoped option list', () => {
+    // The real TimePicker renders `options` as its dropdown; passing the generated 07:00 list
+    // constrains only the displayed options (AC-1) without touching typing.
+    expect(timePickerBlock).toMatch(/:options="timeFieldOptions\(field\)"/)
+  })
+
+  it('keeps the TXB-236 modelValue/update:modelValue persistence contract intact (AC-3)', () => {
+    // The option list is additive — the commit route the picker actually emits is unchanged.
+    expect(timePickerBlock).toMatch(/:model-value="data\[field\.fieldname\]"/)
+    expect(timePickerBlock).toMatch(/@update:model-value="\(v\) => fieldChange\(v, field\)"/)
+    expect(timePickerBlock).not.toMatch(/@change=/)
+  })
+
+  it('derives the list from generateTimeOptions only when time_options_start is present (AC-3)', () => {
+    // A metadata-free Time field returns null, so frappe-ui keeps its default option list and
+    // every other Time field is untouched; the declared start seeds the generated list.
+    expect(fieldSource).toMatch(/const timeFieldOptions = \(field\) => \{/)
+    expect(fieldSource).toMatch(/if \(!field\.time_options_start\) return null/)
+    expect(fieldSource).toMatch(/generateTimeOptions\(field\.time_options_start\)/)
+  })
+
+  it('renders no plain/manual-only replacement for the Time field (AC-3)', () => {
+    // The Time branch stays the real frappe-ui TimePicker, not a bare TextInput/FormControl.
+    expect(timePickerBlock).toMatch(/^<TimePicker/)
+    expect(timePickerBlock).not.toMatch(/TextInput|FormControl/)
+  })
+})
+
+// TXB-241 ac-2 end-to-end: an *earlier* manual exception (before the 07:00 dropdown start) must
+// still commit and persist verbatim through BOTH scheduling entry points — the dropdown start is
+// a suggestion, never a validation minimum. TXB-236's suites already cover a typed mid-day time
+// and a picker-selected time; these pin the earlier-exception clause specifically.
+describe('TXB-241 ac-2 — an earlier manual time exception persists through both paths', () => {
+  const EARLY_EXCEPTION = {
+    meeting_date: '2026-09-10',
+    meeting_time: '06:30:00',
+    meeting_type: 'Virtual',
+    meeting_link: 'https://meet.example/early',
+  }
+
+  beforeEach(() => {
+    discoveryMocks.call.mockReset()
+    discoveryMocks.call.mockResolvedValue({ lead: DISCOVERY_LEAD, status: DISCOVERY_STATUS })
+    discoveryMocks.dialogDoc.current = null
+  })
+
+  it('carries a 06:30 exception verbatim from the Lead-detail/Take Action path', async () => {
+    discoveryMocks.dialogDoc.current = { ...EARLY_EXCEPTION }
+    const routed = await resolveLeadStatusTransition(
+      'Contacted',
+      DISCOVERY_STATUS,
+      DISCOVERY_LEAD,
+      { now: DISCOVERY_NOW },
+    )
+    expect(routed.outcome).toBe(LEAD_TRANSITION_SAVED)
+    expect(lastSchedulePayload().activity.meeting_time).toBe('06:30:00')
+  })
+
+  it('carries the same 06:30 exception verbatim from the Kanban path', async () => {
+    discoveryMocks.dialogDoc.current = { ...EARLY_EXCEPTION }
+    const result = await requestKanbanTransition(discoveryKanbanCtx())
+    expect(result.proceed).toBe(true)
+    expect(lastSchedulePayload().activity.meeting_time).toBe('06:30:00')
   })
 })

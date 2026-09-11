@@ -10,8 +10,10 @@ import { evaluateDependsOnValue } from '@/utils/expressions'
 import {
   splitDatetime,
   combineDatetime,
+  generateTimeOptions,
   DEFAULT_TIME_OPTIONS_END,
 } from '@/utils/timePicker'
+import { discoveryScheduleFields } from '@/utils/leadActions'
 import { createApp, h, reactive } from 'vue'
 
 // TXB-239: the coaching Datetime fields render through the shared DateTimeWithOptions control.
@@ -38,12 +40,19 @@ vi.mock('frappe-ui', () => ({
     name: 'TimePicker',
     props: ['modelValue', 'options', 'interval', 'placeholder', 'inputClass'],
     emits: ['change', 'update:modelValue'],
+    // The installed frappe-ui TimePicker emits `update:modelValue`; DateTimeWithOptions bridges
+    // it back out as `@change`, while Field.vue's standalone Time branch (TXB-241) binds
+    // `@update:model-value` directly. Emit both from an option click and a typed value so either
+    // consumer's contract can be driven from the same faithful stub.
     setup: (props, { emit }) => () =>
       vueRef.h('div', [
         vueRef.h('input', {
           'data-testid': 'time-input',
           value: props.modelValue,
-          onChange: (e) => emit('change', e.target.value),
+          onChange: (e) => {
+            emit('change', e.target.value)
+            emit('update:modelValue', e.target.value)
+          },
         }),
         vueRef.h(
           'ul',
@@ -56,7 +65,10 @@ vi.mock('frappe-ui', () => ({
                   type: 'button',
                   'data-testid': 'time-option',
                   'data-value': o.value,
-                  onClick: () => emit('change', o.value),
+                  onClick: () => {
+                    emit('change', o.value)
+                    emit('update:modelValue', o.value)
+                  },
                 },
                 o.label,
               ),
@@ -439,5 +451,112 @@ describe('coaching Datetime option and value contract (TXB-239)', () => {
     const stored = '2026-09-15 06:30:00'
     const { date, time } = splitDatetime(stored)
     expect(combineDatetime(date, time)).toBe(stored)
+  })
+})
+
+// TXB-241: Schedule Discovery Meeting renders a *standalone* Time field for `meeting_time`, so
+// the TXB-239 combined DateTimeWithOptions path above never applied. The field now declares
+// `time_options_start: '07:00'`, and Field.vue's Time branch feeds the real frappe-ui TimePicker
+// the generated 07:00–23:45 `{ value, label }` list only for such fields, committing through the
+// canonical `update:modelValue` route (TXB-236). These mount the real TimePicker exactly as that
+// branch binds it — proving the rendered dropdown starts at 07:00 (AC-1), a picked time and an
+// earlier typed exception both commit (AC-2/AC-3), and a metadata-free Time field keeps the
+// picker default list (AC-3). Field.vue's `timeFieldOptions` wiring is pinned at source level in
+// leadActions.test.js; the transformation below is the same one, kept in lockstep by those asserts.
+describe('Discovery standalone Time option and commit contract (TXB-241)', () => {
+  let hosts = []
+
+  const timeFieldOptions = (field) => {
+    if (!field.time_options_start) return null
+    return generateTimeOptions(field.time_options_start).map((time) => ({
+      value: time,
+      label: time,
+    }))
+  }
+
+  // Mount the real TimePicker bound as Field.vue's Time branch does: `:model-value`,
+  // `:options="timeFieldOptions(field)"`, commit on `@update:model-value`. `state.value` echoes
+  // each committed value back, as the reactive FieldLayout `data` snapshotted on submit would.
+  function mountTime(field, initial = '') {
+    const state = reactive({ value: initial })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const app = createApp({
+      render: () =>
+        h(TimePicker, {
+          modelValue: state.value,
+          options: timeFieldOptions(field),
+          'onUpdate:modelValue': (v) => {
+            state.value = v
+          },
+        }),
+    })
+    app.config.globalProperties.__ = globalThis.__
+    app.mount(container)
+    hosts.push({ app, container })
+    return { container, state }
+  }
+
+  const optionValues = (container) =>
+    Array.from(container.querySelectorAll('[data-testid="time-option"]')).map((b) =>
+      b.getAttribute('data-value'),
+    )
+  const clickOption = (container, value) =>
+    container
+      .querySelector(`[data-testid="time-option"][data-value="${value}"]`)
+      .dispatchEvent(new Event('click', { bubbles: true }))
+  const typeTime = (container, text) => {
+    const input = container.querySelector('[data-testid="time-input"]')
+    input.value = text
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  }
+
+  const meetingTimeField = () =>
+    discoveryScheduleFields().find((f) => f.fieldname === 'meeting_time')
+
+  afterEach(() => {
+    hosts.forEach(({ app, container }) => {
+      app.unmount()
+      container.remove()
+    })
+    hosts = []
+  })
+
+  it('opens a 15-minute list from 07:00 through 23:45 with nothing earlier (AC-1)', () => {
+    const { container } = mountTime(meetingTimeField(), '09:00:00')
+    const options = optionValues(container)
+    expect(options[0]).toBe('07:00')
+    expect(options[1]).toBe('07:15')
+    expect(options.at(-1)).toBe(DEFAULT_TIME_OPTIONS_END)
+    expect(DEFAULT_TIME_OPTIONS_END).toBe('23:45')
+    // 07:00 … 23:45 inclusive = ((23*60+45) - (7*60)) / 15 + 1 = 68 slots.
+    expect(options).toHaveLength(68)
+    expect(new Set(options).size).toBe(options.length)
+    expect(options.every((t) => t >= '07:00')).toBe(true)
+    expect(options).not.toContain('06:45')
+    expect(options).not.toContain('00:00')
+  })
+
+  it('commits a dropdown-selected time through update:modelValue (AC-2)', () => {
+    const { container, state } = mountTime(meetingTimeField(), '')
+    clickOption(container, '09:00')
+    expect(state.value).toBe('09:00')
+  })
+
+  it('commits an earlier time typed by hand, verbatim, so it survives to the snapshot (AC-2)', () => {
+    const { container, state } = mountTime(meetingTimeField(), '')
+    // 06:30 is earlier than the 07:00 dropdown start, but a typed exception is kept as-is — the
+    // option start is a suggestion, not a validation minimum.
+    typeTime(container, '06:30')
+    expect(state.value).toBe('06:30')
+  })
+
+  it('leaves a metadata-free Time field on the picker default list (AC-3)', () => {
+    // A plain Time field passes null options, so frappe-ui keeps its own default list and every
+    // other Time field is untouched.
+    const plainTime = { fieldname: 'other_time', fieldtype: 'Time' }
+    const { container } = mountTime(plainTime, '')
+    expect(timeFieldOptions(plainTime)).toBeNull()
+    expect(optionValues(container)).toHaveLength(0)
   })
 })

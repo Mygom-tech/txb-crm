@@ -748,6 +748,12 @@ export function discoveryScheduleFields() {
       label: __('Meeting time'),
       fieldtype: 'Time',
       reqd: 1,
+      // TXB-241: offer a business-hour dropdown starting at 07:00. This is the
+      // standalone Time counterpart to the coaching Datetime fields' option
+      // start; Field.vue feeds the generated 07:00–23:45 list to the real
+      // TimePicker only when this metadata is present. The list is a
+      // suggestion — earlier times typed by hand still commit and persist.
+      time_options_start: '07:00',
     },
     {
       fieldname: 'meeting_type',
