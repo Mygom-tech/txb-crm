@@ -157,7 +157,13 @@ def log_coaching_call(deal, data):
 		"--- LAST COACHING CALL ---" if data.get("is_last_call") else None,
 	)
 
-	add_note(deal, f"Coaching Call #{call_number}", body.replace("\n", "<br>"))
+	add_note(
+		deal,
+		f"Coaching Call #{call_number}",
+		body.replace("\n", "<br>"),
+		title_date=data.get("delivery_date"),
+		title_suffix=data.get("topic"),
+	)
 
 	if data.get("next_call_date") and not data.get("is_last_call"):
 		add_task(
