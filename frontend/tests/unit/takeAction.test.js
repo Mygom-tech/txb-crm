@@ -7,6 +7,12 @@ import {
 } from '@/utils/takeAction'
 import { findMissingMandatory } from '@/utils/fieldTransforms'
 import { evaluateDependsOnValue } from '@/utils/expressions'
+import {
+  generateTimeOptions,
+  splitDatetime,
+  combineDatetime,
+  DEFAULT_TIME_OPTIONS_END,
+} from '@/utils/timePicker'
 
 const LOG_CALL = {
   name: 'log_coaching_call',
@@ -254,5 +260,53 @@ describe('Next Coaching Call Date conditional behavior', () => {
     expect(
       findMissingMandatory(LOG_CALL.fields, { ...base, is_last_call: 1 }),
     ).toContain('Topic')
+  })
+})
+
+// TXB-238: the coaching call-date Datetime fields declare `time_options_start` and render
+// through the CRM DateTimeWithOptions control, whose option list and date/time value
+// contract live in @/utils/timePicker. These pin the dropdown range (AC-1) and the typed
+// early-time round-trip (AC-2) that the control composes.
+describe('coaching Datetime option and value contract (TXB-238)', () => {
+  it('offers 07:00 through 23:45 in 15-minute steps with nothing earlier (AC-1)', () => {
+    const options = generateTimeOptions('07:00')
+    expect(options[0]).toBe('07:00')
+    expect(options[1]).toBe('07:15')
+    expect(options.at(-1)).toBe(DEFAULT_TIME_OPTIONS_END)
+    expect(DEFAULT_TIME_OPTIONS_END).toBe('23:45')
+    // 07:00 … 23:45 inclusive = ((23*60+45) - (7*60)) / 15 + 1 = 68 slots.
+    expect(options.length).toBe(68)
+    expect(new Set(options).size).toBe(options.length)
+    expect(options.every((t) => t >= '07:00')).toBe(true)
+    expect(options).not.toContain('06:45')
+    expect(options).not.toContain('00:00')
+  })
+
+  it('honours a different declared start', () => {
+    const options = generateTimeOptions('09:30')
+    expect(options[0]).toBe('09:30')
+    expect(options.every((t) => t >= '09:30')).toBe(true)
+  })
+
+  it('recombines a dropdown pick into a canonical datetime', () => {
+    expect(combineDatetime('2026-09-15', '07:00')).toBe('2026-09-15 07:00:00')
+  })
+
+  it('accepts and preserves an early typed exception (AC-2)', () => {
+    // 06:30 is earlier than the 07:00 dropdown start, but a typed value is kept verbatim.
+    expect(combineDatetime('2026-09-15', '06:30')).toBe('2026-09-15 06:30:00')
+  })
+
+  it('round-trips an exact datetime through split then combine (AC-2)', () => {
+    const stored = '2026-09-15 06:30:00'
+    const { date, time } = splitDatetime(stored)
+    expect(combineDatetime(date, time)).toBe(stored)
+  })
+
+  it('degrades blank and partial values without losing in-progress edits', () => {
+    expect(splitDatetime('')).toEqual({ date: '', time: '' })
+    expect(splitDatetime(null)).toEqual({ date: '', time: '' })
+    expect(combineDatetime('2026-09-15', '')).toBe('2026-09-15')
+    expect(combineDatetime('', '07:00')).toBe('')
   })
 })

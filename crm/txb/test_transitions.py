@@ -1592,3 +1592,55 @@ class TestHandoverLinkFieldsPatch(FrappeTestCase):
 
 		create.assert_not_called()
 		clear.assert_not_called()
+
+
+class TestCoachingCallTimeOptionsStart(FrappeTestCase):
+	"""TXB-238: the two coaching Datetime fields declare a 07:00 dropdown start.
+
+	The frontend reads `time_options_start` to render the business-hour option list
+	(07:00-23:45) while still accepting an earlier typed time. These assertions pin the
+	metadata to the canonical action table and guard the non-goal of changing any other
+	Datetime field: only the two coaching call-date fields may carry the property.
+	"""
+
+	def coaching_fields(self):
+		from crm.txb.pipelines.delivering_coaching import DELIVERING_COACHING_ACTIONS
+
+		return [
+			field
+			for action in DELIVERING_COACHING_ACTIONS
+			for field in action["fields"]
+		]
+
+	def test_both_coaching_datetime_fields_start_options_at_07_00(self):
+		by_name = {f["fieldname"]: f for f in self.coaching_fields()}
+
+		for fieldname in ("first_call_date", "next_call_date"):
+			field = by_name[fieldname]
+			self.assertEqual(field["fieldtype"], "Datetime")
+			self.assertEqual(field["time_options_start"], "07:00")
+
+	def test_no_other_coaching_field_declares_a_time_options_start(self):
+		declaring = {
+			f["fieldname"]
+			for f in self.coaching_fields()
+			if "time_options_start" in f
+		}
+		self.assertEqual(declaring, {"first_call_date", "next_call_date"})
+
+	def test_the_start_property_travels_through_the_exposed_log_call_schema(self):
+		"""The browser sees the property on the schema the dialog renders from, not just in code."""
+		from crm.txb.api.actions import get_available_actions
+
+		deal = frappe.get_doc(
+			{
+				"doctype": "CRM Deal",
+				"pipeline_type": PIPELINE_DELIVERING_COACHING,
+				"status": "Active",
+			}
+		).insert(ignore_permissions=True)
+
+		actions = get_available_actions(deal.name)["actions"]
+		spec = next(a for a in actions if a["name"] == "log_coaching_call")
+		next_call = next(f for f in spec["fields"] if f["fieldname"] == "next_call_date")
+		self.assertEqual(next_call["time_options_start"], "07:00")

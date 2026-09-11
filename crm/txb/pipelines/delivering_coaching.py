@@ -279,7 +279,10 @@ DELIVERING_COACHING_ACTIONS = (
 		"admin_only": True,
 		"handler": set_first_call_date,
 		"fields": [
-			{"fieldname": "first_call_date", "label": "First Coaching Call Date & Time", "fieldtype": "Datetime", "reqd": 1},
+			# TXB-238: coaching calls run during business hours, so the time dropdown starts at
+			# 07:00. The frontend reads `time_options_start` to render the 07:00-23:45 option list;
+			# earlier times typed by hand are still accepted and saved unchanged.
+			{"fieldname": "first_call_date", "label": "First Coaching Call Date & Time", "fieldtype": "Datetime", "reqd": 1, "time_options_start": "07:00"},
 			{"fieldname": "call_notes", "label": "Notes", "fieldtype": "Small Text"},
 		],
 	},
@@ -310,6 +313,8 @@ DELIVERING_COACHING_ACTIONS = (
 				"fieldtype": "Datetime",
 				"depends_on": "eval:!doc.is_last_call",
 				"mandatory_depends_on": "eval:!doc.is_last_call",
+				# TXB-238: same business-hour dropdown start as first_call_date above.
+				"time_options_start": "07:00",
 			},
 		],
 	},
