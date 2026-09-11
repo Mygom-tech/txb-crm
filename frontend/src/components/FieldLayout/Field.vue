@@ -187,9 +187,11 @@
       input-class="border-none"
       @update:model-value="(v) => fieldChange(v, field)"
     />
-    <!-- TXB-238: Datetime fields that declare `time_options_start` (the two coaching
-         call-date fields) render through the CRM control so the time menu starts at
-         business hours; every other Datetime field keeps the shared DateTimePicker. -->
+    <!-- TXB-239: Datetime fields that declare `time_options_start` (the two coaching
+         call-date fields, Log a Dial's Follow-up Date, and the Follow-up transition
+         date-time) render through the CRM control so its combined date + time picker
+         offers a business-hour option list; every other Datetime field keeps the
+         shared DateTimePicker. -->
     <DateTimeWithOptions
       v-else-if="field.fieldtype === 'Datetime' && field.time_options_start"
       :value="data[field.fieldname]"
