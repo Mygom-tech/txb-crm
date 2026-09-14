@@ -239,7 +239,7 @@ def add_default_fields_layout(force=False):
 		},
 		"CRM Organization-Quick Entry": {
 			"doctype": "CRM Organization",
-			"layout": '[{"name": "organization_section", "columns": [{"name": "column_zOuv", "fields": ["organization_name"]}]}, {"name": "website_revenue_section", "hideBorder": true, "columns": [{"name": "column_I5Dy", "fields": ["website", "company_description"]}, {"name": "column_Rgss", "fields": ["annual_revenue"]}]}, {"name": "territory_section", "hideBorder": true, "columns": [{"name": "column_w6ap", "fields": ["territory"]}]}, {"name": "employee_industry_section", "hideBorder": true, "columns": [{"name": "column_u5tZ", "fields": ["no_of_employees", "linkedin", "twitter"]}, {"name": "column_FFrT", "fields": ["industry", "facebook"]}]}, {"name": "address_section", "hideBorder": true, "columns": [{"name": "column_O2dk", "fields": ["address"]}]}]',
+			"layout": '[{"name": "organization_section", "columns": [{"name": "column_zOuv", "fields": ["organization_name", "custom_company_code"]}]}, {"name": "website_revenue_section", "hideBorder": true, "columns": [{"name": "column_I5Dy", "fields": ["website", "company_description"]}, {"name": "column_Rgss", "fields": ["annual_revenue"]}]}, {"name": "territory_section", "hideBorder": true, "columns": [{"name": "column_w6ap", "fields": ["territory"]}]}, {"name": "employee_industry_section", "hideBorder": true, "columns": [{"name": "column_u5tZ", "fields": ["no_of_employees", "linkedin", "twitter"]}, {"name": "column_FFrT", "fields": ["industry", "facebook"]}]}, {"name": "address_section", "hideBorder": true, "columns": [{"name": "column_O2dk", "fields": ["address"]}]}]',
 		},
 		"Address-Quick Entry": {
 			"doctype": "Address",
@@ -274,7 +274,7 @@ def add_default_fields_layout(force=False):
 		},
 		"CRM Organization-Side Panel": {
 			"doctype": "CRM Organization",
-			"layout": '[{"label": "Details", "name": "details_section", "opened": true, "columns": [{"name": "column_IJOV", "fields": ["organization_name", "company_description", "website", "territory", "industry", "no_of_employees", "address", "linkedin", "twitter", "facebook"]}]}]',
+			"layout": '[{"label": "Details", "name": "details_section", "opened": true, "columns": [{"name": "column_IJOV", "fields": ["organization_name", "custom_company_code", "company_description", "website", "territory", "industry", "no_of_employees", "address", "linkedin", "twitter", "facebook"]}]}]',
 		},
 	}
 

@@ -32,6 +32,23 @@
           doctype="CRM Organization"
         />
         <ErrorMessage v-if="error" class="mt-8" :message="__(error)" />
+        <div
+          v-if="duplicate"
+          class="mt-6 rounded-lg border border-outline-gray-2 bg-surface-gray-2 p-3"
+        >
+          <div class="text-sm text-ink-gray-7">
+            {{ __('An organization already uses this Company Code:') }}
+          </div>
+          <div class="mt-1 text-base font-medium text-ink-gray-9 truncate">
+            {{ duplicate.label || duplicate.organization }}
+          </div>
+          <Button
+            class="mt-3"
+            variant="subtle"
+            :label="__('Use this organization')"
+            @click="useDuplicate"
+          />
+        </div>
       </div>
       <div class="px-4 pt-4 pb-7 sm:px-6">
         <div class="space-y-2">
@@ -87,6 +104,9 @@ const show = defineModel({ type: Boolean })
 
 const loading = ref(false)
 const error = ref(null)
+// When Company Code detection matches an existing Organization, hold it here so the user can
+// deliberately reuse it (open/select) instead of creating a second one (TXB-244).
+const duplicate = ref(null)
 
 const { document: organization, triggerOnBeforeCreate } =
   useDocument('CRM Organization')
@@ -140,8 +160,30 @@ async function enrichFromWebsite() {
 async function createOrganization() {
   loading.value = true
   error.value = null
+  duplicate.value = null
 
   await triggerOnBeforeCreate?.()
+
+  // Company Code is the Organization's identity (TXB-243) and is mandatory for every new
+  // Organization. Validate it before inserting so the user gets a clear message, and when a
+  // whitespace/case-equivalent duplicate already exists, surface that Organization with an
+  // explicit reuse action rather than silently creating another. The backend contract stays
+  // authoritative — this only fronts it with a friendlier flow.
+  const code = (organization.doc.custom_company_code || '').trim()
+  if (!code) {
+    error.value = __('Company Code is required.')
+    loading.value = false
+    return
+  }
+  const check = await call(
+    'crm.fcrm.doctype.crm_organization.company_code.check_company_code',
+    { company_code: code },
+  ).catch(() => null)
+  if (check?.valid === false && check.reason === 'duplicate') {
+    duplicate.value = { organization: check.organization, label: check.label }
+    loading.value = false
+    return
+  }
 
   const doc = await call(
     'frappe.client.insert',
@@ -164,6 +206,16 @@ async function createOrganization() {
     handleOrganizationUpdate(doc)
     organization.doc = {}
   }
+}
+
+// Explicit reuse of the detected duplicate: open it (redirect flow) or select it (the
+// convert/quick-create afterInsert flow) — the same handler the create path uses on success.
+function useDuplicate() {
+  if (!duplicate.value?.organization) return
+  capture('organization_duplicate_reused')
+  handleOrganizationUpdate({ name: duplicate.value.organization })
+  duplicate.value = null
+  organization.doc = {}
 }
 
 function handleOrganizationUpdate(doc) {

@@ -307,7 +307,14 @@
             if (!el) return;
             var val = f.fieldtype === "Check" ? (el.checked ? 1 : 0) : el.value;
             values[f.fieldname] = val;
-            if (f.reqd && (val === "" || val === null || val === undefined)) {
+            // A field may be conditionally required: `required_if` names another field that,
+            // once filled, makes this one mandatory (e.g. Company Code once a company is named).
+            var required = !!f.reqd;
+            if (!required && f.required_if) {
+              var other = document.getElementById(f.required_if);
+              required = !!(other && String(other.value || "").trim() !== "");
+            }
+            if (required && (val === "" || val === null || val === undefined)) {
               missing.push(f);
               el.classList.add("has-error");
             }
