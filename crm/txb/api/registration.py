@@ -235,16 +235,16 @@ def _comments(values: dict) -> str:
 
 
 def upsert_organization(values: dict) -> str | None:
-	"""Reuse an organization by name; else create it."""
-	company_name = values["company_name"]
-	if not company_name:
-		return None
-	existing = frappe.db.get_value("CRM Organization", {"organization_name": company_name})
-	if existing:
-		return existing
-	organization = frappe.get_doc({"doctype": "CRM Organization", "organization_name": company_name})
-	organization.insert(ignore_permissions=True)
-	return organization.name
+	"""Reuse an Organization by code then name; else create it through validation.
+
+	Delegates to the centralized Company Code contract (TXB-243) so a new Organization is
+	subject to the same required/unique code rule as a direct insert -- a code is forwarded when
+	the form provides one, and its absence is rejected rather than bypassed."""
+	from crm.fcrm.doctype.crm_organization.company_code import reuse_or_create_organization
+
+	return reuse_or_create_organization(
+		values["company_name"], company_code=values.get("company_code")
+	)
 
 
 def upsert_contact(values: dict, organization: str | None, source_deal):

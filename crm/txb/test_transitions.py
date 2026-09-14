@@ -1267,8 +1267,14 @@ class TestCoachingHandover(FrappeTestCase):
 
 	def make_source(self, pipeline, status, *, owner="Administrator"):
 		"""A source Opportunity with an Organization and two Contacts, one primary."""
+		org_name = frappe.generate_hash("Org", 8)
 		organization = frappe.get_doc(
-			{"doctype": "CRM Organization", "organization_name": frappe.generate_hash("Org", 8)}
+			{
+				"doctype": "CRM Organization",
+				"organization_name": org_name,
+				# A new Organization requires a Company Code (TXB-243).
+				"custom_company_code": org_name,
+			}
 		).insert(ignore_permissions=True)
 
 		primary = self.make_contact("Primary")

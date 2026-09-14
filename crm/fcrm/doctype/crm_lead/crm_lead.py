@@ -313,18 +313,24 @@ class CRMLead(Document):
 			self.copy_enrichment_from_organization()
 			return existing_organization
 
-		organization = frappe.new_doc("CRM Organization")
-		organization.update(
-			{
-				"organization_name": self.organization,
+		# New Organization: route through the centralized Company Code contract (TXB-243) so
+		# creation is validated exactly like a direct insert -- a code is forwarded when the Lead
+		# carries one, and its absence is rejected rather than bypassed.
+		from crm.fcrm.doctype.crm_organization.company_code import (
+			FIELD_COMPANY_CODE,
+			reuse_or_create_organization,
+		)
+
+		return reuse_or_create_organization(
+			self.organization,
+			company_code=self.get(FIELD_COMPANY_CODE),
+			extra_fields={
 				"website": self.website,
 				"territory": self.territory,
 				"industry": self.industry,
 				"annual_revenue": self.annual_revenue,
-			}
+			},
 		)
-		organization.insert(ignore_permissions=True)
-		return organization.name
 
 	def copy_enrichment_from_organization(self):
 		"""Fill-empty copy of a linked enriched Organization's fields onto this Lead.
