@@ -19,10 +19,12 @@ the meeting-flow status/data mutation and the Event lifecycle change commit toge
 all. Nothing here commits or talks to any calendar provider.
 """
 
+import hashlib
+
 import frappe
 from frappe.utils import add_to_date, escape_html, get_datetime
 
-from crm.txb.constants import FIELD_MEETING_KEY
+from crm.txb.constants import FIELD_CONVERTED_CONTACT, FIELD_MEETING_KEY
 
 EVENT_DOCTYPE = "Event"
 LEAD_DOCTYPE = "CRM Lead"
@@ -136,6 +138,129 @@ def cancel_meeting_event(reference_doctype: str, reference_docname: str, flow: s
 	return event.name
 
 
+# TXB-246: the Lead scheduling flows whose Events are occurrence-based rather than the one
+# canonical Event per flow the Deal pipeline uses. Each deliberate schedule/reschedule of a Lead
+# Discovery meeting or Follow-up inserts a fresh Event and retires the prior open one as history;
+# only these two flows take that path, so every Deal/Opportunity flow keeps its existing behaviour.
+LEAD_DISCOVERY_FLOW = "lead_discovery"
+LEAD_FOLLOW_UP_FLOW = "lead_follow_up"
+
+
+def occurrence_key(reference_docname: str, flow: str, submission_id: str) -> str:
+	"""The stable identity for one Lead scheduling submission (TXB-246).
+
+	Extends the canonical `<doctype>:<docname>:<flow>` meeting key with the deliberate submission's
+	id, so different deliberate submissions own different keys (each becomes its own Event) while a
+	retry of the same submission resolves to the same key -- and, being database-UNIQUE, the same
+	Event -- keeping the schedule idempotent under a replayed request.
+	"""
+	base = meeting_key(LEAD_DOCTYPE, reference_docname, flow)
+	return f"{base}:{submission_id}"
+
+
+def submission_id(supplied: str | None, *fingerprint_parts) -> str:
+	"""A stable id for a scheduling submission: the client's token, else a content digest (TXB-246).
+
+	When the browser supplies an explicit submission/idempotency token it is used verbatim, so two
+	deliberate submissions are always distinct and a retry reuses the same one. Absent a token, an
+	equivalent stable identifier is derived by digesting the submission's meaningful fields: a retry
+	replays identical values and collapses onto the same occurrence, while a reschedule changes at
+	least the datetime and yields a new one.
+	"""
+	if supplied and str(supplied).strip():
+		return str(supplied).strip()
+	raw = "\x1f".join("" if part is None else str(part).strip() for part in fingerprint_parts)
+	return "auto:" + hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def sync_lead_occurrence_event(
+	*,
+	reference_docname: str,
+	flow: str,
+	submission_id: str,
+	subject: str,
+	starts_on,
+	ends_on=None,
+	meeting_type: str | None = None,
+	link: str | None = None,
+	address: str | None = None,
+	participants: list[dict] | None = None,
+) -> str | None:
+	"""Insert the occurrence Event for one Lead scheduling submission; return its name (TXB-246).
+
+	A new deliberate submission cancels the prior open Event for the same Lead and flow -- retaining
+	it as history -- and then inserts a fresh Event, so the timeline records every deliberate
+	schedule and reschedule. A retry of the same submission resolves the existing occurrence by its
+	key and mutates it in place, never spawning a duplicate and never re-cancelling siblings. The
+	insert and the sibling cancellation run inside the caller's request transaction (alongside the
+	Note/comment and status save), so they commit together or roll back together. Returns None when
+	there is nothing to schedule or the meeting-key field is not installed on this site.
+	"""
+	if not starts_on:
+		return None
+	if not _meeting_key_installed():
+		return None
+
+	key = occurrence_key(reference_docname, flow, submission_id)
+	starts_on = get_datetime(starts_on)
+	ends_on = get_datetime(ends_on) if ends_on else add_to_date(starts_on, hours=DEFAULT_DURATION_HOURS)
+	subject = _compose_subject(subject, LEAD_DOCTYPE, reference_docname)
+
+	values = {
+		"subject": subject,
+		"starts_on": starts_on,
+		"ends_on": ends_on,
+		"status": STATUS_OPEN,
+		"location": address or "",
+		"description": _meeting_description(meeting_type, link, address),
+	}
+
+	# A retry of the same submission: the occurrence already exists, so update it in place and
+	# return it. Siblings were already retired when this occurrence was first inserted, so a replay
+	# must not touch them again -- that keeps a legitimately re-opened later occurrence untouched.
+	existing = _find_meeting_event(key)
+	if existing is not None:
+		_apply(existing, values)
+		_reconcile_participants(existing, participants)
+		existing.save(ignore_permissions=True)
+		return existing.name
+
+	# A new deliberate submission: retire the prior open Event for this Lead/flow as history, then
+	# insert this submission's fresh Event under the caller's transaction.
+	_cancel_open_lead_events(reference_docname, flow, except_key=key)
+	return _insert_meeting_event(key, LEAD_DOCTYPE, reference_docname, values, participants)
+
+
+def _cancel_open_lead_events(lead_name: str, flow: str, except_key: str | None = None):
+	"""Cancel every open Event for this Lead and flow, preserving each as Cancelled history (TXB-246).
+
+	Matches both a legacy canonical Event (`<doctype>:<docname>:<flow>`) and every occurrence Event
+	(`...:<submission>`) for exactly this flow -- the flow segment is compared exactly so a flow that
+	is a string prefix of another is never swept up. The current submission's key is excluded so a
+	freshly inserted occurrence is never cancelled by its own call.
+	"""
+	rows = frappe.get_all(
+		EVENT_DOCTYPE,
+		filters={
+			"reference_doctype": LEAD_DOCTYPE,
+			"reference_docname": lead_name,
+			"status": STATUS_OPEN,
+		},
+		fields=["name", FIELD_MEETING_KEY],
+	)
+	canonical = meeting_key(LEAD_DOCTYPE, lead_name, flow)
+	occ_prefix = f"{canonical}:"
+	for row in rows:
+		key = row.get(FIELD_MEETING_KEY)
+		if not key or key == except_key:
+			continue
+		if key != canonical and not key.startswith(occ_prefix):
+			continue
+		event = frappe.get_doc(EVENT_DOCTYPE, row.name)
+		event.status = STATUS_CANCELLED
+		event.save(ignore_permissions=True)
+
+
 def deal_participants(deal) -> list[dict]:
 	"""The required Event attendees derivable from a Deal: its owner and its linked Contacts.
 
@@ -156,20 +281,67 @@ def deal_participants(deal) -> list[dict]:
 
 
 def lead_participants(lead) -> list[dict]:
-	"""The required Event attendees derivable from a Lead: its owner and the Lead target.
+	"""The required Event attendees derivable from a Lead: its owner and the customer identity.
 
-	TXB-212: the owner comes from `lead_owner` (a User) and the customer target is the Lead itself,
-	carrying its resolvable email. Either is omitted when its email cannot be resolved, so a Lead
-	with no owner or no email still schedules its meeting -- just with fewer attendees.
+	TXB-212: the owner comes from `lead_owner` (a User). TXB-246: the customer target prefers a real
+	Contact -- the Lead's recorded conversion Contact, else an existing Contact resolved by the
+	established exact-email rule -- and only falls back to the CRM Lead participant when neither
+	resolves; no Contact is ever created here. Either attendee is omitted when its email cannot be
+	resolved, so a Lead with no owner or no email still schedules its meeting with fewer attendees.
 	"""
 	participants = []
 	owner = _owner_participant(lead.get("lead_owner"))
 	if owner:
 		participants.append(owner)
-	target = _lead_target_participant(lead)
+	target = _lead_customer_participant(lead)
 	if target:
 		participants.append(target)
 	return participants
+
+
+def _lead_customer_participant(lead) -> dict | None:
+	"""The Lead's customer attendee, preferring a resolvable Contact over the CRM Lead (TXB-246).
+
+	Prefers the Lead's linked conversion Contact, then an existing Contact matched on the Lead's
+	exact email, carrying that Contact's email (falling back to the Lead's) for deduplication. When
+	no Contact resolves, the CRM Lead itself remains the attendee, exactly as before. Never creates a
+	Contact -- scheduling only references identities that already exist.
+	"""
+	contact = _resolve_lead_contact(lead)
+	if contact:
+		email = _contact_primary_email(contact) or lead.get("email")
+		participant = {"reference_doctype": CONTACT_DOCTYPE, "reference_docname": contact}
+		if _normalize_email(email):
+			participant["email"] = email
+		return participant
+	return _lead_target_participant(lead)
+
+
+def _resolve_lead_contact(lead) -> str | None:
+	"""An existing Contact for this Lead -- its conversion Contact or exact-email match -- or None.
+
+	Prefers the recorded conversion Contact (FIELD_CONVERTED_CONTACT) when the site carries that
+	field and it points at a live Contact. Otherwise applies the established exact-email rule (a
+	`Contact Email` row whose `email_id` equals the Lead's email; see `CRM Lead.contact_exists`),
+	returning that Contact's parent. Returns None when neither resolves; never creates a Contact.
+	"""
+	if frappe.get_meta(LEAD_DOCTYPE).has_field(FIELD_CONVERTED_CONTACT):
+		converted = lead.get(FIELD_CONVERTED_CONTACT)
+		if converted and frappe.db.exists(CONTACT_DOCTYPE, converted):
+			return converted
+
+	email = lead.get("email")
+	if not _normalize_email(email):
+		return None
+	email_row = frappe.db.get_value("Contact Email", {"email_id": email}, "parent")
+	return email_row or None
+
+
+def _contact_primary_email(contact: str | None) -> str | None:
+	"""A Contact's primary email address, from its `email_id`, or None when it cannot resolve."""
+	if not contact:
+		return None
+	return frappe.db.get_value(CONTACT_DOCTYPE, contact, "email_id")
 
 
 def _owner_participant(owner: str | None) -> dict | None:

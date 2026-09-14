@@ -13,7 +13,6 @@ from frappe import _
 
 from crm.txb.constants import LEAD_STATUS_FOLLOW_UP, LEAD_STATUS_NURTURE
 from crm.txb import meetings
-from crm.txb.meetings import sync_meeting_event
 from crm.txb.permissions import can_change_status, is_admin
 from crm.txb.pipelines.actions import find_action, get_actions, resolve_to_state
 
@@ -47,6 +46,9 @@ DISCOVERY_MEETING_FLOW = "lead_discovery"
 FOLLOW_UP_STATUS = LEAD_STATUS_FOLLOW_UP
 FOLLOW_UP_REQUIRED_FIELDS = ("follow_up_date", "follow_up_context")
 FOLLOW_UP_SAVEPOINT = "txb_follow_up"
+# TXB-246: the meeting-flow key for a Lead's Follow-up. Like Discovery, its Events are
+# occurrence-based -- each deliberate schedule inserts a fresh Event and retires the prior open one.
+FOLLOW_UP_MEETING_FLOW = meetings.LEAD_FOLLOW_UP_FLOW
 
 # TXB-210: the Nurture transition. Nurture context and next action are both required; a
 # next-action date-time is optional. The three are recorded as one canonical linked Lead note
@@ -342,8 +344,9 @@ def schedule_follow_up(lead: str, status: str | None = None, activity: str | dic
 	# throw cannot leave it armed for the rest of the request.
 	frappe.flags.txb_action = doc.name
 	try:
-		# Note first, status second, under one savepoint: the two writes commit together or not at
-		# all, so a status-save throw cannot strand a partial note and the prior status is untouched.
+		# Note first, Event second, status third, under one savepoint: the writes commit together or
+		# not at all, so a throw on any cannot strand a partial note or Event and the prior status is
+		# untouched.
 		frappe.db.savepoint(FOLLOW_UP_SAVEPOINT)
 		try:
 			note = frappe.get_doc(
@@ -356,6 +359,25 @@ def schedule_follow_up(lead: str, status: str | None = None, activity: str | dic
 				}
 			)
 			note.insert()
+			# TXB-246: record the follow-up as an occurrence Event linked to this Lead, so it surfaces
+			# on the Events/Activity surface beside Discovery. Each deliberate schedule inserts a fresh
+			# Event and retires the prior open Follow-up Event as history; a retry of the same
+			# submission reuses the same occurrence. Under this savepoint with the Note and status.
+			follow_up_date = values.get("follow_up_date")
+			meetings.sync_lead_occurrence_event(
+				reference_docname=doc.name,
+				flow=FOLLOW_UP_MEETING_FLOW,
+				submission_id=meetings.submission_id(
+					values.get("submission_id"),
+					follow_up_date,
+					values.get("follow_up_context"),
+				),
+				subject=_("Follow-up"),
+				starts_on=follow_up_date,
+				# TXB-212/TXB-246: the Lead's owner and customer identity (a linked or exact-email
+				# Contact when one exists, otherwise the Lead itself), deduplicated on reconciliation.
+				participants=meetings.lead_participants(doc),
+			)
 			doc.status = FOLLOW_UP_STATUS
 			doc.save()
 		except Exception:
@@ -530,22 +552,31 @@ def schedule_discovery(lead: str, status: str | None = None, activity: str | dic
 		# Timeline first, status second, one save: both share the request transaction, so a
 		# validation throw inside save() rolls the scheduling comment back with the status.
 		doc.add_comment("Info", discovery_timeline_html(values))
-		# TXB-209: the same scheduling details also upsert the one canonical Event linked to this
-		# Lead, so the meeting is visible on the Lead's Events/Activity surface. It shares this
-		# request transaction, so a save() throw rolls the Event back with the comment and status;
-		# a re-submit or reschedule mutates the same Event rather than creating a duplicate.
-		sync_meeting_event(
-			reference_doctype=LEAD_DOCTYPE,
+		# TXB-246: the scheduling details also insert an occurrence Event linked to this Lead, so the
+		# meeting is visible on the Lead's Events/Activity surface. Unlike the canonical Deal flows,
+		# each deliberate schedule/reschedule inserts a fresh Event and retires the prior open one as
+		# history; a retry of the same submission reuses the same occurrence rather than duplicating
+		# it. It shares this request transaction, so a save() throw rolls the Event and the sibling
+		# cancellation back with the comment and status.
+		starts_on = discovery_starts_on(values)
+		meetings.sync_lead_occurrence_event(
 			reference_docname=doc.name,
 			flow=DISCOVERY_MEETING_FLOW,
+			submission_id=meetings.submission_id(
+				values.get("submission_id"),
+				starts_on,
+				values.get("meeting_type"),
+				values.get("meeting_link"),
+				values.get("meeting_address"),
+			),
 			subject=_("Discovery Meeting"),
-			starts_on=discovery_starts_on(values),
+			starts_on=starts_on,
 			meeting_type=values.get("meeting_type"),
 			link=values.get("meeting_link"),
 			address=values.get("meeting_address"),
-			# TXB-212: carry the Lead's resolvable owner and target so the meeting Event's attendee
-			# list is not empty. Reconciliation is additive and idempotent, so a reschedule keeps
-			# any manually added participants while ensuring the required ones are present.
+			# TXB-212/TXB-246: carry the Lead's resolvable owner and customer identity (a linked or
+			# exact-email Contact when one exists, otherwise the Lead itself) so the Event's attendee
+			# list is not empty. Reconciliation deduplicates by reference and normalized email.
 			participants=meetings.lead_participants(doc),
 		)
 		doc.status = DISCOVERY_STATUS
