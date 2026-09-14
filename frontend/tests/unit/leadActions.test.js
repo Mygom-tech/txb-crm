@@ -432,13 +432,14 @@ describe('TXB-236 ac-2 — fail closed before the status transition, no partial 
     expect(discoveryMocks.call).not.toHaveBeenCalled()
   })
 
-  it('blocks an incomplete schedule (Virtual without a link) at the dialog and posts nothing', async () => {
-    // FieldLayoutDialog's onSubmit gate throws on the missing location detail and keeps the
-    // dialog open, so nothing commits and no status moves.
+  it('blocks an incomplete schedule (missing the required time) at the dialog and posts nothing', async () => {
+    // FieldLayoutDialog's onSubmit gate throws on a missing required date/time/type and keeps the
+    // dialog open, so nothing commits and no status moves. TXB-245: the location detail is no
+    // longer part of that required set — only date, time and type are.
     discoveryMocks.dialogDoc.current = {
       meeting_date: '2026-09-10',
-      meeting_time: '14:37:00',
       meeting_type: 'Virtual',
+      meeting_link: 'https://meet.example/xyz',
     }
 
     const routed = await resolveLeadStatusTransition('Contacted', DISCOVERY_STATUS, DISCOVERY_LEAD, {
@@ -473,6 +474,70 @@ describe('TXB-236 ac-2 — fail closed before the status transition, no partial 
     await expect(requestKanbanTransition(discoveryKanbanCtx())).rejects.toThrow(
       'schedule_discovery failed',
     )
+  })
+})
+
+// -----------------------------------------------------------------------------------------
+// TXB-245: the type-specific location detail is optional.
+//
+// A Virtual meeting may be scheduled without a link and an Onsite one without an address. The
+// dialog no longer gates on the detail (only date/time/type stay required), the field metadata
+// drops its mandatory_depends_on, and the built payload carries null for a blank detail so the
+// server timeline/Event omit it cleanly. The backend re-validation is proven in
+// crm/txb/test_transitions.py.
+// -----------------------------------------------------------------------------------------
+describe('TXB-245 — optional type-specific location detail', () => {
+  beforeEach(() => {
+    discoveryMocks.call.mockReset()
+    discoveryMocks.call.mockResolvedValue({ lead: DISCOVERY_LEAD, status: DISCOVERY_STATUS })
+    discoveryMocks.dialogDoc.current = null
+  })
+
+  it('schedules a Virtual meeting without a link, posting meeting_link null', async () => {
+    discoveryMocks.dialogDoc.current = {
+      meeting_date: '2026-09-10',
+      meeting_time: '14:37:00',
+      meeting_type: 'Virtual',
+    }
+
+    const routed = await resolveLeadStatusTransition('Contacted', DISCOVERY_STATUS, DISCOVERY_LEAD, {
+      now: DISCOVERY_NOW,
+    })
+
+    expect(routed.outcome).toBe(LEAD_TRANSITION_SAVED)
+    expect(routed.status).toBe(DISCOVERY_STATUS)
+    const payload = lastSchedulePayload()
+    expect(payload.activity.meeting_type).toBe('Virtual')
+    expect(payload.activity.meeting_link).toBeNull()
+    expect(payload.activity.meeting_address).toBeNull()
+  })
+
+  it('schedules an Onsite meeting without an address, posting meeting_address null', async () => {
+    discoveryMocks.dialogDoc.current = {
+      meeting_date: '2026-09-12',
+      meeting_time: '09:15:00',
+      meeting_type: 'Onsite',
+    }
+
+    const result = await requestKanbanTransition(discoveryKanbanCtx())
+
+    expect(result.proceed).toBe(true)
+    const payload = lastSchedulePayload()
+    expect(payload.activity.meeting_type).toBe('Onsite')
+    expect(payload.activity.meeting_address).toBeNull()
+    expect(payload.activity.meeting_link).toBeNull()
+  })
+
+  it('shows but does not mandate the type-specific detail in the field metadata', () => {
+    const fields = discoveryScheduleFields()
+    const link = fields.find((f) => f.fieldname === 'meeting_link')
+    const address = fields.find((f) => f.fieldname === 'meeting_address')
+    // Still conditionally shown for the matching type…
+    expect(link.depends_on).toMatch(/Virtual/)
+    expect(address.depends_on).toMatch(/Onsite/)
+    // …but never mandatory (TXB-245).
+    expect(link.mandatory_depends_on).toBeUndefined()
+    expect(address.mandatory_depends_on).toBeUndefined()
   })
 })
 

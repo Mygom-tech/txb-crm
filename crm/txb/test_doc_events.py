@@ -270,7 +270,8 @@ class TestRequireDiscoveryDetails(FrappeTestCase):
 
 
 class TestValidateDiscovery(FrappeTestCase):
-	"""TXB-129: the server re-validates the schedule so a direct API call meets the dialog's rule."""
+	"""TXB-129/TXB-245: the server re-validates the schedule so a direct API call meets the dialog's
+	rule. Only date, time and type are required; the type-specific location detail is optional."""
 
 	def _valid_virtual(self):
 		return {
@@ -298,21 +299,21 @@ class TestValidateDiscovery(FrappeTestCase):
 
 		validate_discovery(self._valid_onsite())  # must not raise
 
-	def test_virtual_without_link_is_rejected(self):
+	def test_virtual_without_link_is_accepted(self):
+		"""TXB-245: the link is optional — a Virtual schedule with a blank link still passes."""
 		from crm.txb.api.actions import validate_discovery
 
 		values = self._valid_virtual()
 		values["meeting_link"] = "   "
-		with self.assertRaises(frappe.MandatoryError):
-			validate_discovery(values)
+		validate_discovery(values)  # must not raise
 
-	def test_onsite_without_address_is_rejected(self):
+	def test_onsite_without_address_is_accepted(self):
+		"""TXB-245: the address is optional — an Onsite schedule with no address still passes."""
 		from crm.txb.api.actions import validate_discovery
 
 		values = self._valid_onsite()
 		del values["meeting_address"]
-		with self.assertRaises(frappe.MandatoryError):
-			validate_discovery(values)
+		validate_discovery(values)  # must not raise
 
 	def test_missing_date_time_or_type_is_rejected(self):
 		from crm.txb.api.actions import validate_discovery
@@ -322,17 +323,6 @@ class TestValidateDiscovery(FrappeTestCase):
 			values[field] = ""
 			with self.assertRaises(frappe.MandatoryError):
 				validate_discovery(values)
-
-	def test_onsite_link_is_not_demanded_and_virtual_address_is_not(self):
-		"""Only the location detail for the chosen type is required; the other is irrelevant."""
-		from crm.txb.api.actions import validate_discovery
-
-		# Onsite carrying a stray link but no address still fails on the address, not the link.
-		values = self._valid_onsite()
-		del values["meeting_address"]
-		values["meeting_link"] = "https://ignored.example.com"
-		with self.assertRaises(frappe.MandatoryError):
-			validate_discovery(values)
 
 
 class TestDealEvents(FrappeTestCase):
