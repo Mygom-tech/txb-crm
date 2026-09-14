@@ -568,28 +568,21 @@ def discovery_starts_on(values: dict) -> str:
 
 
 def validate_discovery(values: dict):
-	"""Require date, time and type, plus the location detail for the chosen type.
+	"""Require only date, time and type (TXB-245).
 
 	Whitespace-only counts as blank (see `_is_blank`), matching what the Schedule Discovery
-	meeting dialog enforces in the browser. A Virtual meeting requires a manually entered link;
-	an Onsite meeting requires an address. An unknown/blank type fails on the base requirements
-	first, so the conditional check only ever runs for a real type.
+	meeting dialog enforces in the browser. The type-specific location detail is optional: a
+	Virtual meeting may be scheduled without a link and an Onsite one without an address, so no
+	conditional requirement is enforced here or in the browser. When a detail is supplied it is
+	preserved on the timeline and Event; when blank it is omitted cleanly.
 	"""
 	labels = {
 		"meeting_date": _("Meeting date"),
 		"meeting_time": _("Meeting time"),
 		"meeting_type": _("Meeting type"),
-		"meeting_link": _("Meeting link"),
-		"meeting_address": _("Meeting address"),
 	}
 
 	missing = [labels[field] for field in DISCOVERY_REQUIRED_FIELDS if _is_blank(values.get(field))]
-
-	meeting_type = values.get("meeting_type")
-	if meeting_type == DISCOVERY_TYPE_VIRTUAL and _is_blank(values.get("meeting_link")):
-		missing.append(labels["meeting_link"])
-	elif meeting_type == DISCOVERY_TYPE_ONSITE and _is_blank(values.get("meeting_address")):
-		missing.append(labels["meeting_address"])
 
 	if missing:
 		frappe.throw(
@@ -603,7 +596,9 @@ def discovery_timeline_html(values: dict) -> str:
 	"""Render the scheduled meeting as a timeline entry.
 
 	The user-supplied values are escaped so they are recorded as text rather than interpreted as
-	markup. Only the location detail matching the chosen type is shown.
+	markup. Only the location detail matching the chosen type is shown, and only when it was
+	actually supplied (TXB-245): a blank optional link or address is omitted cleanly rather than
+	rendered as an empty row.
 	"""
 	escape = frappe.utils.escape_html
 	rows = [
@@ -612,9 +607,9 @@ def discovery_timeline_html(values: dict) -> str:
 		f" <i>{_('Time')}:</i> {escape(str(values.get('meeting_time', '')).strip())}</div>",
 		f"<div><i>{_('Type')}:</i> {escape(str(values.get('meeting_type', '')).strip())}</div>",
 	]
-	if values.get("meeting_type") == DISCOVERY_TYPE_VIRTUAL:
+	if values.get("meeting_type") == DISCOVERY_TYPE_VIRTUAL and not _is_blank(values.get("meeting_link")):
 		rows.append(f"<div><i>{_('Link')}:</i> {escape(str(values.get('meeting_link', '')).strip())}</div>")
-	elif values.get("meeting_type") == DISCOVERY_TYPE_ONSITE:
+	elif values.get("meeting_type") == DISCOVERY_TYPE_ONSITE and not _is_blank(values.get("meeting_address")):
 		rows.append(
 			f"<div><i>{_('Address')}:</i> {escape(str(values.get('meeting_address', '')).strip())}</div>"
 		)

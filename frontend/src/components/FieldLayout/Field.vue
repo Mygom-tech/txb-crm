@@ -186,14 +186,17 @@
          list only constrains the displayed options — TimePicker stays typeable,
          so earlier manual exceptions still commit through the same
          `update:modelValue` route (TXB-236). -->
-    <TimePicker
+    <!-- TXB-245: render through the CRM-owned TimePickerField wrapper so the
+         dropdown opens reliably on Safari iOS (the packaged chevron's
+         mousedown-only trigger fails on touch). The wrapper preserves the
+         modelValue route, the option list, and manual typing — it only fixes
+         the touch/pointer open boundary. -->
+    <TimePickerField
       v-else-if="field.fieldtype === 'Time'"
-      v-bind="timePickerAttrs()"
       :model-value="data[field.fieldname]"
       :options="timeFieldOptions(field)"
       :format="getFormat('', '', false, true, false)"
       :placeholder="getPlaceholder(field)"
-      input-class="border-none"
       @update:model-value="(v) => fieldChange(v, field)"
     />
     <!-- TXB-239: Datetime fields that declare `time_options_start` (the two coaching
@@ -366,6 +369,7 @@ import TableMultiselectInput from '@/components/Controls/TableMultiselectInput.v
 import Link from '@/components/Controls/Link.vue'
 import Grid from '@/components/Controls/Grid.vue'
 import DateTimeWithOptions from '@/components/Controls/DateTimeWithOptions.vue'
+import TimePickerField from '@/components/Controls/TimePickerField.vue'
 import { createDocument } from '@/composables/document'
 import {
   getFormat,
@@ -390,7 +394,6 @@ import {
   Tooltip,
   DatePicker,
   DateTimePicker,
-  TimePicker,
 } from 'frappe-ui'
 import { computed, provide, inject, ref } from 'vue'
 

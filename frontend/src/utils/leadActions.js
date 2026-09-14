@@ -729,9 +729,10 @@ export async function resolveLeadStatusTransition(
 
 /**
  * Fields the Schedule Discovery meeting dialog renders. Date, time and type are always
- * required; the manual link is required (and shown) only for a Virtual meeting, the address
- * only for an Onsite one. No link is generated and no calendar entry is created — the link is
- * whatever the user types.
+ * required (TXB-245); the manual link is *shown* only for a Virtual meeting and the address
+ * only for an Onsite one, but neither is mandatory — a Virtual meeting can be scheduled without
+ * a link and an Onsite one without an address. No link is generated and no calendar entry is
+ * created — the link is whatever the user types.
  */
 export function discoveryScheduleFields() {
   const virtual = `eval:doc.meeting_type == '${DISCOVERY_TYPE_VIRTUAL}'`
@@ -766,30 +767,32 @@ export function discoveryScheduleFields() {
       fieldname: 'meeting_link',
       label: __('Meeting link'),
       fieldtype: 'Data',
+      // Shown only for a Virtual meeting, but optional (TXB-245): no
+      // mandatory_depends_on, so a blank link is accepted.
       depends_on: virtual,
-      mandatory_depends_on: virtual,
     },
     {
       fieldname: 'meeting_address',
       label: __('Meeting address'),
       fieldtype: 'Small Text',
+      // Shown only for an Onsite meeting, but optional (TXB-245): no
+      // mandatory_depends_on, so a blank address is accepted.
       depends_on: onsite,
-      mandatory_depends_on: onsite,
     },
   ]
 }
 
 /**
- * The fieldnames that must be filled for the given payload. Date, time and type are always
- * required; the conditional location detail depends on the chosen type. Mirrors the server
+ * The fieldnames that must be filled for the given payload. Only date, time and type are
+ * required (TXB-245); the type-specific location detail is optional. Mirrors the server
  * contract so the dialog can block an incomplete submit before the round trip.
+ *
+ * `data` is accepted for signature stability with earlier type-conditional callers, though the
+ * required set no longer depends on the chosen type.
  */
 export function requiredDiscoveryScheduleFields(data) {
-  const base = ['meeting_date', 'meeting_time', 'meeting_type']
-  const type = (data || {}).meeting_type
-  if (type === DISCOVERY_TYPE_VIRTUAL) return [...base, 'meeting_link']
-  if (type === DISCOVERY_TYPE_ONSITE) return [...base, 'meeting_address']
-  return base
+  void data
+  return ['meeting_date', 'meeting_time', 'meeting_type']
 }
 
 /**
@@ -810,13 +813,16 @@ export function isDiscoveryValid(data) {
  * Build the atomic discovery payload: the scheduling activity plus the status it unlocks.
  *
  * Only the location detail matching the chosen type travels — an Onsite meeting never carries
- * a link and a Virtual one never carries an address. Returns null when the payload is invalid,
- * so a caller cannot post an incomplete schedule. The server re-validates authoritatively.
+ * a link and a Virtual one never carries an address. The detail is optional (TXB-245): when the
+ * user leaves it blank the payload carries null so the timeline/Event omits it cleanly, and when
+ * supplied the trimmed value is preserved. Returns null when the required date/time/type are
+ * missing, so a caller cannot post an incomplete schedule. The server re-validates authoritatively.
  */
 export function buildDiscoveryActivity(data, { actor, now } = {}) {
   if (!isDiscoveryValid(data)) return null
   const doc = data || {}
   const type = doc.meeting_type
+  const detail = (value) => (isFilled(value) ? String(value).trim() : null)
   return {
     status: DISCOVERY_STATUS,
     activity: {
@@ -826,10 +832,8 @@ export function buildDiscoveryActivity(data, { actor, now } = {}) {
       meeting_date: String(doc.meeting_date).trim(),
       meeting_time: String(doc.meeting_time).trim(),
       meeting_type: type,
-      meeting_link:
-        type === DISCOVERY_TYPE_VIRTUAL ? String(doc.meeting_link).trim() : null,
-      meeting_address:
-        type === DISCOVERY_TYPE_ONSITE ? String(doc.meeting_address).trim() : null,
+      meeting_link: type === DISCOVERY_TYPE_VIRTUAL ? detail(doc.meeting_link) : null,
+      meeting_address: type === DISCOVERY_TYPE_ONSITE ? detail(doc.meeting_address) : null,
     },
   }
 }
@@ -838,10 +842,10 @@ export function buildDiscoveryActivity(data, { actor, now } = {}) {
  * Prompt for the discovery details, then atomically save the scheduling activity and the
  * Discovery meeting set status server-side.
  *
- * The conditional required fields (link for Virtual, address for Onsite) are re-checked in
- * `onSubmit`, which throws to keep the dialog open on an incomplete submit. Resolves with the
- * server's response, or null when the user cancels — a cancel posts nothing, so the status is
- * left untouched.
+ * Only date, time and type are required (TXB-245); the type-specific location detail is
+ * optional. `onSubmit` re-checks the required set and throws to keep the dialog open on an
+ * incomplete submit. Resolves with the server's response, or null when the user cancels — a
+ * cancel posts nothing, so the status is left untouched.
  */
 export async function logDiscovery(lead, { actor, now } = {}) {
   const isoNow = now || new Date().toISOString()
@@ -853,12 +857,9 @@ export async function logDiscovery(lead, { actor, now } = {}) {
     submitLabel: __('Schedule meeting'),
     cancelLabel: __('Cancel'),
     onSubmit: (formData) => {
-      // Conditional requiredness the static `required` list cannot express: keep the dialog
-      // open until the location detail for the chosen type is supplied.
+      // Belt-and-braces re-check of the required date/time/type before posting.
       if (validateDiscovery(formData).length) {
-        throw new Error(
-          __('Provide the meeting date, time, type, and the required location detail.'),
-        )
+        throw new Error(__('Provide the meeting date, time, and type.'))
       }
     },
   })

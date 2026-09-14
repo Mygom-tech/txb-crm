@@ -1250,41 +1250,27 @@ describe('discoveryScheduleFields (TXB-129)', () => {
     expect(fields.meeting_type.options).toContain(DISCOVERY_TYPE_ONSITE)
   })
 
-  it('shows/requires the link only for Virtual and the address only for Onsite', () => {
+  it('shows the link only for Virtual and the address only for Onsite, mandating neither (TXB-245)', () => {
     const fields = byName()
+    // Conditionally shown for the matching type…
     expect(fields.meeting_link.depends_on).toContain(DISCOVERY_TYPE_VIRTUAL)
-    expect(fields.meeting_link.mandatory_depends_on).toContain(DISCOVERY_TYPE_VIRTUAL)
     expect(fields.meeting_address.depends_on).toContain(DISCOVERY_TYPE_ONSITE)
-    expect(fields.meeting_address.mandatory_depends_on).toContain(DISCOVERY_TYPE_ONSITE)
+    // …but optional: the mandatory hook is gone (TXB-245).
+    expect(fields.meeting_link.mandatory_depends_on).toBeUndefined()
+    expect(fields.meeting_address.mandatory_depends_on).toBeUndefined()
   })
 })
 
-describe('requiredDiscoveryScheduleFields (TXB-129)', () => {
-  it('adds the link for Virtual and the address for Onsite', () => {
-    expect(requiredDiscoveryScheduleFields({ meeting_type: DISCOVERY_TYPE_VIRTUAL })).toEqual([
-      'meeting_date',
-      'meeting_time',
-      'meeting_type',
-      'meeting_link',
-    ])
-    expect(requiredDiscoveryScheduleFields({ meeting_type: DISCOVERY_TYPE_ONSITE })).toEqual([
-      'meeting_date',
-      'meeting_time',
-      'meeting_type',
-      'meeting_address',
-    ])
-  })
-
-  it('requires only the base fields until a type is chosen', () => {
-    expect(requiredDiscoveryScheduleFields({})).toEqual([
-      'meeting_date',
-      'meeting_time',
-      'meeting_type',
-    ])
+describe('requiredDiscoveryScheduleFields (TXB-245)', () => {
+  it('requires only date, time and type regardless of the chosen type', () => {
+    const base = ['meeting_date', 'meeting_time', 'meeting_type']
+    expect(requiredDiscoveryScheduleFields({ meeting_type: DISCOVERY_TYPE_VIRTUAL })).toEqual(base)
+    expect(requiredDiscoveryScheduleFields({ meeting_type: DISCOVERY_TYPE_ONSITE })).toEqual(base)
+    expect(requiredDiscoveryScheduleFields({})).toEqual(base)
   })
 })
 
-describe('validateDiscovery (TXB-129)', () => {
+describe('validateDiscovery (TXB-245)', () => {
   const virtual = {
     meeting_date: '2026-09-01',
     meeting_time: '10:30:00',
@@ -1305,20 +1291,16 @@ describe('validateDiscovery (TXB-129)', () => {
     expect(isDiscoveryValid(onsite)).toBe(true)
   })
 
-  it('requires a manual link for Virtual (whitespace is blank)', () => {
-    expect(validateDiscovery({ ...virtual, meeting_link: '   ' })).toEqual([
-      'meeting_link',
-    ])
+  it('accepts a Virtual meeting without a link (optional detail)', () => {
+    expect(validateDiscovery({ ...virtual, meeting_link: '   ' })).toEqual([])
+    const { meeting_link, ...withoutLink } = virtual
+    expect(isDiscoveryValid(withoutLink)).toBe(true)
   })
 
-  it('requires an address for Onsite', () => {
+  it('accepts an Onsite meeting without an address (optional detail)', () => {
     const { meeting_address, ...withoutAddress } = onsite
-    expect(validateDiscovery(withoutAddress)).toEqual(['meeting_address'])
-  })
-
-  it('does not demand the other type’s location detail', () => {
-    expect(validateDiscovery(virtual)).not.toContain('meeting_address')
-    expect(validateDiscovery(onsite)).not.toContain('meeting_link')
+    expect(validateDiscovery(withoutAddress)).toEqual([])
+    expect(isDiscoveryValid(withoutAddress)).toBe(true)
   })
 
   it('reports missing date, time and type', () => {
