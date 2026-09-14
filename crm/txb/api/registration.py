@@ -54,6 +54,7 @@ FORM_FIELDS = (
 	"email",
 	"phone",
 	"company_name",
+	"company_code",
 	"job_title",
 	"comments",
 	"workshop_interest",
@@ -217,6 +218,12 @@ def validate_required(values: dict):
 			frappe.throw(_(message))
 	if values["workshop_interest"] not in WORKSHOP_INTEREST_OPTIONS:
 		frappe.throw(_("Prašome pasirinkti atsakymą"))
+	# Company name stays optional, but a supplied company must carry its Company Code so the
+	# registration reuses/creates through the same Company Code contract as every other write
+	# (see crm.fcrm.doctype.crm_organization.company_code). This backend check is authoritative;
+	# the page adds a matching conditional client check for a faster round-trip.
+	if values["company_name"] and not values["company_code"]:
+		frappe.throw(_("Įmonės kodas yra privalomas nurodžius įmonę"))
 
 
 def _person(values: dict) -> str:

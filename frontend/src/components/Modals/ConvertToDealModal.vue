@@ -25,34 +25,31 @@
         <label class="block text-base">{{ __('Organization') }}</label>
       </div>
       <div class="ml-6 text-ink-gray-9">
-        <div
-          v-if="leadOrganization && !changeOrganization"
-          class="flex items-center justify-between gap-2 text-base"
-        >
-          <div class="truncate">{{ leadOrganization }}</div>
-          <Button
-            variant="ghost"
-            :label="__('Change')"
-            @click="changeOrganization = true"
-          />
-        </div>
-        <template v-else>
-          <Link
-            class="form-control"
-            size="md"
-            :value="existingOrganization"
-            doctype="CRM Organization"
-            :onCreate="openOrganizationModal"
-            @change="(data) => (existingOrganization = data)"
-          />
-          <div class="mt-2 text-sm text-ink-gray-5">
+        <Link
+          class="form-control"
+          size="md"
+          :value="existingOrganization"
+          doctype="CRM Organization"
+          :onCreate="openOrganizationModal"
+          @change="(data) => (existingOrganization = data)"
+        />
+        <div class="mt-2 text-sm text-ink-gray-5">
+          <template v-if="leadOrganization && !existingOrganization">
             {{
               __(
-                'Every opportunity needs an organization. Choose an existing one or create a new one.',
+                'The lead\'s organization "{0}" needs a Company Code. Select the matching organization or create one with a Company Code before converting.',
+                [leadOrganization],
               )
             }}
-          </div>
-        </template>
+          </template>
+          <template v-else>
+            {{
+              __(
+                'Every opportunity needs an organization. Choose an existing one or create a new one with a Company Code.',
+              )
+            }}
+          </template>
+        </div>
       </div>
 
       <div class="h-px w-full border-t my-6" />
@@ -137,7 +134,7 @@ import { showQuickEntryModal, quickEntryProps } from '@/composables/modals'
 import { isMobileView } from '@/composables/settings'
 import { useOnboarding, useTelemetry } from 'frappe-ui/frappe'
 import { Dialog, Select, createResource, call } from 'frappe-ui'
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 
 const props = defineProps({
@@ -154,10 +151,11 @@ const { user } = sessionStore()
 const { updateOnboardingStep } = useOnboarding('frappecrm')
 const { doctypeMeta: leadMeta } = getMeta('CRM Lead')
 
-// The lead's own organization is used as-is unless the user explicitly overrides it; the
-// backend resolves it by name, which is what keeps a duplicate from being created.
+// The lead's free-text organization name is only a starting point (TXB-244): a code-less name
+// is no longer sufficient to auto-create an Organization. On open we resolve it to an existing
+// Organization when one matches; otherwise the user must select an existing Organization or
+// create one carrying a Company Code (the created/duplicate result flows back via the modal).
 const leadOrganization = computed(() => props.lead.organization || '')
-const changeOrganization = ref(false)
 
 const existingOrganization = ref('')
 const showOrganizationModal = ref(false)
@@ -172,8 +170,13 @@ async function convertToDeal() {
   error.value = ''
 
   // A deal without an organization renders untitled, since organization is the title field.
-  if (!leadOrganization.value && !existingOrganization.value) {
-    error.value = __('Please select or create an organization')
+  // A code-less free-text lead organization is no longer accepted (TXB-244): the user must
+  // resolve it to a real Organization (which carries a Company Code) or create one — the
+  // create modal's duplicate detection lets an existing match be selected back here too.
+  if (!existingOrganization.value) {
+    error.value = __(
+      'Please select an existing organization or create one with a Company Code.',
+    )
     return
   }
 
@@ -217,7 +220,6 @@ async function convertToDeal() {
   })
   if (_deal) {
     show.value = false
-    changeOrganization.value = false
     existingOrganization.value = ''
     error.value = ''
     updateOnboardingStep('convert_lead_to_deal', true, false, () => {
@@ -383,10 +385,31 @@ function hasValue(value) {
 }
 
 function openOrganizationModal(value, close) {
-  newOrganization.value = { organization_name: value }
+  // Seed the create modal with whatever the user typed (or the lead's org name), so creating
+  // a new Organization with a Company Code starts from the known name.
+  newOrganization.value = { organization_name: value || leadOrganization.value }
   showOrganizationModal.value = true
   close()
 }
+
+// Resolve the lead's free-text organization to an existing Organization (matched by name) so
+// the common "already an Organization" case pre-selects without forcing re-entry. When nothing
+// matches, the selector stays empty and the guidance asks for a Company Code-bearing choice.
+onMounted(() => {
+  const name = leadOrganization.value
+  if (!name || existingOrganization.value) return
+  call('frappe.client.get_value', {
+    doctype: 'CRM Organization',
+    filters: { organization_name: name },
+    fieldname: 'name',
+  })
+    .then((res) => {
+      if (res?.name && !existingOrganization.value) {
+        existingOrganization.value = res.name
+      }
+    })
+    .catch(() => {})
+})
 
 function openQuickEntryModal() {
   showQuickEntryModal.value = true

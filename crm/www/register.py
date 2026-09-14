@@ -23,11 +23,16 @@ LABELS = {
 	"email": "El. paštas",
 	"phone": "Telefonas",
 	"company_name": "Įmonė",
+	"company_code": "Įmonės kodas",
 	"job_title": "Pareigos",
 	"comments": "Komentarai",
 	"workshop_interest": "Ar dalyvausite?",
 }
 REQUIRED = {"first_name", "last_name", "email", "workshop_interest"}
+# Company Code is only mandatory once a company is named. `reqd` cannot express that, so the
+# field carries a `required_if` pointer the shared form JS honours; the backend re-checks it
+# (see crm.txb.api.registration.validate_required) and stays authoritative.
+REQUIRED_IF = {"company_code": "company_name"}
 FIELDTYPES = {
 	"email": ("Data", "Email"),
 	"phone": ("Data", "Phone"),
@@ -36,7 +41,7 @@ FIELDTYPES = {
 }
 # one section, two columns
 LAYOUT = (
-	("first_name", "email", "company_name", "workshop_interest"),
+	("first_name", "email", "company_name", "company_code", "workshop_interest"),
 	("last_name", "phone", "job_title", "comments"),
 )
 
@@ -49,6 +54,7 @@ def _field(fieldname: str) -> dict:
 		"fieldtype": fieldtype,
 		"options": options,
 		"reqd": int(fieldname in REQUIRED),
+		"required_if": REQUIRED_IF.get(fieldname, ""),
 		"placeholder": "",
 		"description": "",
 	}
