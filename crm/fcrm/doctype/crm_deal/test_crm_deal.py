@@ -272,6 +272,7 @@ class TestCRMDeal(IntegrationTestCase):
 		deal_name = create_deal(
 			{
 				"organization_name": "API Deal Org",
+				"custom_company_code": "API-Deal-Org",
 				"annual_revenue": 500000,
 				"first_name": "Deal",
 				"last_name": "Creator",
@@ -304,6 +305,7 @@ class TestCRMDeal(IntegrationTestCase):
 			{
 				"doctype": "CRM Organization",
 				"organization_name": "Existing Org",
+				"custom_company_code": "Existing-Org",
 				"annual_revenue": 2000000,
 			}
 		).insert()
@@ -331,6 +333,7 @@ class TestCRMDeal(IntegrationTestCase):
 		deal_name = create_deal(
 			{
 				"organization_name": "Contact Existing Org",
+				"custom_company_code": "Contact-Existing-Org",
 				"first_name": "Existing",
 				"email": "existingc@example.com",
 			}
@@ -445,6 +448,7 @@ class TestCRMDeal(IntegrationTestCase):
 		deal_name = create_deal(
 			{
 				"organization_name": "Provenance Org",
+				"custom_company_code": "Provenance-Org",
 				"contact": contact.name,
 				"lead": lead.name,
 			}
@@ -495,7 +499,13 @@ class TestCRMDeal(IntegrationTestCase):
 	def test_create_deal_without_lead_is_plain_opportunity(self):
 		"""Retaining a source Lead stays optional: omitting it creates a normal Opportunity."""
 		contact = create_test_contact(first_name="Plain", email="plain@example.com")
-		deal_name = create_deal({"organization_name": "Plain Org", "contact": contact.name})
+		deal_name = create_deal(
+			{
+				"organization_name": "Plain Org",
+				"custom_company_code": "Plain-Org",
+				"contact": contact.name,
+			}
+		)
 		deal = frappe.get_doc("CRM Deal", deal_name)
 		self.assertFalse(deal.lead)
 		self.assertIn(contact.name, [c.contact for c in deal.contacts])
@@ -520,7 +530,13 @@ def create_test_deal(**kwargs):
 	if "organization" in kwargs and isinstance(kwargs["organization"], str):
 		org_name = kwargs["organization"]
 		if not frappe.db.exists("CRM Organization", {"organization_name": org_name}):
-			org = frappe.get_doc({"doctype": "CRM Organization", "organization_name": org_name}).insert()
+			org = frappe.get_doc(
+				{
+					"doctype": "CRM Organization",
+					"organization_name": org_name,
+					"custom_company_code": org_name,
+				}
+			).insert()
 			kwargs["organization"] = org.name
 		else:
 			kwargs["organization"] = frappe.db.get_value(

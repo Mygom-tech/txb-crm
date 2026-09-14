@@ -94,6 +94,7 @@ class TestCRMCallLog(IntegrationTestCase):
 			{
 				"doctype": "CRM Organization",
 				"organization_name": "Test Org for Call Log",
+				"custom_company_code": "Test Org for Call Log",
 			}
 		).insert()
 
@@ -280,6 +281,7 @@ class TestCRMCallLog(IntegrationTestCase):
 			{
 				"doctype": "CRM Organization",
 				"organization_name": "Test Org for Call",
+				"custom_company_code": "Test Org for Call",
 			}
 		).insert()
 

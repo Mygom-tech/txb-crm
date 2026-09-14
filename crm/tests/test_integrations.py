@@ -294,6 +294,7 @@ class TestIntegrations(IntegrationTestCase):
 			{
 				"doctype": "CRM Organization",
 				"organization_name": "Test Org",
+				"custom_company_code": "Test Org",
 			}
 		).insert()
 
@@ -438,6 +439,7 @@ class TestIntegrations(IntegrationTestCase):
 			{
 				"doctype": "CRM Organization",
 				"organization_name": "Deal Test Org",
+				"custom_company_code": "Deal Test Org",
 			}
 		).insert()
 

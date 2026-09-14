@@ -73,6 +73,9 @@ class MapperWritePolicyTest(IntegrationTestCase):
 		doc.organization_name = kwargs.pop("organization_name", "Mapper Test Org")
 		for k, v in kwargs.items():
 			doc.set(k, v)
+		# A new Organization requires a Company Code (TXB-243); derive one from the name.
+		if not doc.get("custom_company_code"):
+			doc.set("custom_company_code", doc.organization_name)
 		return doc
 
 	def test_fill_if_empty_fills_only_empty_fields(self):
@@ -120,6 +123,7 @@ class RunWriterTest(IntegrationTestCase):
 	def test_writes_exactly_one_run_with_summary(self):
 		org = frappe.new_doc("CRM Organization")
 		org.organization_name = "Run Writer Org " + frappe.generate_hash(length=4)
+		org.custom_company_code = org.organization_name
 		org.website = "https://acme.example"
 		org.insert()
 
@@ -158,6 +162,7 @@ class ApiPermissionTest(IntegrationTestCase):
 
 		org = frappe.new_doc("CRM Organization")
 		org.organization_name = "Perm Org " + frappe.generate_hash(length=4)
+		org.custom_company_code = org.organization_name
 		org.website = "https://acme.example"
 		org.insert()
 
@@ -179,6 +184,7 @@ class CrossRecordCopyTest(IntegrationTestCase):
 	def setUp(self):
 		self.org = frappe.new_doc("CRM Organization")
 		self.org.organization_name = "Enriched Org " + frappe.generate_hash(length=4)
+		self.org.custom_company_code = self.org.organization_name
 		self.org.website = "https://acme.example"
 		self.org.company_description = "AI powered analytics SaaS."
 		self.org.linkedin = "https://www.linkedin.com/company/acme"
@@ -213,6 +219,7 @@ class CrossRecordCopyTest(IntegrationTestCase):
 	def test_non_enriched_org_is_a_noop(self):
 		plain = frappe.new_doc("CRM Organization")
 		plain.organization_name = "Plain Org " + frappe.generate_hash(length=4)
+		plain.custom_company_code = plain.organization_name
 		plain.website = "https://plain.example"
 		plain.insert()
 

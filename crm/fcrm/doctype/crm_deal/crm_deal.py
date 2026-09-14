@@ -409,27 +409,24 @@ def set_primary_contact(deal: str, contact: str):
 
 
 def create_organization(doc):
-	if not doc.get("organization_name"):
-		return
-
-	existing_organization = frappe.db.exists(
-		"CRM Organization", {"organization_name": doc.get("organization_name")}
+	# Reuse-or-create through the centralized Company Code contract (TXB-243): reuse by code
+	# then name, and validate a new Organization exactly like a direct insert -- forwarding a
+	# supplied code and rejecting its absence instead of bypassing document validation.
+	from crm.fcrm.doctype.crm_organization.company_code import (
+		FIELD_COMPANY_CODE,
+		reuse_or_create_organization,
 	)
-	if existing_organization:
-		return existing_organization
 
-	organization = frappe.new_doc("CRM Organization")
-	organization.update(
-		{
-			"organization_name": doc.get("organization_name"),
+	return reuse_or_create_organization(
+		doc.get("organization_name"),
+		company_code=doc.get(FIELD_COMPANY_CODE) or doc.get("company_code"),
+		extra_fields={
 			"website": doc.get("website"),
 			"territory": doc.get("territory"),
 			"industry": doc.get("industry"),
 			"annual_revenue": doc.get("annual_revenue"),
-		}
+		},
 	)
-	organization.insert(ignore_permissions=True)
-	return organization.name
 
 
 def contact_exists(doc):

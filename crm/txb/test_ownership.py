@@ -229,9 +229,14 @@ class TestConversionOwnership(OwnershipTestCase):
 		super().setUp()
 		for name in ("Convert Co", "Convert Admin Co", "Contact Co", "Not Mine Co", "Reuse Co"):
 			if not frappe.db.exists("CRM Organization", name):
-				frappe.get_doc({"doctype": "CRM Organization", "organization_name": name}).insert(
-					ignore_permissions=True
-				)
+				frappe.get_doc(
+					{
+						"doctype": "CRM Organization",
+						"organization_name": name,
+						# A new Organization requires a Company Code (TXB-243).
+						"custom_company_code": name,
+					}
+				).insert(ignore_permissions=True)
 
 	def convert(self, lead):
 		from crm.fcrm.doctype.crm_lead.crm_lead import convert_to_deal

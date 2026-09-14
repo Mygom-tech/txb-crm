@@ -35,6 +35,11 @@ class TestCRMLead(FrappeTestCase):
 		frappe.db.rollback()
 		super().tearDownClass()
 
+	def setUp(self):
+		# The Company Code contract (TXB-243) requires a code for every new Organization; make
+		# its fields available so conversion fixtures behave as they will on a migrated site.
+		ensure_company_code_fields()
+
 	def tearDown(self):
 		frappe.db.rollback()
 
@@ -278,8 +283,10 @@ class TestCRMLead(FrappeTestCase):
 		self.assertEqual(contact.designation, "Player")
 
 	def test_create_organization_from_lead(self):
-		"""Test creating an organization from lead data"""
+		"""Test creating an organization from lead data (with a required Company Code)"""
+		ensure_company_code_fields()
 		lead = create_lead(
+			pre_create_org=False,
 			first_name="Steve",
 			last_name="Jobs",
 			email="steve@apple.com",
@@ -287,6 +294,8 @@ class TestCRMLead(FrappeTestCase):
 			website="https://apple.com",
 			annual_revenue=1000000,
 		)
+		# A new Organization requires a Company Code (TXB-243); the Lead forwards it.
+		lead.custom_company_code = "Apple-1"
 
 		org_name = lead.create_organization()
 		self.assertTrue(org_name)
@@ -295,20 +304,38 @@ class TestCRMLead(FrappeTestCase):
 		self.assertEqual(org.organization_name, "Apple Inc")
 		self.assertEqual(org.website, "https://apple.com")
 		self.assertEqual(org.annual_revenue, 1000000)
+		self.assertEqual(org.custom_company_code, "Apple-1")
+
+	def test_create_organization_rejects_missing_company_code(self):
+		"""A new Organization created from a codeless Lead is rejected (TXB-243, ac-1)."""
+		ensure_company_code_fields()
+		lead = create_lead(
+			pre_create_org=False,
+			first_name="No",
+			last_name="Code",
+			email="nocode@example.com",
+			organization="Codeless Corp",
+		)
+		with self.assertRaises(frappe.ValidationError):
+			lead.create_organization()
 
 	def test_create_organization_with_existing_org(self):
 		"""Test that existing organization is reused instead of creating duplicate"""
-		# Create first lead with organization
+		ensure_company_code_fields()
+		# Create first lead with organization (new org -> needs a code)
 		lead1 = create_lead(
+			pre_create_org=False,
 			first_name="Person",
 			last_name="One",
 			email="person1@example.com",
 			organization="Existing Corp",
 		)
+		lead1.custom_company_code = "Existing-1"
 		org_name1 = lead1.create_organization()
 
-		# Create second lead with same organization
+		# Create second lead with same organization; reused by name, no code needed
 		lead2 = create_lead(
+			pre_create_org=False,
 			first_name="Person",
 			last_name="Two",
 			email="person2@example.com",
@@ -366,6 +393,15 @@ class TestCRMLead(FrappeTestCase):
 
 	def test_convert_lead_to_deal(self):
 		"""Test converting a lead to a deal with new contact and organization"""
+		# The Organization carries a Company Code (TXB-243); conversion reuses it by name.
+		frappe.get_doc(
+			{
+				"doctype": "CRM Organization",
+				"organization_name": "Deal Corp",
+				"custom_company_code": "Deal-Corp",
+				"annual_revenue": 500000,
+			}
+		).insert()
 		lead = create_lead(
 			first_name="Deal",
 			last_name="Maker",
@@ -420,6 +456,7 @@ class TestCRMLead(FrappeTestCase):
 			{
 				"doctype": "CRM Organization",
 				"organization_name": "Existing Org Inc",
+				"custom_company_code": "Existing-Org-Inc",
 				"annual_revenue": 2000000,
 			}
 		).insert()
@@ -450,6 +487,13 @@ class TestCRMLead(FrappeTestCase):
 		"""A contact created during conversion points at the resolved organization"""
 		create_contact_organization_link_field()
 
+		frappe.get_doc(
+			{
+				"doctype": "CRM Organization",
+				"organization_name": "Org Link Corp",
+				"custom_company_code": "Org-Link-Corp",
+			}
+		).insert()
 		lead = create_lead(
 			first_name="Linked",
 			last_name="Person",
@@ -468,7 +512,20 @@ class TestCRMLead(FrappeTestCase):
 		create_contact_organization_link_field()
 
 		other_org = frappe.get_doc(
-			{"doctype": "CRM Organization", "organization_name": "Other Org Ltd"}
+			{
+				"doctype": "CRM Organization",
+				"organization_name": "Other Org Ltd",
+				"custom_company_code": "Other-Org-Ltd",
+			}
+		).insert()
+
+		# The Lead's own Organization also pre-exists with a code, so conversion reuses it.
+		frappe.get_doc(
+			{
+				"doctype": "CRM Organization",
+				"organization_name": "Different Corp",
+				"custom_company_code": "Different-Corp",
+			}
 		).insert()
 
 		existing_contact = frappe.get_doc(
@@ -497,7 +554,11 @@ class TestCRMLead(FrappeTestCase):
 	def test_convert_reuses_existing_organization(self):
 		"""Converting reuses a matching organization instead of duplicating it"""
 		existing_org = frappe.get_doc(
-			{"doctype": "CRM Organization", "organization_name": "Dedup Corp"}
+			{
+				"doctype": "CRM Organization",
+				"organization_name": "Dedup Corp",
+				"custom_company_code": "Dedup-Corp",
+			}
 		).insert()
 
 		lead = create_lead(
@@ -514,6 +575,15 @@ class TestCRMLead(FrappeTestCase):
 
 	def test_convert_to_deal_api(self):
 		"""Test convert_to_deal API function"""
+		# The Organization carries a Company Code (TXB-243); conversion reuses it by name.
+		frappe.get_doc(
+			{
+				"doctype": "CRM Organization",
+				"organization_name": "API Test Corp",
+				"custom_company_code": "API-Test-Corp",
+				"annual_revenue": 300000,
+			}
+		).insert()
 		lead = create_lead(
 			first_name="API",
 			last_name="Test",
@@ -567,6 +637,7 @@ class TestCRMLead(FrappeTestCase):
 			{
 				"doctype": "CRM Organization",
 				"organization_name": "API Org Ltd",
+				"custom_company_code": "API-Org-Ltd",
 				"annual_revenue": 1500000,
 			}
 		).insert()
@@ -599,6 +670,14 @@ class TestCRMLead(FrappeTestCase):
 
 	def test_lead_fields_copied_to_deal(self):
 		"""Test that relevant lead fields are copied to deal during conversion"""
+		# The Organization carries a Company Code (TXB-243); conversion reuses it by name.
+		frappe.get_doc(
+			{
+				"doctype": "CRM Organization",
+				"organization_name": "Copy Test Inc",
+				"custom_company_code": "Copy-Test-Inc",
+			}
+		).insert()
 		lead = create_lead(
 			first_name="Copy",
 			last_name="Test",
@@ -989,7 +1068,7 @@ def ensure_deal_statuses():
 			)
 
 
-def create_lead(**kwargs):
+def create_lead(pre_create_org=True, **kwargs):
 	"""Helper function to create a CRM Lead for testing.
 
 	`last_name` and `email` are both reqd on this site through Property Setters, which are
@@ -997,12 +1076,68 @@ def create_lead(**kwargs):
 	`_validate_mandatory` before reaching the behaviour under test. The email carries a hash
 	so `prevent_duplicate`, which rejects a lead matching an existing first name, last name
 	and email, never fires between fixtures.
+
+	TXB-243 makes a Company Code mandatory for every new Organization, so a conversion that
+	would otherwise mint a codeless Organization from ``organization`` is pre-empted here by
+	creating a coded Organization the conversion reuses by name. Pass ``pre_create_org=False``
+	to exercise the codeless-creation path directly (e.g. the required-code rejection).
 	"""
 	data = {"doctype": "CRM Lead"}
 	data.update(kwargs)
 	data.setdefault("last_name", "Test")
 	data.setdefault("email", f"lead-{frappe.generate_hash(length=8)}@example.com")
+
+	organization = data.get("organization")
+	if pre_create_org and organization and not frappe.db.exists(
+		"CRM Organization", {"organization_name": organization}
+	):
+		ensure_company_code_fields()
+		frappe.get_doc(
+			{
+				"doctype": "CRM Organization",
+				"organization_name": organization,
+				"custom_company_code": organization,
+			}
+		).insert(ignore_permissions=True)
+
 	return frappe.get_doc(data).insert()
+
+
+def ensure_company_code_fields():
+	"""Idempotently install the CRM Organization Company Code fields the patch adds (TXB-243),
+	so tests exercising the required/unique code contract do not depend on migration order."""
+	from crm.fcrm.doctype.crm_organization.company_code import (
+		FIELD_COMPANY_CODE,
+		FIELD_COMPANY_CODE_KEY,
+	)
+
+	meta = frappe.get_meta("CRM Organization")
+	fields = []
+	if not meta.has_field(FIELD_COMPANY_CODE):
+		fields.append(
+			{
+				"fieldname": FIELD_COMPANY_CODE,
+				"fieldtype": "Data",
+				"label": "Company Code",
+				"insert_after": "organization_name",
+			}
+		)
+	if not meta.has_field(FIELD_COMPANY_CODE_KEY):
+		fields.append(
+			{
+				"fieldname": FIELD_COMPANY_CODE_KEY,
+				"fieldtype": "Data",
+				"label": "Company Code Key",
+				"hidden": 1,
+				"read_only": 1,
+				"unique": 1,
+				"no_copy": 1,
+				"insert_after": FIELD_COMPANY_CODE,
+			}
+		)
+	if fields:
+		create_custom_fields({"CRM Organization": fields}, ignore_validate=True)
+		frappe.clear_cache(doctype="CRM Organization")
 
 
 def create_lead_deal_custom_fields():

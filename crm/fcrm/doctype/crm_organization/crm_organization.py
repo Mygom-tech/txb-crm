@@ -2,9 +2,16 @@
 # For license information, please see license.txt
 
 import frappe
+from frappe import _
 from frappe.model.document import Document
 
 from crm.api.exchange_rate import get_exchange_rate
+from crm.fcrm.doctype.crm_organization.company_code import (
+	FIELD_COMPANY_CODE,
+	FIELD_COMPANY_CODE_KEY,
+	find_organization_by_code,
+	normalize_company_code,
+)
 
 
 class CRMOrganization(Document):
@@ -29,7 +36,58 @@ class CRMOrganization(Document):
 	# end: auto-generated types
 
 	def validate(self):
+		self.validate_company_code()
 		self.update_exchange_rate()
+
+	def validate_company_code(self):
+		"""Enforce the canonical Company Code contract (TXB-243).
+
+		Require a code for every new Organization, and whenever an existing code is supplied or
+		changed, but grandfather legacy rows that stay blank so an unrelated edit is never
+		blocked. When a code is present (and new or changed) derive the hidden normalized key,
+		reject a normalized duplicate -- naming the conflicting Organization -- and let the key's
+		database uniqueness serialise concurrent writers. Guarded by ``has_field`` so a site that
+		has not yet run the company-code field patch is unaffected.
+		"""
+		if not self.meta.has_field(FIELD_COMPANY_CODE):
+			return
+
+		code = (self.get(FIELD_COMPANY_CODE) or "").strip()
+		self.set(FIELD_COMPANY_CODE, code or None)
+		key = normalize_company_code(code)
+		changed = self.is_new() or self.has_value_changed(FIELD_COMPANY_CODE)
+
+		if not key:
+			# Blank (or whitespace-only) code. Required on create and when an existing code is
+			# being cleared; otherwise this is a grandfathered legacy row -- allow the save.
+			if self.is_new():
+				frappe.throw(_("Company Code is required."), title=_("Company Code Required"))
+			if changed:
+				frappe.throw(
+					_("Company Code cannot be removed once set."),
+					title=_("Company Code Required"),
+				)
+			if self.meta.has_field(FIELD_COMPANY_CODE_KEY):
+				self.set(FIELD_COMPANY_CODE_KEY, None)
+			return
+
+		if not changed:
+			# Existing row, code unchanged: leave the key exactly as migration left it. Touching
+			# it here would try to claim a key an unresolved legacy collision twin also holds and
+			# block an unrelated edit -- the grandfather clause.
+			return
+
+		if self.meta.has_field(FIELD_COMPANY_CODE_KEY):
+			self.set(FIELD_COMPANY_CODE_KEY, key)
+
+		match = find_organization_by_code(key, exclude=None if self.is_new() else self.name)
+		if match:
+			frappe.throw(
+				_("Company Code already used by {0} ({1}).").format(
+					match.get("organization_name") or match["name"], match["name"]
+				),
+				title=_("Duplicate Company Code"),
+			)
 
 	def after_insert(self):
 		# Auto-enrich a new Organization from its website (best-effort, background job).

@@ -77,6 +77,7 @@ class TestCRMTask(IntegrationTestCase):
 			{
 				"doctype": "CRM Organization",
 				"organization_name": "Task Reference Org",
+				"custom_company_code": "Task Reference Org",
 			}
 		).insert()
 

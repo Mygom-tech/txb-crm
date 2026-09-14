@@ -84,6 +84,17 @@ def values(answer, email="reg-e2e@test.invalid", **extra):
 class TestWorkshopRegistration(FrappeTestCase):
 	def setUp(self):
 		registration_setup.ensure_registration_setup()
+		# Registration reuses an Organization by name and never collects a Company Code, so the
+		# company the form posts must already exist as a coded Organization (TXB-243): a new
+		# Organization now requires a code, and the guest flow has none to supply.
+		if not frappe.db.exists("CRM Organization", {"organization_name": "Imone UAB"}):
+			frappe.get_doc(
+				{
+					"doctype": "CRM Organization",
+					"organization_name": "Imone UAB",
+					"custom_company_code": "Imone-UAB",
+				}
+			).insert(ignore_permissions=True)
 		self.deal = workshop_deal()
 		self.link = R.generate_registration_link(self.deal.name)["link"]
 		self.token = frappe.db.get_value("CRM Deal", self.deal.name, FIELD_REGISTRATION_TOKEN)
