@@ -203,6 +203,14 @@ FIELD_REGISTRATION_LINK = "custom_registration_link"
 # every consumer guards on `has_field` so a site that has not yet run it still schedules.
 FIELD_MEETING_KEY = "custom_txb_meeting_key"
 
+# TXB-247 app-owned coaching call status on FCRM Note. The Log Coaching Call workflow seeds
+# the submitted status here, and `crm.patches.v1_0.reconcile_coaching_call_totals` populates it
+# for recognizable legacy notes, so a Delivering Coaching deal's Total Completed Calls can be
+# recounted from its notes instead of incremented. Hidden and read-only: it is metadata about a
+# note, not something a user writes. Installed by that patch; `crm.txb.coaching_calls` guards on
+# `has_field`, so a site that has not yet run it still classifies notes from their body.
+FIELD_COACHING_CALL_STATUS = "custom_txb_coaching_call_status"
+
 # The scheduled workshop date and time, collected by the native Set Workshop action. A
 # Workshop deal may not rest in "Workshop set" without it; see
 # `crm.txb.doc_events.deal.require_workshop_schedule`.

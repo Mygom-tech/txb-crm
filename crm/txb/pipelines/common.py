@@ -27,27 +27,46 @@ TASK_BACKLOG = "Backlog"
 YES_NO = "Yes\nNo"
 
 
-def add_note(deal, title: str, content: str, *, title_date: str = None, title_suffix: str = None):
+def add_note(
+	deal,
+	title: str,
+	content: str,
+	*,
+	title_date: str = None,
+	title_suffix: str = None,
+	metadata: dict = None,
+):
 	"""Attach a note. Titles carry the date, matching the previous behaviour.
 
 	`title_date` overrides the default creation date (`nowdate()`) with an explicit,
 	submitted date, canonicalised to `YYYY-MM-DD`; `title_suffix` appends a trailing
-	` - <suffix>` segment. Both are opt-in, so existing callers keep the current
-	`title - <today>` shape unchanged.
+	` - <suffix>` segment. `metadata` seeds app-owned custom fields on the note -- structured
+	values the app reads back later, rather than re-parsing the body. All three are opt-in, so
+	existing callers keep the current `title - <today>` shape unchanged.
+
+	Fields in `metadata` the site does not have yet are dropped: they are installed by patch,
+	and a note is worth more than the field, so an un-migrated site still records the call.
+
+	Returns the inserted note.
 	"""
 	date = getdate(title_date) if title_date else nowdate()
 	full_title = f"{title} - {date}"
 	if title_suffix:
 		full_title = f"{full_title} - {title_suffix}"
-	frappe.get_doc(
-		{
-			"doctype": NOTE_DOCTYPE,
-			"reference_doctype": DEAL_DOCTYPE,
-			"reference_docname": deal.name,
-			"title": full_title,
-			"content": content,
-		}
-	).insert(ignore_permissions=True)
+
+	values = {
+		"doctype": NOTE_DOCTYPE,
+		"reference_doctype": DEAL_DOCTYPE,
+		"reference_docname": deal.name,
+		"title": full_title,
+		"content": content,
+	}
+
+	if metadata:
+		meta = frappe.get_meta(NOTE_DOCTYPE)
+		values.update({field: value for field, value in metadata.items() if meta.has_field(field)})
+
+	return frappe.get_doc(values).insert(ignore_permissions=True)
 
 
 def add_task(deal, title: str, description: str, assigned_to=None, due_date=None, priority="Medium"):

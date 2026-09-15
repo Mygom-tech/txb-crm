@@ -51,3 +51,4 @@ crm.patches.v1_0.add_meeting_event_key_field
 crm.patches.v1_0.migrate_qualified_and_no_answer_lead_statuses
 crm.patches.v1_0.add_company_code_key_field
 crm.patches.v1_0.add_company_code_to_organization_layouts
+crm.patches.v1_0.reconcile_coaching_call_totals

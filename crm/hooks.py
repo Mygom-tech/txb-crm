@@ -211,6 +211,15 @@ doc_events = {
 		"on_update": ["crm.txb.doc_events.call_log.update_deal_call_count"],
 		"after_delete": ["crm.txb.doc_events.call_log.update_deal_call_count"],
 	},
+	"FCRM Note": {
+		# A coaching call note is the record of the call, so a Delivering Coaching deal's
+		# Total Completed Calls is recounted from its notes on every note lifecycle event --
+		# including a note moved between deals, which recounts both (TXB-247).
+		"before_validate": ["crm.txb.doc_events.note.classify_coaching_call"],
+		"after_insert": ["crm.txb.doc_events.note.reconcile_coaching_totals"],
+		"on_update": ["crm.txb.doc_events.note.reconcile_coaching_totals"],
+		"after_delete": ["crm.txb.doc_events.note.reconcile_coaching_totals"],
+	},
 	"ToDo": {
 		"after_insert": ["crm.api.todo.after_insert"],
 		"on_update": ["crm.api.todo.on_update"],

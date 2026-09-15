@@ -9,6 +9,8 @@ Every action here is admin_only except Log Coaching Call, which is the one that 
 move the status. See crm/txb/permissions.py for the rule that enforces it.
 """
 
+from crm.txb.coaching_calls import CALL_STATUSES, count_completed_calls
+from crm.txb.constants import FIELD_COACHING_CALL_STATUS
 from crm.txb.pipelines.common import (
 	DEAL_DOCTYPE,
 	NOTE_DOCTYPE,
@@ -28,8 +30,6 @@ INACTIVE_REASONS = (
 	"Contract expired",
 	"Other",
 )
-
-CALL_STATUSES = ("Completed", "Missed", "No charge")
 
 
 def move_to_review(deal, data):
@@ -92,8 +92,8 @@ def log_coaching_call_defaults(deal) -> dict:
 
 	Completed Calls is shown read-only from the deal's canonical total, so the coach sees
 	the current count while logging. An unset total reads as 0 rather than a blank the
-	browser could be trusted to fill; the count is only ever advanced server-side by the
-	handler below, never taken from this default.
+	browser could be trusted to fill; the count is only ever recounted server-side from the
+	deal's coaching call notes, never taken from this default.
 	"""
 	return {"completed_calls": deal.total_completed_calls or 0}
 
@@ -133,9 +133,6 @@ def log_coaching_call(deal, data):
 	if data.get("delivery_date"):
 		deal.custom_last_coaching_call_date = data["delivery_date"]
 
-	if data.get("call_status") == "Completed":
-		deal.total_completed_calls = (deal.total_completed_calls or 0) + 1
-
 	call_number = (
 		frappe.db.count(
 			NOTE_DOCTYPE,
@@ -163,7 +160,14 @@ def log_coaching_call(deal, data):
 		body.replace("\n", "<br>"),
 		title_date=data.get("delivery_date"),
 		title_suffix=data.get("topic"),
+		metadata={FIELD_COACHING_CALL_STATUS: _submitted_status(data)},
 	)
+
+	# The note is the record of the call, so the total is recounted from the deal's notes --
+	# including the one just inserted -- rather than advanced from whatever was stored. Assigned
+	# to the in-memory deal because the caller saves it after this handler returns: leaving the
+	# stale value in place would write it straight back over the reconciled count (TXB-247).
+	deal.total_completed_calls = count_completed_calls(deal.name)
 
 	if data.get("next_call_date") and not data.get("is_last_call"):
 		add_task(
@@ -172,6 +176,12 @@ def log_coaching_call(deal, data):
 			"Follow up for next coaching call",
 			assigned_to=deal.custom_assigned_coach,
 		)
+
+
+def _submitted_status(data) -> str | None:
+	"""The submitted call status, kept only when it is one the app recognizes."""
+	status = data.get("call_status")
+	return status if status in CALL_STATUSES else None
 
 
 def put_on_hold(deal, data):
