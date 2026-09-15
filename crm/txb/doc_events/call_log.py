@@ -7,6 +7,8 @@ events here instead.
 
 import frappe
 
+from crm.txb.constants import PIPELINE_DELIVERING_COACHING
+
 CALL_STATUS_COMPLETED = "Completed"
 DEAL_DOCTYPE = "CRM Deal"
 MISSING_NUMBER_PLACEHOLDER = "-"
@@ -26,8 +28,18 @@ def update_deal_call_count(doc, method=None):
 
 	Bound to insert, update and delete: the count is derived from a query rather than
 	incremented, so every event recomputes the same correct value.
+
+	Delivering Coaching is the one pipeline where this field does not mean "CRM Call Log rows":
+	there it is the count of completed coaching calls, owned by `crm.txb.coaching_calls` and
+	recounted from the deal's notes. A telephony call log on such a deal would otherwise
+	silently overwrite that total, so those deals are left alone here (TXB-247). Every other
+	pipeline keeps this behaviour unchanged.
 	"""
 	if doc.reference_doctype != DEAL_DOCTYPE or not doc.reference_docname:
+		return
+
+	pipeline = frappe.db.get_value(DEAL_DOCTYPE, doc.reference_docname, "pipeline_type")
+	if pipeline == PIPELINE_DELIVERING_COACHING:
 		return
 
 	count = frappe.db.count(

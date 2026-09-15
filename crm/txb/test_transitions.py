@@ -534,6 +534,8 @@ class TestLogCoachingCall(FrappeTestCase):
 	def test_a_valid_log_records_the_call_and_advances_the_canonical_count(self):
 		from crm.txb.api.actions import execute_action
 
+		# A stale stored total: the count is recounted from the deal's notes, not advanced
+		# from whatever happened to be stored (TXB-247).
 		deal = self.make_deal(owner=COACH, total_completed_calls=1)
 		frappe.set_user(COACH)
 
@@ -551,9 +553,10 @@ class TestLogCoachingCall(FrappeTestCase):
 		row = frappe.db.get_value(
 			"CRM Deal", deal.name, ["status", "total_completed_calls"], as_dict=True
 		)
-		# The status-neutral flow is preserved and the count refreshes from canonical state.
+		# The status-neutral flow is preserved and the count refreshes from canonical state:
+		# one Completed coaching call note on the deal, so one completed call.
 		self.assertEqual(row["status"], "Active")
-		self.assertEqual(row["total_completed_calls"], 2)
+		self.assertEqual(row["total_completed_calls"], 1)
 		self.assertEqual(self.note_count(deal.name), 1)
 
 	# ── TXB-240: the note title carries the submitted Delivery Date and Topic ──
@@ -732,7 +735,7 @@ class TestLogCoachingCall(FrappeTestCase):
 			"CRM Deal", deal.name, ["status", "total_completed_calls"], as_dict=True
 		)
 		self.assertEqual(row["status"], "Active")
-		self.assertEqual(row["total_completed_calls"], 2)
+		self.assertEqual(row["total_completed_calls"], 1)
 		self.assertEqual(self.note_count(deal.name), 1)
 		# A next-call follow-up task is created when it is not the last call.
 		self.assertEqual(self.task_count(deal.name, title="Next Coaching Call"), 1)
@@ -761,9 +764,9 @@ class TestLogCoachingCall(FrappeTestCase):
 			["status", "total_completed_calls", "custom_last_coaching_call"],
 			as_dict=True,
 		)
-		# Status-neutral, the canonical count still advances, and no follow-up task is made.
+		# Status-neutral, the canonical count still refreshes, and no follow-up task is made.
 		self.assertEqual(row["status"], "Active")
-		self.assertEqual(row["total_completed_calls"], 6)
+		self.assertEqual(row["total_completed_calls"], 1)
 		self.assertEqual(row["custom_last_coaching_call"], "Yes")
 		self.assertEqual(self.note_count(deal.name), 1)
 		self.assertEqual(self.task_count(deal.name, title="Next Coaching Call"), 0)
