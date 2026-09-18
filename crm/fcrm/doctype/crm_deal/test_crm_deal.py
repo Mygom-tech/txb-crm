@@ -267,6 +267,104 @@ class TestCRMDeal(IntegrationTestCase):
 			else:
 				self.assertEqual(c.is_primary, 0)
 
+	def test_contact_link_synced_on_create(self):
+		contact = create_test_contact(first_name="Sync", last_name="Create")
+		deal = create_test_deal(organization="Sync Create Org", contacts=[{"contact": contact.name}])
+		self.assertEqual(deal.contact, contact.name)
+
+	def test_contact_link_synced_on_add_remove_and_primary_switch(self):
+		first = create_test_contact(first_name="Sync", last_name="First")
+		second = create_test_contact(first_name="Sync", last_name="Second")
+		deal = create_test_deal(organization="Sync Lifecycle Org")
+		self.assertFalse(deal.contact)
+
+		add_contact(deal.name, first.name)
+		self.assertEqual(frappe.db.get_value("CRM Deal", deal.name, "contact"), first.name)
+
+		# Adding a second, non-primary Contact keeps the existing primary.
+		add_contact(deal.name, second.name)
+		self.assertEqual(frappe.db.get_value("CRM Deal", deal.name, "contact"), first.name)
+
+		set_primary_contact(deal.name, second.name)
+		self.assertEqual(frappe.db.get_value("CRM Deal", deal.name, "contact"), second.name)
+
+		# Removing the effective Contact falls back to the sole remaining one.
+		remove_contact(deal.name, second.name)
+		self.assertEqual(frappe.db.get_value("CRM Deal", deal.name, "contact"), first.name)
+
+		remove_contact(deal.name, first.name)
+		self.assertFalse(frappe.db.get_value("CRM Deal", deal.name, "contact"))
+
+	def test_contact_link_not_guessed_without_primary(self):
+		first = create_test_contact(first_name="Ambiguous", last_name="One")
+		second = create_test_contact(first_name="Ambiguous", last_name="Two")
+		deal = create_test_deal(
+			organization="Ambiguous Org",
+			contact=first.name,
+			contacts=[{"contact": first.name}, {"contact": second.name}],
+		)
+		self.assertFalse(deal.contact)
+
+	def test_sync_deal_primary_contact_patch(self):
+		from crm.patches.v1_0 import sync_deal_primary_contact
+
+		first = create_test_contact(first_name="Patch", last_name="First")
+		second = create_test_contact(first_name="Patch", last_name="Second")
+		blank = create_test_deal(organization="Patch Blank Org", contacts=[{"contact": first.name}])
+		stale = create_test_deal(
+			organization="Patch Stale Org",
+			contacts=[{"contact": first.name}, {"contact": second.name, "is_primary": 1}],
+		)
+		ambiguous = create_test_deal(
+			organization="Patch Ambiguous Org",
+			contacts=[{"contact": first.name}, {"contact": second.name}],
+		)
+		# Simulate legacy inconsistent rows.
+		frappe.db.set_value("CRM Deal", blank.name, "contact", None, update_modified=False)
+		frappe.db.set_value("CRM Deal", stale.name, "contact", first.name, update_modified=False)
+		frappe.db.set_value("CRM Deal", ambiguous.name, "contact", first.name, update_modified=False)
+		deals = (blank.name, stale.name, ambiguous.name)
+		modified = {d: frappe.db.get_value("CRM Deal", d, "modified") for d in deals}
+
+		sync_deal_primary_contact.execute()
+		sync_deal_primary_contact.execute()  # idempotent
+
+		self.assertEqual(frappe.db.get_value("CRM Deal", blank.name, "contact"), first.name)
+		self.assertEqual(frappe.db.get_value("CRM Deal", stale.name, "contact"), second.name)
+		self.assertFalse(frappe.db.get_value("CRM Deal", ambiguous.name, "contact"))
+		for name, ts in modified.items():
+			self.assertEqual(frappe.db.get_value("CRM Deal", name, "modified"), ts)
+
+	def test_kanban_contact_title_uses_current_full_name(self):
+		from crm.api.doc import KANBAN_TITLE_KEY, get_data
+
+		contact = create_test_contact(first_name="Kanban", last_name="Before")
+		deal = create_test_deal(organization="Kanban Title Org", contacts=[{"contact": contact.name}])
+		no_contact = create_test_deal(organization="Kanban No Contact Org")
+		# Renaming the person updates full_name but not the Contact document ID.
+		contact.reload()
+		contact.last_name = "After"
+		contact.save(ignore_permissions=True)
+
+		def cards(title_field):
+			result = get_data(
+				"CRM Deal",
+				{"name": ["in", [deal.name, no_contact.name]]},
+				"modified desc",
+				column_field="status",
+				title_field=title_field,
+				view={"view_type": "kanban"},
+			)
+			return {row["name"]: row for col in result["data"] for row in col["data"]}
+
+		by_contact = cards("contact")
+		self.assertEqual(by_contact[deal.name]["contact"], contact.name)
+		self.assertEqual(by_contact[deal.name][KANBAN_TITLE_KEY], "Kanban After")
+		self.assertNotIn(KANBAN_TITLE_KEY, by_contact[no_contact.name])
+
+		by_org = cards("organization")
+		self.assertTrue(all(KANBAN_TITLE_KEY not in row for row in by_org.values()))
+
 	def test_create_deal_api(self):
 		"""Test create_deal API function"""
 		deal_name = create_deal(

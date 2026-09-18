@@ -100,6 +100,12 @@
           />
         </div>
         <div
+          v-else-if="getRow(itemName, '_kanban_title').label"
+          class="truncate text-base"
+        >
+          {{ getRow(itemName, '_kanban_title').label }}
+        </div>
+        <div
           v-else-if="getRow(itemName, titleField).label"
           class="truncate text-base"
         >
@@ -512,6 +518,8 @@ function parseRows(rows, columns = []) {
     _rows['_note_count'] = deal._note_count
     _rows['_task_count'] = deal._task_count
     _rows['_comment_count'] = deal._comment_count
+    // Contact title resolved to its current full name (see crm.api.doc)
+    _rows['_kanban_title'] = deal._kanban_title
     return _rows
   })
 }

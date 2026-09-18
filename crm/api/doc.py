@@ -254,6 +254,38 @@ def update_in_standard_filter(fieldname, doctype, value):
 		)
 
 
+KANBAN_TITLE_KEY = "_kanban_title"
+
+
+def set_contact_kanban_titles(doctype: str, title_field: str | None, data: list):
+	"""When the Kanban title is a Contact Link, give each card the Contact's current
+	``full_name`` (Contact's title field) as ``_kanban_title``. The Link value itself is
+	left untouched; Contacts are resolved in one permission-checked query for the board.
+	"""
+	field = frappe.get_meta(doctype).get_field(title_field) if title_field else None
+	if not field or field.fieldtype != "Link" or field.options != "Contact":
+		return
+
+	cards = [row for column in data for row in column.get("data") or []]
+	contact_names = {row.get(title_field) for row in cards if row.get(title_field)}
+	if not contact_names:
+		return
+
+	full_names = dict(
+		frappe.get_list(
+			"Contact",
+			filters={"name": ["in", list(contact_names)]},
+			fields=["name", "full_name"],
+			as_list=True,
+			limit_page_length=0,
+		)
+	)
+	for row in cards:
+		full_name = full_names.get(row.get(title_field))
+		if full_name:
+			row[KANBAN_TITLE_KEY] = full_name
+
+
 @frappe.whitelist()
 def get_data(
 	doctype: str,
@@ -453,6 +485,8 @@ def get_data(
 				)
 
 			data.append({"column": kc, "fields": kanban_fields, "data": column_data})
+
+		set_contact_kanban_titles(doctype, title_field, data)
 
 	fields = frappe.get_meta(doctype).fields
 	fields = [field for field in fields if field.fieldtype not in no_value_fields]
