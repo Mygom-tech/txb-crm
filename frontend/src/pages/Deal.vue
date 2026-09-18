@@ -859,6 +859,9 @@ async function addContact(contact) {
   })
   if (d) {
     dealContacts.reload()
+    // The primary Contact owns the Deal's names and communication values; reload so the
+    // mirrored fields and their read-only state follow the server.
+    document.reload?.()
     toast.success(__('Contact Added'))
   }
 }
@@ -870,6 +873,7 @@ async function removeContact(contact) {
   })
   if (d) {
     dealContacts.reload()
+    document.reload?.()
     toast.success(__('Contact Removed'))
   }
 }
@@ -881,6 +885,7 @@ async function setPrimaryContact(contact) {
   })
   if (d) {
     dealContacts.reload()
+    document.reload?.()
     toast.success(__('Primary Contact Set'))
   }
 }

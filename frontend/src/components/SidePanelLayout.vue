@@ -44,7 +44,11 @@
                   >
                     <Tooltip
                       v-if="!['Button', 'HTML'].includes(field.fieldtype)"
-                      :text="__(field.label)"
+                      :text="
+                        field.read_only_hint
+                          ? `${__(field.label)}: ${__(field.read_only_hint)}`
+                          : __(field.label)
+                      "
                       :hoverDelay="1"
                     >
                       <div
@@ -728,6 +732,13 @@ function parsedField(field) {
       doc.value,
     ),
     read_only: effectiveReadOnly,
+  }
+
+  // Fields locked by read_only_depends_on (e.g. Deal names and communication values
+  // mirrored from the primary Contact) explain where to edit them via their description.
+  if (effectiveReadOnly && !field.read_only && field.description) {
+    _field.read_only_hint = field.description
+    _field.tooltip = field.description
   }
 
   _field.visible = isFieldVisible(_field, overrides?.hidden)
