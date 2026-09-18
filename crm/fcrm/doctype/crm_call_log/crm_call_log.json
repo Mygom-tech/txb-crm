@@ -19,6 +19,7 @@
   "start_time",
   "reference_doctype",
   "reference_docname",
+  "opportunity",
   "column_break_ufnp",
   "to",
   "type",
@@ -134,6 +135,14 @@
    "options": "reference_doctype"
   },
   {
+   "description": "Optional Opportunity this Contact-owned record also belongs to. Must be an Opportunity linked to the referenced Contact.",
+   "fieldname": "opportunity",
+   "fieldtype": "Link",
+   "label": "Opportunity",
+   "options": "CRM Deal",
+   "search_index": 1
+  },
+  {
    "fieldname": "section_break_kebz",
    "fieldtype": "Section Break"
   },
@@ -159,7 +168,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-04-04 15:08:11.626910",
+ "modified": "2026-09-18 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "FCRM",
  "name": "CRM Call Log",

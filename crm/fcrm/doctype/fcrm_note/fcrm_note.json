@@ -11,7 +11,8 @@
   "title",
   "content",
   "reference_doctype",
-  "reference_docname"
+  "reference_docname",
+  "opportunity"
  ],
  "fields": [
   {
@@ -41,6 +42,14 @@
    "fieldtype": "Dynamic Link",
    "label": "Reference Doc",
    "options": "reference_doctype"
+  },
+  {
+   "description": "Optional Opportunity this Contact-owned record also belongs to. Must be an Opportunity linked to the referenced Contact.",
+   "fieldname": "opportunity",
+   "fieldtype": "Link",
+   "label": "Opportunity",
+   "options": "CRM Deal",
+   "search_index": 1
   }
  ],
  "index_web_pages_for_search": 1,
@@ -50,7 +59,7 @@
    "link_fieldname": "note"
   }
  ],
- "modified": "2026-02-23 12:22:56.394635",
+ "modified": "2026-09-18 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "FCRM",
  "name": "FCRM Note",
