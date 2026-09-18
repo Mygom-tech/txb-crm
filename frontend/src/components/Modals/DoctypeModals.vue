@@ -6,6 +6,7 @@
     :doctype="doctypeModal.doctype.value"
     :docname="doctypeModal.name.value"
     :defaults="doctypeModal.defaults.value"
+    :opportunities="doctypeModal.opportunities.value"
     @afterInsert="(d) => doctypeModal.triggerCallback('afterInsert', d)"
     @afterUpdate="(d) => doctypeModal.triggerCallback('afterUpdate', d)"
   />

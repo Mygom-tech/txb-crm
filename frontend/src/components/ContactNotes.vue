@@ -2,8 +2,9 @@
   <!-- Read-only Contact Notes workspace (TXB-132). Consumes the same deduplicated Contact
        aggregate activity stream as the Activity timeline (crm.api.activities.get_activities ->
        get_contact_activities) and presents only its `notes` category as a searchable,
-       source-linked, read-only table (desktop) / list (mobile). No create/edit/delete
-       affordances are rendered here; those stay Lead/Deal-only. -->
+       source-linked, read-only table (desktop) / list (mobile). The only creation affordance is
+       the New Note action (TXB-249), emitted to the Contact page which opens the shared FCRM Note
+       modal; existing notes stay read-only (no edit/delete). -->
   <div class="flex flex-1 flex-col overflow-hidden">
     <div class="flex items-center gap-2 px-3 pt-4 sm:px-10">
       <TextInput
@@ -16,6 +17,12 @@
           <FeatherIcon name="search" class="h-4 w-4 text-ink-gray-4" />
         </template>
       </TextInput>
+      <Button
+        class="ml-auto shrink-0"
+        :label="__('New Note')"
+        icon-left="plus"
+        @click="emit('newNote')"
+      />
     </div>
 
     <!-- Loading -->
@@ -188,6 +195,7 @@ import {
 import { usersStore } from '@/stores/users'
 import {
   Badge,
+  Button,
   Dialog,
   FeatherIcon,
   TextEditor,
@@ -200,6 +208,8 @@ const props = defineProps({
   doctype: { type: String, default: 'Contact' },
   docname: { type: String, required: true },
 })
+
+const emit = defineEmits(['newNote'])
 
 const { getUser } = usersStore()
 

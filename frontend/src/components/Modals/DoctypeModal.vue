@@ -35,6 +35,16 @@
           </div>
         </div>
         <div>
+          <!-- Contact-owned call/note: optional Opportunity restricted to the Contact's linked
+               CRM Deals; the Contact stays the canonical reference (TXB-248 contract). -->
+          <FormControl
+            v-if="opportunities && !editMode"
+            v-model="document.doc.opportunity"
+            class="mb-4"
+            type="select"
+            :label="__('Opportunity (optional)')"
+            :options="opportunityOptions"
+          />
           <FieldLayout
             v-if="layout.data"
             :tabs="layout.data"
@@ -69,7 +79,7 @@ import { usersStore } from '@/stores/users'
 import { showQuickEntryModal, quickEntryProps } from '@/composables/modals'
 import { isMobileView } from '@/composables/settings'
 import { setupCustomizations } from '@/utils'
-import { call, createResource, toast } from 'frappe-ui'
+import { call, createResource, toast, FormControl } from 'frappe-ui'
 import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 
@@ -78,6 +88,8 @@ const props = defineProps({
   doctype: { type: String, default: '' },
   docname: { type: String, default: '' },
   defaults: { type: Object, default: () => ({}) },
+  // [{ label, value }] of Opportunities the record may optionally link to; null hides the picker.
+  opportunities: { type: Array, default: null },
 })
 
 const show = defineModel({ type: Boolean })
@@ -100,6 +112,11 @@ const layout = createResource({
   params: { doctype: props.doctype, type: 'Quick Entry' },
   auto: true,
 })
+
+const opportunityOptions = computed(() => [
+  { label: __('None'), value: '' },
+  ...(props.opportunities || []),
+])
 
 const error = ref(null)
 const editMode = computed(() => Boolean(document.doc?.name))
@@ -129,12 +146,10 @@ const _create = createResource({
 async function create() {
   await triggerOnBeforeCreate?.()
 
-  _create.submit({
-    doc: {
-      doctype: props.doctype,
-      ...document.doc,
-    },
-  })
+  const doc = { doctype: props.doctype, ...document.doc }
+  if (props.opportunities && !doc.opportunity) doc.opportunity = null
+
+  _create.submit({ doc })
 }
 
 function update() {

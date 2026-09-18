@@ -137,17 +137,30 @@
             />
           </div>
         </div>
-        <Activities
+        <!-- The aggregate history stays read-only; Log a Call is the only Activity action. -->
+        <div
           v-else-if="tab.name === 'Activity'"
-          readOnly
-          doctype="Contact"
-          :docname="contactId"
-          :tabs="activityTabs"
-        />
+          class="flex flex-1 flex-col overflow-hidden"
+        >
+          <div class="flex justify-end px-3 pt-4 sm:px-10">
+            <Button
+              :label="__('Log a Call')"
+              icon-left="phone"
+              @click="logCall"
+            />
+          </div>
+          <Activities
+            readOnly
+            doctype="Contact"
+            :docname="contactId"
+            :tabs="activityTabs"
+          />
+        </div>
         <ContactNotes
           v-else-if="tab.name === 'Notes'"
           doctype="Contact"
           :docname="contactId"
+          @newNote="newNote"
         />
         <DealsListView
           v-else-if="tab.label === 'Deals' && rows.length"
@@ -207,6 +220,7 @@ import {
   toast,
 } from 'frappe-ui'
 import { useDoctypeModal } from '@/composables/doctypeModal'
+import { useContactActivityActions } from '@/composables/contactActivityActions'
 import { useTelemetry } from 'frappe-ui/frappe'
 import { ref, computed, h, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -366,6 +380,15 @@ const contactActivities = createResource({
   transform: ([versions, calls, notes, tasks, attachments]) => {
     return { versions, calls, notes, tasks, attachments }
   },
+})
+
+// Contact-scoped Log a Call / New Note (TXB-249): reload the shared ['activity', contactId]
+// resource only after a confirmed insert so the canonical record shows once in Activity/Notes.
+const { logCall, newNote } = useContactActivityActions({
+  contactId: props.contactId,
+  contact,
+  deals,
+  activities: contactActivities,
 })
 
 const rows = computed(() => {
