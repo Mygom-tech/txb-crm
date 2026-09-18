@@ -207,6 +207,7 @@ doc_events = {
 	},
 	"CRM Call Log": {
 		"before_validate": ["crm.txb.doc_events.call_log.default_phone_numbers"],
+		"validate": ["crm.txb.doc_events.opportunity_link.validate_opportunity_link"],
 		"after_insert": ["crm.txb.doc_events.call_log.update_deal_call_count"],
 		"on_update": ["crm.txb.doc_events.call_log.update_deal_call_count"],
 		"after_delete": ["crm.txb.doc_events.call_log.update_deal_call_count"],
@@ -216,6 +217,8 @@ doc_events = {
 		# Total Completed Calls is recounted from its notes on every note lifecycle event --
 		# including a note moved between deals, which recounts both (TXB-247).
 		"before_validate": ["crm.txb.doc_events.note.classify_coaching_call"],
+		# A Contact-owned note may also name one of that Contact's Opportunities (TXB-248).
+		"validate": ["crm.txb.doc_events.opportunity_link.validate_opportunity_link"],
 		"after_insert": ["crm.txb.doc_events.note.reconcile_coaching_totals"],
 		"on_update": ["crm.txb.doc_events.note.reconcile_coaching_totals"],
 		"after_delete": ["crm.txb.doc_events.note.reconcile_coaching_totals"],

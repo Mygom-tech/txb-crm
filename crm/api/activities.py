@@ -494,6 +494,10 @@ def _read_deal_activities(name: str, include_lead: bool = True):
 	# own metadata events) by the get_lead_activities call above, so they are not re-emitted here.
 	deal_notes = get_linked_notes(name) + linked.get("notes", [])
 	calls = calls + linked.get("calls", [])
+	# TXB-248: Contact-owned calls/notes that name this Opportunity in their secondary link. They
+	# stay owned by the Contact (reference_* is untouched) and are appended once by canonical name.
+	_append_new_records(calls, get_contact_owned_calls({"opportunity": name}))
+	_append_new_records(deal_notes, get_contact_owned_notes({"opportunity": name}))
 	notes = notes + deal_notes
 	tasks = tasks + get_linked_tasks(name) + linked.get("tasks", [])
 	attachments = attachments + get_attachments("CRM Deal", name)
@@ -689,7 +693,7 @@ PHASE_POST_CONVERSION = "post_conversion"
 
 # Frontend route prefix per source doctype, surfaced as `source_route` so a caller can link a
 # record back to the exact Lead or Opportunity it came from.
-SOURCE_ROUTES = {"CRM Lead": "leads", "CRM Deal": "deals"}
+SOURCE_ROUTES = {"CRM Lead": "leads", "CRM Deal": "deals", "Contact": "contacts"}
 
 
 @frappe.whitelist()
@@ -709,6 +713,10 @@ def get_contact_activities(name: str):
 	their canonical envelope (actor, timestamp, summary, canonical source, open target). The
 	aggregator adds source/phase attribution and deduplicates by canonical event/source identity
 	(TXB-188); it never copies a source body -- the canonical record stays authoritative.
+
+	Calls and notes recorded directly against the Contact (TXB-248) are read as a third source.
+	One that also names a linked Opportunity is reached twice -- directly and through that
+	Opportunity -- and is kept once, as the Contact-owned record.
 	"""
 	_authorize_contact_activities(name)
 
@@ -716,6 +724,17 @@ def get_contact_activities(name: str):
 	converted_at = _converted_at_by_lead(lead_names)
 
 	activities, calls, notes, tasks, attachments = [], [], [], [], []
+
+	# TXB-248: calls and notes recorded directly against the Contact are read first, so when the
+	# same canonical record is also reached through its optional Opportunity link the first-seen
+	# (Contact-owned) copy is the one kept by the name-based dedup below.
+	direct_calls, direct_notes, direct_activities = _read_direct_contact_records(name)
+	_tag_contact_source(direct_calls, name)
+	_tag_contact_source(direct_notes, name)
+	_tag_contact_source(direct_activities, name)
+	activities += direct_activities
+	calls += direct_calls
+	notes += direct_notes
 
 	for lead in lead_names:
 		streams = _read_lead_activities(lead)
@@ -737,6 +756,21 @@ def get_contact_activities(name: str):
 		notes += streams[2]
 		tasks += streams[3]
 		attachments += streams[4]
+
+	# A Contact-owned note that names a linked Opportunity also comes back in that Opportunity's
+	# feed as a note event sourced to the Deal. Its canonical owner is the Contact, whose own event
+	# is already present, so the Opportunity-sourced replay is dropped rather than shown twice.
+	contact_owned_notes = {note.get("name") for note in direct_notes}
+	activities = [
+		activity
+		for activity in activities
+		if not (
+			isinstance(activity, dict)
+			and activity.get("source_doctype") != "Contact"
+			and activity.get("canonical_doctype") == "FCRM Note"
+			and activity.get("canonical_docname") in contact_owned_notes
+		)
+	]
 
 	activities = _dedup(activities, _activity_identity)
 	calls = _dedup(calls, _record_identity)
@@ -847,6 +881,37 @@ def _tag_deal_source(records: list, deal: str) -> list:
 			record["is_lead"] = False
 			record["source_doctype"] = "CRM Deal"
 			record["source_docname"] = deal
+			record["source_route"] = route
+			record["phase"] = PHASE_POST_CONVERSION
+	return records
+
+
+def _read_direct_contact_records(contact: str):
+	"""Read the calls and notes whose canonical owner is the Contact itself (TXB-248).
+
+	Returns (calls, notes, activities): the Call Log and Note rows, plus the Note-creation
+	metadata events for the main Activity stream -- the same reference-only shape the Lead and
+	Deal readers emit for their own notes. Calls carry the normalized call envelope.
+	"""
+	calls = get_contact_owned_calls({"reference_docname": contact})
+	notes = get_contact_owned_notes({"reference_docname": contact})
+	_tag_call_events(calls)
+	activities = _note_metadata_events(notes, is_lead=False)
+	return calls, notes, activities
+
+
+def _tag_contact_source(records: list, contact: str) -> list:
+	"""Attach Contact source metadata to a directly Contact-owned record, in place.
+
+	A Contact-owned record is created against the person after any Lead conversion, so it is
+	classed post-conversion alongside the Opportunity history.
+	"""
+	route = f"{SOURCE_ROUTES['Contact']}/{contact}"
+	for record in records or []:
+		if isinstance(record, dict):
+			record["is_lead"] = False
+			record["source_doctype"] = "Contact"
+			record["source_docname"] = contact
 			record["source_route"] = route
 			record["phase"] = PHASE_POST_CONVERSION
 	return records
@@ -1143,6 +1208,83 @@ def get_linked_notes(name: str):
 		fields=["name", "title", "content", "owner", "modified", "creation"],
 	)
 	return notes or []
+
+
+# --- Contact-owned calls and notes (TXB-248) -----------------------------------------------
+#
+# A CRM Call Log or FCRM Note may be recorded against a Contact (its canonical owner through
+# reference_doctype/reference_docname) and optionally name one of that Contact's Opportunities in
+# the secondary `opportunity` field. The record is read, never copied: the Contact history reads
+# it directly, and the named Opportunity's history reads it through the secondary link. Every
+# returned row keeps its canonical owner (reference_doctype/reference_docname) and its own author
+# and timestamp, so callers deduplicate by the record's own name.
+
+CONTACT_OWNED_CALL_FIELDS = [
+	"name",
+	"caller",
+	"receiver",
+	"from",
+	"to",
+	"duration",
+	"start_time",
+	"end_time",
+	"status",
+	"type",
+	"recording_url",
+	"creation",
+	"note",
+	"reference_doctype",
+	"reference_docname",
+	"opportunity",
+]
+CONTACT_OWNED_NOTE_FIELDS = [
+	"name",
+	"title",
+	"content",
+	"owner",
+	"modified",
+	"creation",
+	"reference_doctype",
+	"reference_docname",
+	"opportunity",
+]
+
+
+def get_contact_owned_calls(filters: dict) -> list:
+	"""Parsed Contact-owned Call Logs matching `filters` (always scoped to Contact owners)."""
+	calls = frappe.db.get_all(
+		"CRM Call Log",
+		filters={"reference_doctype": "Contact", **filters},
+		fields=CONTACT_OWNED_CALL_FIELDS,
+	)
+	return [parse_call_log(call) for call in calls or []]
+
+
+def get_contact_owned_notes(filters: dict) -> list:
+	"""Contact-owned FCRM Notes matching `filters` (always scoped to Contact owners)."""
+	return (
+		frappe.db.get_all(
+			"FCRM Note",
+			filters={"reference_doctype": "Contact", **filters},
+			fields=CONTACT_OWNED_NOTE_FIELDS,
+		)
+		or []
+	)
+
+
+def _append_new_records(records: list, extra: list) -> list:
+	"""Append each `extra` record not already present by canonical name, preserving order.
+
+	Existing rows are never touched or reordered, so the pre-existing Lead/Deal streams keep their
+	exact behavior; only the newly surfaced canonical records are deduplicated against them.
+	"""
+	seen = {record.get("name") for record in records if isinstance(record, dict)}
+	for record in extra:
+		if record.get("name") in seen:
+			continue
+		seen.add(record.get("name"))
+		records.append(record)
+	return records
 
 
 def get_linked_tasks(name: str):

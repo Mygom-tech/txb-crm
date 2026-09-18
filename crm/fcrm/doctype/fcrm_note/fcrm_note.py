@@ -15,6 +15,7 @@ class FCRMNote(Document):
 		from frappe.types import DF
 
 		content: DF.TextEditor | None
+		opportunity: DF.Link | None
 		reference_docname: DF.DynamicLink | None
 		reference_doctype: DF.Link | None
 		title: DF.Data
