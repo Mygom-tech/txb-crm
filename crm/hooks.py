@@ -164,7 +164,9 @@ doc_events = {
 	"Contact": {
 		"before_insert": ["crm.txb.ownership.claim_owner_on_insert"],
 		"before_validate": ["crm.txb.doc_events.contact.sync_organization"],
-		"validate": ["crm.api.contact.validate", "crm.txb.ownership.guard_owner_change"],
+		"validate": ["crm.txb.ownership.guard_owner_change"],
+		# Primary Contact identity is mirrored into its linked Deals (TXB-252).
+		"on_update": ["crm.api.contact.on_update"],
 	},
 	"CRM Lead": {
 		# prevent_duplicate first: it throws, so nothing else should run before it.
@@ -268,7 +270,6 @@ doc_events = {
 		"after_insert": ["crm.txb.doc_events.deal.create_coaching_admin_task"],
 		"before_validate": [
 			"crm.txb.doc_events.deal.generate_registration_token",
-			"crm.txb.doc_events.deal.sync_contact_name",
 			"crm.txb.doc_events.deal.sync_delivery_coach_name",
 		],
 		"on_update": [

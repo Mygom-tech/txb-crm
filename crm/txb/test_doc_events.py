@@ -15,7 +15,6 @@ from frappe.tests.utils import FrappeTestCase
 from crm.txb.constants import PIPELINE_DELIVERING_COACHING
 from crm.txb.doc_events.call_log import default_phone_numbers
 from crm.txb.doc_events.contact import sync_organization
-from crm.txb.doc_events.deal import primary_contact, sync_contact_name
 from crm.txb.doc_events.lead import (
 	default_disqualified_reason,
 	require_discovery_details,
@@ -41,12 +40,6 @@ class FakeDoc:
 
 	def set(self, fieldname, value):
 		self.__dict__[fieldname] = value
-
-
-class FakeContactRow:
-	def __init__(self, contact, is_primary=0):
-		self.contact = contact
-		self.is_primary = is_primary
 
 
 class TestCallLogEvents(FrappeTestCase):
@@ -329,27 +322,6 @@ class TestValidateDiscovery(FrappeTestCase):
 			values[field] = ""
 			with self.assertRaises(frappe.MandatoryError):
 				validate_discovery(values)
-
-
-class TestDealEvents(FrappeTestCase):
-	def test_primary_contact_prefers_the_primary_flag(self):
-		doc = FakeDoc(contacts=[FakeContactRow("Second"), FakeContactRow("First", is_primary=1)])
-		self.assertEqual(primary_contact(doc), "First")
-
-	def test_primary_contact_falls_back_to_the_first_row(self):
-		doc = FakeDoc(contacts=[FakeContactRow("Only"), FakeContactRow("Other")])
-		self.assertEqual(primary_contact(doc), "Only")
-
-	def test_primary_contact_handles_no_contacts(self):
-		self.assertIsNone(primary_contact(FakeDoc(contacts=[])))
-		self.assertIsNone(primary_contact(FakeDoc(contacts=None)))
-
-	def test_name_sync_skipped_when_both_names_present(self):
-		"""A name typed on the deal must win over the contact's."""
-		doc = FakeDoc(first_name="Set", last_name="Already", contacts=[FakeContactRow("X")])
-		sync_contact_name(doc)
-		self.assertEqual(doc.first_name, "Set")
-		self.assertEqual(doc.last_name, "Already")
 
 
 class TestContactOrganizationSync(FrappeTestCase):
