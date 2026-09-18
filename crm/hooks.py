@@ -254,6 +254,9 @@ doc_events = {
 			# and before the field guards, which are about who may edit rather than what
 			# state the deal may rest in.
 			"crm.txb.doc_events.deal.require_workshop_schedule",
+			# The delivery-readiness gate (TXB-251): a Delivering Coaching deal entering Active
+			# needs its coach, contract, payment, test and delivery notes in place.
+			"crm.txb.doc_events.deal.require_delivery_readiness",
 			# Owner last: a user changing status and owner together hears about the
 			# status rule first, which is the more common mistake.
 			"crm.txb.ownership.guard_owner_change",

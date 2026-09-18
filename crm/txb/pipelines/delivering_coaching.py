@@ -10,7 +10,17 @@ move the status. See crm/txb/permissions.py for the rule that enforces it.
 """
 
 from crm.txb.coaching_calls import CALL_STATUSES, count_completed_calls
-from crm.txb.constants import FIELD_COACHING_CALL_STATUS
+from crm.txb.constants import (
+	FIELD_COACHING_CALL_STATUS,
+	FIELD_CONTRACT_SIGNED,
+	FIELD_DELIVERY_COACH,
+	FIELD_DELIVERY_COACH_NAME,
+	FIELD_DELIVERY_NOTES,
+	FIELD_PAYMENT_CONFIRMED,
+	FIELD_TEST_COMPLETED,
+	PIPELINE_DELIVERING_COACHING,
+	STATUS_ACTIVE,
+)
 from crm.txb.pipelines.common import (
 	DEAL_DOCTYPE,
 	NOTE_DOCTYPE,
@@ -119,6 +129,67 @@ def _is_blank(value) -> bool:
 	if value is None or value == "":
 		return True
 	return isinstance(value, str) and not value.strip()
+
+
+# (fieldname, user-facing label, required value or None for "nonblank"), in display order.
+ACTIVATION_READINESS = (
+	(FIELD_DELIVERY_COACH, "Delivery Coach", None),
+	(FIELD_DELIVERY_COACH_NAME, "Delivery Coach Name", None),
+	(FIELD_CONTRACT_SIGNED, "Contract Signed?", "Yes"),
+	(FIELD_PAYMENT_CONFIRMED, "Payment Confirmed?", "Yes"),
+	(FIELD_TEST_COMPLETED, "Required Test/Check Completed?", "Yes"),
+	(FIELD_DELIVERY_NOTES, "Delivery Notes", None),
+)
+
+
+def missing_activation_readiness(deal) -> list[str]:
+	"""Labels of every readiness condition the deal does not meet, in display order."""
+	missing = []
+	for fieldname, label, required in ACTIVATION_READINESS:
+		value = deal.get(fieldname)
+		unmet = _is_blank(value) if required is None else value != required
+		if unmet:
+			missing.append(label)
+	return missing
+
+
+def require_activation_readiness(deal, data=None):
+	"""Refuse to move a Delivering Coaching deal into Active until it is delivery-ready (TXB-251).
+
+	One error lists every unmet condition, so the Admin fixes them in one pass. Shared by the
+	Active-bound Take Action validators -- which run before the handler writes notes or tasks
+	-- and by the CRM Deal validate hook, which covers Kanban, the status control, direct
+	saves and REST writes. `data` is accepted so it can sit in an action's `validate` slot.
+	"""
+	missing = missing_activation_readiness(deal)
+	if not missing:
+		return
+
+	frappe.throw(
+		frappe._("Complete the following before setting the deal to {0}: {1}").format(
+			frappe._(STATUS_ACTIVE), ", ".join(frappe._(label) for label in missing)
+		),
+		frappe.ValidationError,
+		title=frappe._("Delivery Not Ready"),
+	)
+
+
+def is_entering_active(deal) -> bool:
+	"""True when this save moves a Delivering Coaching deal into Active from anything else.
+
+	Deals already Active are left alone: many predate the readiness fields, and an unrelated
+	edit must not be held hostage to a backfill. Only a status change is a transition, so an
+	insert is not gated.
+	"""
+	if deal.pipeline_type != PIPELINE_DELIVERING_COACHING or deal.status != STATUS_ACTIVE:
+		return False
+	if deal.is_new():
+		return False
+
+	before = deal.get_doc_before_save()
+	if before is not None:
+		return before.status != STATUS_ACTIVE
+	return frappe.db.get_value(DEAL_DOCTYPE, deal.name, "status") != STATUS_ACTIVE
 
 
 def log_coaching_call(deal, data):
@@ -294,6 +365,8 @@ DELIVERING_COACHING_ACTIONS = (
 		"changes_status": True,
 		"admin_only": True,
 		"handler": set_first_call_date,
+		# TXB-251: refused before the handler writes any note, so a failure leaves nothing.
+		"validate": require_activation_readiness,
 		"fields": [
 			# TXB-238: coaching calls run during business hours, so the time dropdown starts at
 			# 07:00. The frontend reads `time_options_start` to render the 07:00-23:45 option list;
@@ -383,6 +456,8 @@ DELIVERING_COACHING_ACTIONS = (
 		"changes_status": True,
 		"admin_only": True,
 		"handler": reactivate,
+		# TXB-251: refused before the handler writes any note, so a failure leaves nothing.
+		"validate": require_activation_readiness,
 		"fields": [
 			{"fieldname": "reactivation_notes", "label": "Reactivation Notes", "fieldtype": "Small Text"},
 		],
