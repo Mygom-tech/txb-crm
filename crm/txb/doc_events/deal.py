@@ -26,6 +26,7 @@ from crm.txb.constants import (
 	STATUS_WORKSHOP_SET,
 )
 from crm.txb.pipelines.common import add_task, deal_link
+from crm.txb.pipelines.delivering_coaching import is_entering_active, require_activation_readiness
 
 
 def require_workshop_schedule(doc, method=None):
@@ -61,6 +62,18 @@ def require_workshop_schedule(doc, method=None):
 		),
 		title=_("Workshop Not Scheduled"),
 	)
+
+
+def require_delivery_readiness(doc, method=None):
+	"""A Delivering Coaching deal may enter Active only once it is delivery-ready (TXB-251).
+
+	The Take Action flow checks the same rule before its handler runs; this is the boundary
+	every other door meets -- Kanban drag, the status control, direct saves and REST writes.
+	Runs in `validate`, after `sync_delivery_coach_name` has derived the coach's name in
+	`before_validate`. Only the transition is gated: deals already Active save freely.
+	"""
+	if is_entering_active(doc):
+		require_activation_readiness(doc)
 
 
 def issue_registration_link(doc) -> str:

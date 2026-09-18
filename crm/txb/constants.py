@@ -11,6 +11,7 @@ PIPELINE_DELIVERING_COACHING = "Delivering Coaching"
 
 # Deal statuses referenced by automation.
 STATUS_WORKSHOP_SET = "Workshop set"
+STATUS_ACTIVE = "Active"
 
 # The sales-terminal status each handover pipeline lands on when its coaching-handover
 # action runs -- Individual Session (`session_won`/`run_bap`) reaches "Won", Workshop
@@ -227,6 +228,13 @@ REGISTRATION_BASE_URL = "https://crm.txbconsulting.com"
 # Delivery coach fields on CRM Deal.
 FIELD_DELIVERY_COACH = "custom_delivery_coach"
 FIELD_DELIVERY_COACH_NAME = "custom_delivery_coach_name"
+
+# Delivery-readiness fields a Delivering Coaching deal needs before it may enter Active
+# (TXB-251). The Yes/No selects must read exactly "Yes".
+FIELD_CONTRACT_SIGNED = "custom_contract_signed"
+FIELD_PAYMENT_CONFIRMED = "custom_payment_confirmed"
+FIELD_TEST_COMPLETED = "custom_test_completed"
+FIELD_DELIVERY_NOTES = "custom_delivery_notes"
 
 # TXB-126 handover links tying a Won sales Opportunity to the single aggregate Delivering
 # Coaching delivery Opportunity it hands over to. Dedicated and app-managed so the handover

@@ -12,6 +12,7 @@ test runner, the better.
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
+from crm.txb.constants import PIPELINE_DELIVERING_COACHING
 from crm.txb.doc_events.call_log import default_phone_numbers
 from crm.txb.doc_events.contact import sync_organization
 from crm.txb.doc_events.deal import primary_contact, sync_contact_name
@@ -21,6 +22,11 @@ from crm.txb.doc_events.lead import (
 	require_follow_up_context,
 	require_nurture_context,
 	require_reach_for_contacted,
+)
+from crm.txb.pipelines.common import DEAL_DOCTYPE, NOTE_DOCTYPE
+from crm.txb.pipelines.delivering_coaching import (
+	missing_activation_readiness,
+	require_activation_readiness,
 )
 
 
@@ -367,3 +373,115 @@ class TestContactOrganizationSync(FrappeTestCase):
 		doc = FakeDoc(custom_organization_link=None, company_name="Stale Org")
 		sync_organization(doc)
 		self.assertIsNone(doc.company_name)
+
+
+READY_FIELDS = {
+	"custom_delivery_coach": "Administrator",
+	"custom_contract_signed": "Yes",
+	"custom_payment_confirmed": "Yes",
+	"custom_test_completed": "Yes",
+	"custom_delivery_notes": "Kick-off agreed.",
+}
+
+ALL_READINESS_LABELS = [
+	"Delivery Coach",
+	"Delivery Coach Name",
+	"Contract Signed?",
+	"Payment Confirmed?",
+	"Required Test/Check Completed?",
+	"Delivery Notes",
+]
+
+
+class TestActivationReadinessRules(FrappeTestCase):
+	"""TXB-251: the pure readiness rule, independent of the database."""
+
+	def test_every_unmet_condition_is_listed_in_display_order(self):
+		doc = FakeDoc(custom_contract_signed="No", custom_delivery_notes="   ")
+		self.assertEqual(missing_activation_readiness(doc), ALL_READINESS_LABELS)
+
+	def test_a_fully_ready_deal_has_nothing_missing(self):
+		doc = FakeDoc(custom_delivery_coach_name="Coach", **READY_FIELDS)
+		self.assertEqual(missing_activation_readiness(doc), [])
+
+	def test_one_error_names_every_unmet_field(self):
+		doc = FakeDoc(custom_delivery_coach_name="Coach", **{**READY_FIELDS, "custom_payment_confirmed": "No"})
+		doc.custom_delivery_notes = ""
+		with self.assertRaises(frappe.ValidationError) as ctx:
+			require_activation_readiness(doc)
+		message = str(ctx.exception)
+		self.assertIn("Payment Confirmed?", message)
+		self.assertIn("Delivery Notes", message)
+		self.assertNotIn("Contract Signed?", message)
+
+
+class TestActivationReadinessGate(FrappeTestCase):
+	"""TXB-251: every door into Active meets the same gate; already-Active deals save freely."""
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+		frappe.flags.txb_action = None
+		frappe.db.rollback()
+
+	def make_deal(self, status, **fields):
+		return frappe.get_doc(
+			{
+				"doctype": "CRM Deal",
+				"pipeline_type": PIPELINE_DELIVERING_COACHING,
+				"status": status,
+				**fields,
+			}
+		).insert(ignore_permissions=True)
+
+	def note_count(self, deal_name):
+		return frappe.db.count(
+			NOTE_DOCTYPE, {"reference_doctype": DEAL_DOCTYPE, "reference_docname": deal_name}
+		)
+
+	def test_direct_save_into_active_is_refused_with_all_labels(self):
+		deal = self.make_deal("Contract Cleared")
+		deal.status = "Active"
+		with self.assertRaises(frappe.ValidationError) as ctx:
+			deal.save()
+		for label in ALL_READINESS_LABELS:
+			self.assertIn(label, str(ctx.exception))
+		self.assertEqual(frappe.db.get_value("CRM Deal", deal.name, "status"), "Contract Cleared")
+
+	def test_set_value_into_active_is_refused(self):
+		"""Kanban drag and the status control write through set_value."""
+		from frappe.client import set_value
+
+		deal = self.make_deal("On Hold")
+		with self.assertRaises(frappe.ValidationError):
+			set_value("CRM Deal", deal.name, "status", "Active")
+		self.assertEqual(frappe.db.get_value("CRM Deal", deal.name, "status"), "On Hold")
+
+	def test_ready_deal_enters_active(self):
+		deal = self.make_deal("Contract Cleared", **READY_FIELDS)
+		deal.status = "Active"
+		deal.save()
+		self.assertEqual(frappe.db.get_value("CRM Deal", deal.name, "status"), "Active")
+
+	def test_already_active_deal_saves_unrelated_edits(self):
+		deal = self.make_deal("Active")
+		deal.custom_delivery_notes = "Historical record, no readiness data."
+		deal.save()
+		self.assertEqual(frappe.db.get_value("CRM Deal", deal.name, "status"), "Active")
+
+	def test_reactivate_action_is_refused_before_any_note_is_written(self):
+		from crm.txb.api.actions import execute_action
+
+		deal = self.make_deal("Inactive")
+		before = self.note_count(deal.name)
+		with self.assertRaises(frappe.ValidationError) as ctx:
+			execute_action(deal.name, "reactivate", {"reactivation_notes": "Back on track"})
+		self.assertIn("Delivery Notes", str(ctx.exception))
+		self.assertEqual(self.note_count(deal.name), before)
+		self.assertEqual(frappe.db.get_value("CRM Deal", deal.name, "status"), "Inactive")
+
+	def test_reactivate_action_succeeds_when_ready(self):
+		from crm.txb.api.actions import execute_action
+
+		deal = self.make_deal("Payment Hold", **READY_FIELDS)
+		result = execute_action(deal.name, "reactivate", {"reactivation_notes": "Paid"})
+		self.assertEqual(result["status"], "Active")
