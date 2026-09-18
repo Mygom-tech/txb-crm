@@ -90,8 +90,8 @@ class CRMDeal(Document):
 	def validate(self):
 		self.validate_status()
 		self.set_primary_contact()
-		self.set_primary_email_mobile_no()
 		self.sync_contact_link()
+		self.sync_primary_contact_identity()
 		if not self.is_new() and self.has_value_changed("deal_owner") and self.deal_owner:
 			self.share_with_agent(self.deal_owner)
 			self.assign_agent(self.deal_owner)
@@ -139,34 +139,28 @@ class CRMDeal(Document):
 				else:
 					d.is_primary = 0
 
-	def set_primary_email_mobile_no(self):
-		if not self.contacts:
+	def sync_contact_link(self):
+		# The scalar `contact` Link (read by Kanban, list views and filters) mirrors the
+		# canonical `contacts` table: the sole or explicitly primary row, else blank.
+		if len([row for row in self.contacts if row.is_primary]) > 1:
+			frappe.throw(_("Only one {0} can be set as primary.").format(frappe.bold("Contact")))
+		self.contact = get_effective_primary_contact(self.contacts)
+
+	def sync_primary_contact_identity(self):
+		# Name and communication fields mirror the live effective primary Contact, never the
+		# cached `contacts` row snapshot (which is refreshed here too). Without one, the Deal
+		# keeps its own names and, as before, carries no Contact communication values.
+		identity = get_contact_identity(self.contact) if self.contact else None
+		if not identity:
 			self.email = ""
 			self.mobile_no = ""
 			self.phone = ""
 			return
 
-		if len([contact for contact in self.contacts if contact.is_primary]) > 1:
-			frappe.throw(_("Only one {0} can be set as primary.").format(frappe.bold("Contact")))
-
-		primary_contact_exists = False
-		for d in self.contacts:
-			if d.is_primary == 1:
-				primary_contact_exists = True
-				self.email = d.email.strip() if d.email else ""
-				self.mobile_no = d.mobile_no.strip() if d.mobile_no else ""
-				self.phone = d.phone.strip() if d.phone else ""
-				break
-
-		if not primary_contact_exists:
-			self.email = ""
-			self.mobile_no = ""
-			self.phone = ""
-
-	def sync_contact_link(self):
-		# The scalar `contact` Link (read by Kanban, list views and filters) mirrors the
-		# canonical `contacts` table: the sole or explicitly primary row, else blank.
-		self.contact = get_effective_primary_contact(self.contacts)
+		self.update(deal_values_from_identity(identity))
+		for row in self.contacts:
+			if row.contact == self.contact:
+				row.update(row_values_from_identity(identity))
 
 	def assign_agent(self, agent):
 		if not agent:
@@ -394,6 +388,114 @@ def get_effective_primary_contact(rows) -> str | None:
 	if len(primary) == 1:
 		return primary[0].get("contact")
 	return None
+
+
+# Contact field -> mirrored field on the Deal / on its `CRM Contacts` row snapshot.
+CONTACT_IDENTITY_FIELDS = ("first_name", "last_name", "full_name", "email_id", "mobile_no", "phone")
+DEAL_IDENTITY_FIELDS = {
+	"first_name": "first_name",
+	"last_name": "last_name",
+	"email": "email_id",
+	"mobile_no": "mobile_no",
+	"phone": "phone",
+}
+ROW_IDENTITY_FIELDS = {
+	"full_name": "full_name",
+	"email": "email_id",
+	"mobile_no": "mobile_no",
+	"phone": "phone",
+}
+
+
+def get_contact_identity(contact) -> dict | None:
+	"""Normalized identity values of a Contact (name or doc/dict); blank values stay blank."""
+	if isinstance(contact, str):
+		contact = frappe.db.get_value("Contact", contact, CONTACT_IDENTITY_FIELDS, as_dict=True)
+	if not contact:
+		return None
+	return {field: (contact.get(field) or "").strip() for field in CONTACT_IDENTITY_FIELDS}
+
+
+def deal_values_from_identity(identity: dict) -> dict:
+	return {field: identity[source] for field, source in DEAL_IDENTITY_FIELDS.items()}
+
+
+def row_values_from_identity(identity: dict) -> dict:
+	return {field: identity[source] for field, source in ROW_IDENTITY_FIELDS.items()}
+
+
+def persist_primary_contact_identity(deal: dict, rows: list, identity: dict | None = None) -> bool:
+	"""Write the effective primary Contact's identity onto a stored Deal and its matching
+	`CRM Contacts` row, only where values differ and without touching `modified` (automatic
+	propagation must not reorder Deals). A Deal without an effective primary Contact is left
+	as is. ``deal`` needs name plus the mirrored fields; ``rows`` need name, contact,
+	is_primary plus the snapshot fields. Returns whether anything was written.
+	"""
+	contact = get_effective_primary_contact(rows)
+	if not contact:
+		return False
+	identity = identity or get_contact_identity(contact)
+	if not identity:
+		return False
+
+	changed = False
+	deal_values = deal_values_from_identity(identity)
+	if any((deal.get(f) or "") != v for f, v in deal_values.items()):
+		frappe.db.set_value("CRM Deal", deal["name"], deal_values, update_modified=False)
+		changed = True
+
+	row_values = row_values_from_identity(identity)
+	for row in rows:
+		if row.get("contact") != contact:
+			continue
+		if any((row.get(f) or "") != v for f, v in row_values.items()):
+			frappe.db.set_value("CRM Contacts", row["name"], row_values, update_modified=False)
+			changed = True
+
+	if changed:
+		frappe.clear_document_cache("CRM Deal", deal["name"])
+	return changed
+
+
+def get_deal_contact_rows(deals) -> dict:
+	"""`CRM Contacts` rows (with snapshot fields) of the given Deals, grouped by Deal, in order."""
+	filters = {"parenttype": "CRM Deal", "parentfield": "contacts"}
+	if deals is not None:
+		if not deals:
+			return {}
+		filters["parent"] = ["in", list(deals)]
+	rows_by_deal = {}
+	for row in frappe.get_all(
+		"CRM Contacts",
+		filters=filters,
+		fields=["name", "parent", "contact", "is_primary", *ROW_IDENTITY_FIELDS],
+		order_by="idx asc",
+	):
+		rows_by_deal.setdefault(row.parent, []).append(row)
+	return rows_by_deal
+
+
+def sync_deals_from_contact(contact) -> None:
+	"""Fan a saved Contact's identity out to every Deal it is the effective primary Contact of.
+
+	Deals where it is only a secondary Contact are not touched.
+	"""
+	deal_names = frappe.get_all(
+		"CRM Contacts",
+		filters={"parenttype": "CRM Deal", "parentfield": "contacts", "contact": contact.name},
+		pluck="parent",
+		distinct=True,
+	)
+	if not deal_names:
+		return
+	identity = get_contact_identity(contact)
+	rows_by_deal = get_deal_contact_rows(deal_names)
+	for deal in frappe.get_all(
+		"CRM Deal", filters={"name": ["in", deal_names]}, fields=["name", *DEAL_IDENTITY_FIELDS]
+	):
+		rows = rows_by_deal.get(deal.name) or []
+		if get_effective_primary_contact(rows) == contact.name:
+			persist_primary_contact_identity(deal, rows, identity)
 
 
 @frappe.whitelist()

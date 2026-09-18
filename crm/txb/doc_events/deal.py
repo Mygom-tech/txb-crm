@@ -105,37 +105,6 @@ def generate_registration_token(doc, method=None):
 	issue_registration_link(doc)
 
 
-def sync_contact_name(doc, method=None):
-	"""Fill the deal's person name from its primary contact.
-
-	Deals created from a Contact page get the contact linked but not the name fields.
-	Only empty fields are filled, so a name entered on the deal always wins.
-	"""
-	if doc.first_name and doc.last_name:
-		return
-
-	contact_name = primary_contact(doc)
-	if not contact_name:
-		return
-
-	contact = frappe.get_doc("Contact", contact_name)
-	if not doc.first_name and contact.first_name:
-		doc.first_name = contact.first_name
-	if not doc.last_name and contact.last_name:
-		doc.last_name = contact.last_name
-
-
-def primary_contact(doc):
-	"""The contact flagged primary, else the first one, else None."""
-	contacts = doc.get("contacts") or []
-
-	for row in contacts:
-		if row.is_primary:
-			return row.contact
-
-	return contacts[0].contact if contacts else None
-
-
 def sync_delivery_coach_name(doc, method=None):
 	"""Denormalise the delivery coach's full name for display and export."""
 	if not doc.get(FIELD_DELIVERY_COACH):

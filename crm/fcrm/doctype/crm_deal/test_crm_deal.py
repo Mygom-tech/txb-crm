@@ -335,6 +335,133 @@ class TestCRMDeal(IntegrationTestCase):
 		for name, ts in modified.items():
 			self.assertEqual(frappe.db.get_value("CRM Deal", name, "modified"), ts)
 
+	def test_contact_save_syncs_identity_to_primary_deals_only(self):
+		primary = create_test_contact(
+			first_name="Sync", last_name="Before", email="before@example.com", mobile_no="+37060000001"
+		)
+		other = create_test_contact(first_name="Other", last_name="Primary", email="other@example.com")
+		owned = create_test_deal(organization="Sync Owned Org", contacts=[{"contact": primary.name}])
+		secondary = create_test_deal(
+			organization="Sync Secondary Org",
+			contacts=[{"contact": other.name, "is_primary": 1}, {"contact": primary.name}],
+		)
+		modified = {d.name: frappe.db.get_value("CRM Deal", d.name, "modified") for d in (owned, secondary)}
+
+		primary.reload()
+		primary.first_name = "Synced"
+		primary.last_name = "After"
+		primary.email_ids[0].email_id = "after@example.com"
+		primary.save(ignore_permissions=True)
+
+		owned = frappe.get_doc("CRM Deal", owned.name)
+		self.assertEqual(
+			(owned.first_name, owned.last_name, owned.email, owned.mobile_no),
+			("Synced", "After", "after@example.com", "+37060000001"),
+		)
+		row = owned.contacts[0]
+		self.assertEqual((row.full_name, row.email), ("Synced After", "after@example.com"))
+
+		secondary = frappe.get_doc("CRM Deal", secondary.name)
+		self.assertEqual(
+			(secondary.first_name, secondary.last_name, secondary.email),
+			("Other", "Primary", "other@example.com"),
+		)
+		for name, ts in modified.items():
+			self.assertEqual(frappe.db.get_value("CRM Deal", name, "modified"), ts)
+
+	def test_contact_clearing_values_clears_deal_values(self):
+		contact = create_test_contact(
+			first_name="Clear", last_name="Me", email="clear@example.com", mobile_no="+37060000002"
+		)
+		deal = create_test_deal(organization="Clear Org", contacts=[{"contact": contact.name}])
+
+		contact.reload()
+		contact.last_name = ""
+		contact.email_ids = []
+		contact.phone_nos = []
+		contact.save(ignore_permissions=True)
+
+		values = frappe.db.get_value(
+			"CRM Deal", deal.name, ["first_name", "last_name", "email", "mobile_no"], as_dict=True
+		)
+		self.assertEqual(values.first_name, "Clear")
+		self.assertFalse(values.last_name)
+		self.assertFalse(values.email)
+		self.assertFalse(values.mobile_no)
+
+	def test_deal_save_hydrates_from_live_contact_not_row_snapshot(self):
+		contact = create_test_contact(first_name="Live", last_name="Contact", email="live@example.com")
+		deal = create_test_deal(organization="Live Org", contacts=[{"contact": contact.name}])
+		# Simulate a stale child-row cache and stale Deal fields.
+		row = deal.contacts[0]
+		frappe.db.set_value("CRM Contacts", row.name, {"full_name": "Old Name", "email": "old@example.com"})
+		frappe.db.set_value("CRM Deal", deal.name, {"first_name": "Old", "email": "old@example.com"})
+
+		deal = frappe.get_doc("CRM Deal", deal.name)
+		deal.save()
+
+		self.assertEqual(
+			(deal.first_name, deal.last_name, deal.email), ("Live", "Contact", "live@example.com")
+		)
+		row = deal.contacts[0]
+		self.assertEqual((row.full_name, row.email), ("Live Contact", "live@example.com"))
+
+	def test_changing_primary_contact_rehydrates_identity(self):
+		first = create_test_contact(first_name="First", last_name="Person", email="first@example.com")
+		second = create_test_contact(
+			first_name="Second", last_name="Person", email="second@example.com", mobile_no="+37060000003"
+		)
+		deal = create_test_deal(
+			organization="Switch Primary Org",
+			contacts=[{"contact": first.name, "is_primary": 1}, {"contact": second.name}],
+		)
+		self.assertEqual(deal.first_name, "First")
+
+		set_primary_contact(deal.name, second.name)
+
+		deal = frappe.get_doc("CRM Deal", deal.name)
+		self.assertEqual(
+			(deal.first_name, deal.last_name, deal.email, deal.mobile_no),
+			("Second", "Person", "second@example.com", "+37060000003"),
+		)
+
+	def test_deal_without_primary_contact_keeps_standalone_names(self):
+		deal = create_test_deal(organization="Standalone Org", first_name="Stand", last_name="Alone")
+		deal.save()
+		self.assertEqual((deal.first_name, deal.last_name), ("Stand", "Alone"))
+		self.assertFalse(deal.contact)
+
+	def test_sync_deal_primary_contact_identity_patch(self):
+		from crm.patches.v1_0 import sync_deal_primary_contact_identity
+
+		contact = create_test_contact(first_name="Patched", last_name="Name", email="patched@example.com")
+		deal = create_test_deal(organization="Identity Patch Org", contacts=[{"contact": contact.name}])
+		standalone = create_test_deal(organization="Identity Patch Standalone", first_name="Keep")
+		row = deal.contacts[0]
+		# Simulate legacy drift on the Deal and its child-row snapshot.
+		frappe.db.set_value(
+			"CRM Deal",
+			deal.name,
+			{"first_name": "Stale", "email": "stale@example.com"},
+			update_modified=False,
+		)
+		frappe.db.set_value("CRM Contacts", row.name, "full_name", "Stale Name", update_modified=False)
+		modified = {d: frappe.db.get_value("CRM Deal", d, "modified") for d in (deal.name, standalone.name)}
+
+		sync_deal_primary_contact_identity.execute()
+		sync_deal_primary_contact_identity.execute()  # idempotent
+
+		values = frappe.db.get_value(
+			"CRM Deal", deal.name, ["first_name", "last_name", "email"], as_dict=True
+		)
+		self.assertEqual(
+			(values.first_name, values.last_name, values.email), ("Patched", "Name", "patched@example.com")
+		)
+		self.assertEqual(frappe.db.get_value("CRM Contacts", row.name, "full_name"), "Patched Name")
+		self.assertEqual(frappe.db.get_value("CRM Deal", standalone.name, "first_name"), "Keep")
+		for name, ts in modified.items():
+			self.assertEqual(frappe.db.get_value("CRM Deal", name, "modified"), ts)
+
 	def test_kanban_contact_title_uses_current_full_name(self):
 		from crm.api.doc import KANBAN_TITLE_KEY, get_data
 
