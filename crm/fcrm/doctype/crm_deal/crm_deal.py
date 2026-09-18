@@ -91,6 +91,7 @@ class CRMDeal(Document):
 		self.validate_status()
 		self.set_primary_contact()
 		self.set_primary_email_mobile_no()
+		self.sync_contact_link()
 		if not self.is_new() and self.has_value_changed("deal_owner") and self.deal_owner:
 			self.share_with_agent(self.deal_owner)
 			self.assign_agent(self.deal_owner)
@@ -161,6 +162,11 @@ class CRMDeal(Document):
 			self.email = ""
 			self.mobile_no = ""
 			self.phone = ""
+
+	def sync_contact_link(self):
+		# The scalar `contact` Link (read by Kanban, list views and filters) mirrors the
+		# canonical `contacts` table: the sole or explicitly primary row, else blank.
+		self.contact = get_effective_primary_contact(self.contacts)
 
 	def assign_agent(self, agent):
 		if not agent:
@@ -373,6 +379,21 @@ class CRMDeal(Document):
 			"title_field": "organization",
 			"kanban_fields": '["annual_revenue", "email", "mobile_no", "_assign", "modified"]',
 		}
+
+
+def get_effective_primary_contact(rows) -> str | None:
+	"""The Deal's canonical Contact: the sole Contact row, or the one marked primary.
+
+	Several rows with none (or more than one) marked primary is ambiguous, so no Contact
+	is chosen rather than guessing. Accepts child docs or dicts with contact/is_primary.
+	"""
+	rows = [r for r in rows or [] if r.get("contact")]
+	if len(rows) == 1:
+		return rows[0].get("contact")
+	primary = [r for r in rows if r.get("is_primary")]
+	if len(primary) == 1:
+		return primary[0].get("contact")
+	return None
 
 
 @frappe.whitelist()
