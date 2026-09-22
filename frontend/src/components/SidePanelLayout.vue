@@ -508,6 +508,12 @@ import {
 } from '@/utils/dealTransitions'
 import { chooseAction } from '@/utils/kanbanTransitions'
 import { runAction } from '@/utils/takeAction'
+import {
+  completeActivationReadiness,
+  isActivationStatusChange,
+  READINESS_SAVED,
+  READINESS_NOT_REQUIRED,
+} from '@/utils/activationReadiness'
 import { transitionsStore } from '@/stores/transitions'
 
 // Fields expressing delivery state; mirrors crm/txb/constants.py STATUS_FIELDS.
@@ -841,6 +847,26 @@ async function fieldChange(value, df) {
         ]),
       )
       return
+    }
+
+    // TXB-259: entering Active on an incomplete Delivering Coaching deal first collects the
+    // missing readiness, then writes it with the status atomically -- before any local edit.
+    if (
+      isActivationStatusChange(
+        doc.value?.pipeline_type,
+        doc.value?.status,
+        value,
+      )
+    ) {
+      const readiness = await completeActivationReadiness(props.docname, {
+        status: value,
+      })
+      if (readiness.outcome === READINESS_SAVED) {
+        dealActions.reload()
+        emit('actionCompleted')
+        return
+      }
+      if (readiness.outcome !== READINESS_NOT_REQUIRED) return
     }
   }
 

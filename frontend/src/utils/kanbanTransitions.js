@@ -7,6 +7,12 @@ import {
 } from '@/utils/dealTransitions'
 import { runAction } from '@/utils/takeAction'
 import {
+  completeActivationReadiness,
+  isActivationStatusChange,
+  READINESS_SAVED,
+  READINESS_NOT_REQUIRED,
+} from '@/utils/activationReadiness'
+import {
   logReach,
   logADial,
   logDiscovery,
@@ -118,10 +124,26 @@ async function dealStatusTransition(ctx) {
   // on it; the caller performs the write, exactly as for a non-deal board. Everyone else
   // is refused — the drag guard should already have prevented the drop.
   if (resolution.kind === STATUS_CHANGE_UNOWNED) {
-    if (ctx.isAdmin) {
-      return { proceed: true, alreadySaved: false, finalStatus: ctx.to }
+    if (!ctx.isAdmin) return refused
+
+    // TXB-259: an Admin drop into Active on an incomplete Delivering Coaching deal collects
+    // the missing readiness and commits it with the status in one atomic write. A cancel
+    // refuses, so the caller reverts the card; a server error stays in the dialog.
+    if (isActivationStatusChange(ctx.pipelineType, ctx.from, ctx.to)) {
+      const readiness = await completeActivationReadiness(ctx.itemName, {
+        status: ctx.to,
+      })
+      if (readiness.outcome === READINESS_SAVED) {
+        return {
+          proceed: true,
+          alreadySaved: true,
+          finalStatus: readiness.result?.status || ctx.to,
+        }
+      }
+      if (readiness.outcome !== READINESS_NOT_REQUIRED) return refused
     }
-    return refused
+
+    return { proceed: true, alreadySaved: false, finalStatus: ctx.to }
   }
 
   // BLOCKED: the graph owns this edge but the board's freshly loaded available actions

@@ -313,6 +313,12 @@ import { allowedStatusesFor } from '@/utils/pipelineStatuses'
 import { notesTabLabel } from '@/utils/dealPresentation'
 import { actionOptions, runAction } from '@/utils/takeAction'
 import {
+  completeActivationReadiness,
+  isActivationStatusChange,
+  READINESS_SAVED,
+  READINESS_NOT_REQUIRED,
+} from '@/utils/activationReadiness'
+import {
   allowedTargets,
   prefillFor,
   refreshStatusResolution,
@@ -806,6 +812,19 @@ async function triggerStatusChange(value) {
       ]),
     )
     return
+  }
+
+  // TXB-259: entering Active on an incomplete Delivering Coaching deal first collects the
+  // missing readiness and writes it with the status atomically. This runs before the local
+  // status edit, so a cancel or a refusal leaves the page on the prior status.
+  if (isActivationStatusChange(doc.value?.pipeline_type, doc.value?.status, value)) {
+    const readiness = await completeActivationReadiness(props.dealId, { status: value })
+    if (readiness.outcome === READINESS_SAVED) {
+      reload.value = true
+      dealActions.reload()
+      return
+    }
+    if (readiness.outcome !== READINESS_NOT_REQUIRED) return
   }
 
   await triggerOnChange('status', value)
