@@ -32,6 +32,16 @@
         {{ data[field.fieldname] }}
       </a>
     </div>
+    <ReferredByLink
+      v-else-if="isReferredByField(field, doctype)"
+      class="form-control"
+      :referenceType="data[field.options]"
+      :referenceName="data[field.fieldname]"
+      :excludeLead="referredByExcludeLead"
+      :placeholder="getPlaceholder(field)"
+      :disabled="Boolean(field.read_only)"
+      @change="(v) => referredByChange(v, field)"
+    />
     <FormControl
       v-else-if="
         (field.read_only || field.fieldtype === 'Read Only') &&
@@ -367,6 +377,9 @@ import IndicatorIcon from '@/components/Icons/IndicatorIcon.vue'
 import UserAvatar from '@/components/UserAvatar.vue'
 import TableMultiselectInput from '@/components/Controls/TableMultiselectInput.vue'
 import Link from '@/components/Controls/Link.vue'
+import ReferredByLink, {
+  isReferredByField,
+} from '@/components/Controls/ReferredByLink.vue'
 import Grid from '@/components/Controls/Grid.vue'
 import DateTimeWithOptions from '@/components/Controls/DateTimeWithOptions.vue'
 import TimePickerField from '@/components/Controls/TimePickerField.vue'
@@ -691,6 +704,27 @@ async function handleButtonClick(field) {
     return await field.click(data.value)
   } else {
     return await triggerButton(field.fieldname)
+  }
+}
+
+// A Lead-or-Contact referrer is one typed reference: write or clear the discriminator
+// (`df.options`) and the document name together, never one without the other.
+// The Lead being edited cannot refer itself; a new Lead has no name yet.
+const referredByExcludeLead = computed(
+  () => docname?.value || data.value?.name || '',
+)
+
+async function referredByChange(reference, df) {
+  const changes = {
+    [df.options]: reference?.doctype || '',
+    [df.fieldname]: reference?.name || '',
+  }
+  for (const [fieldname, value] of Object.entries(changes)) {
+    if (isGridRow) {
+      await triggerOnChange(fieldname, value, data.value)
+    } else {
+      await triggerOnChange(fieldname, value)
+    }
   }
 }
 

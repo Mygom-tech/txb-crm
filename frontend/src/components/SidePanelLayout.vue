@@ -99,6 +99,16 @@
                             </a>
                           </Tooltip>
                         </div>
+                        <ReferredByLink
+                          v-else-if="isReferredByField(field, doctype)"
+                          class="form-control"
+                          :referenceType="doc[field.options]"
+                          :referenceName="doc[field.fieldname]"
+                          :excludeLead="docname"
+                          :placeholder="field.placeholder"
+                          :disabled="Boolean(field.read_only) || preview"
+                          @change="(v) => referredByChange(v, field)"
+                        />
                         <div
                           v-else-if="
                             field.read_only &&
@@ -474,6 +484,9 @@ import FadedScrollableDiv from '@/components/FadedScrollableDiv.vue'
 import ArrowUpRightIcon from '@/components/Icons/ArrowUpRightIcon.vue'
 import EditIcon from '@/components/Icons/EditIcon.vue'
 import Link from '@/components/Controls/Link.vue'
+import ReferredByLink, {
+  isReferredByField,
+} from '@/components/Controls/ReferredByLink.vue'
 import UserAvatar from '@/components/UserAvatar.vue'
 import SidePanelModal from '@/components/Modals/SidePanelModal.vue'
 import { getMeta } from '@/stores/meta'
@@ -831,15 +844,31 @@ async function fieldChange(value, df) {
     }
   }
 
-  await triggerOnChange(df.fieldname, value)
+  await commitChanges({ [df.fieldname]: value })
+}
+
+// A Lead-or-Contact referrer is one typed reference: the discriminator (`df.options`) and the
+// document name are written or cleared together and persisted in a single save.
+async function referredByChange(reference, df) {
+  if (props.preview) return
+  await commitChanges({
+    [df.options]: reference?.doctype || '',
+    [df.fieldname]: reference?.name || '',
+  })
+}
+
+async function commitChanges(changes) {
+  for (const [fieldname, value] of Object.entries(changes)) {
+    await triggerOnChange(fieldname, value)
+  }
 
   const hasListener = attrs['onBeforeFieldChange'] !== undefined
 
   if (hasListener) {
-    emit('beforeFieldChange', { [df.fieldname]: value })
+    emit('beforeFieldChange', changes)
   } else {
     document.save.submit(null, {
-      onSuccess: () => emit('afterFieldChange', { [df.fieldname]: value }),
+      onSuccess: () => emit('afterFieldChange', changes),
     })
   }
 }
