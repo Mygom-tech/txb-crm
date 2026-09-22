@@ -104,15 +104,17 @@
       :tabs="tabs"
       class="flex flex-1 overflow-auto flex-col [&_[role='tablist']]:gap-3 [&_[role='tablist']]:px-4 [&_[role='tabpanel']:not([hidden])]:flex [&_[role='tabpanel']:not([hidden])]:grow"
     >
+      <!-- Every tab needs a trigger: filtering this slot to Deals/Notes left the Details and
+           Activity tabs unreachable, hiding the Activity tab's Log a Call action (TXB-257). -->
       <template #tab-item="{ tab, selected }">
         <button
-          v-if="['Deals', 'Notes'].includes(tab.name)"
           class="group flex items-center gap-2 border-b border-transparent py-2.5 text-base text-ink-gray-5 duration-300 ease-in-out hover:text-ink-gray-9 !px-4"
           :class="{ 'text-ink-gray-9': selected }"
         >
           <component :is="tab.icon" v-if="tab.icon" class="h-5" />
           {{ __(tab.label) }}
           <Badge
+            v-if="tab.count !== undefined"
             class="group-hover:bg-surface-gray-10"
             :class="[selected ? 'bg-surface-gray-10' : 'bg-gray-600']"
             variant="solid"
