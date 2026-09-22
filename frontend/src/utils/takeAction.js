@@ -10,6 +10,13 @@
  */
 
 import { renderFieldLayoutDialog } from '@/utils/renderFieldLayoutDialog'
+import {
+  actionLandsOn,
+  completeActivationReadiness,
+  READINESS_CANCELLED,
+  READINESS_SAVED,
+  STATUS_ACTIVE,
+} from '@/utils/activationReadiness'
 
 /**
  * Build the dropdown entries for the available actions.
@@ -103,6 +110,18 @@ export async function runAction(deal, action, { today, defaults } = {}) {
   })
 
   if (!data) return null
+
+  // TXB-259: an action landing on Active may first need delivery readiness completed. The
+  // helper asks the server, and when something is missing it collects it and resumes this
+  // exact action through the atomic complete_activation; otherwise we post as before.
+  if (actionLandsOn(action, data) === STATUS_ACTIVE) {
+    const readiness = await completeActivationReadiness(deal, {
+      action: action.name,
+      data,
+    })
+    if (readiness.outcome === READINESS_SAVED) return readiness.result
+    if (readiness.outcome === READINESS_CANCELLED) return null
+  }
 
   // Imported lazily so the pure helpers above stay unit-testable: pulling frappe-ui in
   // at module level drags its resource plugin into the test environment.
