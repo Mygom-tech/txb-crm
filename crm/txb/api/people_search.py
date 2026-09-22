@@ -218,3 +218,130 @@ def _as_match(doctype: str, row: dict, email: str, phone: str, tokens: list[str]
 		"owner": row.get("lead_owner") if is_lead else row.get("custom_contact_owner"),
 		"strength": "exact" if exact else "possible",
 	}
+
+
+# --- Referred By person search (TXB-254) -------------------------------------------------
+#
+# The Lead-or-Contact Referred By picker needs one list over both DocTypes, which the stock
+# Dynamic Link control cannot give (it searches only the discriminator-selected DocType). Unlike
+# `search_people` this is a picker, not a duplicate check: only readable records are returned and
+# nothing is said about the rest. Converted (archived) Leads are deliberately included -- a past
+# Lead is still a person who can refer someone.
+
+# A partial first or last name: two letters is already a useful prefix ("Jo", "Al").
+REFERRER_MIN_TOKEN_LENGTH = 2
+
+_REFERRER_NAME_COLUMNS = {
+	LEAD_DOCTYPE: ("first_name", "last_name", "lead_name"),
+	CONTACT_DOCTYPE: ("first_name", "last_name", "full_name"),
+}
+
+_REFERRER_FIELDS = {
+	LEAD_DOCTYPE: [
+		"name",
+		"lead_name",
+		"first_name",
+		"last_name",
+		"email",
+		"mobile_no",
+		"phone",
+		"converted",
+	],
+	CONTACT_DOCTYPE: ["name", "full_name", "first_name", "last_name", "email_id", "mobile_no", "phone"],
+}
+
+
+@frappe.whitelist()
+def search_referrers(
+	query: str = "", exclude_lead: str | None = None, limit: int = DEFAULT_LIMIT
+) -> list[dict]:
+	"""Readable CRM Leads (active and converted) and Contacts whose name matches `query`.
+
+	Every word of `query` must appear in some name column -- first, last or full name -- so
+	"Jon" finds Jonas and Jonaitis alike and "Jonas Jon" narrows to Jonas Jonaitis. Rows are
+	re-read through `frappe.get_list`, so the caller's normal read permissions decide what is
+	returned. `exclude_lead` drops the Lead being edited, which cannot refer itself.
+
+	Each row is ``{"doctype", "name", "full_name", "email", "mobile_no", "converted"}``;
+	``doctype`` + ``name`` is exactly the typed reference to store.
+	"""
+	tokens = _referrer_tokens(query)
+	if not tokens:
+		return []
+
+	limit = max(1, min(int(limit or DEFAULT_LIMIT), MAX_LIMIT))
+	results = []
+
+	for doctype in (LEAD_DOCTYPE, CONTACT_DOCTYPE):
+		candidates = _referrer_candidates(doctype, tokens)
+		if doctype == LEAD_DOCTYPE and exclude_lead:
+			candidates.discard(exclude_lead)
+		if not candidates:
+			continue
+
+		visible = frappe.get_list(
+			doctype,
+			filters={"name": ("in", list(candidates))},
+			fields=_REFERRER_FIELDS[doctype],
+			limit_page_length=0,
+		)
+		results.extend(_as_referrer(doctype, row) for row in visible)
+
+	# Names that start with the typed text first, then alphabetically, Leads before Contacts on
+	# a tie so the ordering is stable.
+	prefix = normalize_name(query)
+	results.sort(
+		key=lambda r: (
+			not normalize_name(r["full_name"]).startswith(prefix),
+			r["full_name"].casefold(),
+			r["doctype"],
+			r["name"],
+		)
+	)
+	return results[:limit]
+
+
+def _referrer_tokens(query: str) -> list[str]:
+	tokens = [t for t in normalize_name(query).split(" ") if len(t) >= REFERRER_MIN_TOKEN_LENGTH]
+	return sorted(set(tokens), key=len, reverse=True)[:MAX_NAME_TOKENS]
+
+
+def _referrer_candidates(doctype: str, tokens: list[str]) -> set[str]:
+	"""Names of records whose name columns contain every token, ignoring permissions."""
+	columns = _REFERRER_NAME_COLUMNS[doctype]
+	values: dict[str, object] = {"cap": CANDIDATE_CAP}
+	clauses = []
+
+	for index, token in enumerate(tokens):
+		key = f"token_{index}"
+		values[key] = f"%{_escape_like(token)}%"
+		clauses.append(
+			"(" + " OR ".join(f"LOWER(COALESCE(`{column}`, '')) LIKE %({key})s" for column in columns) + ")"
+		)
+
+	rows = frappe.db.sql(
+		f"SELECT `name` FROM `tab{doctype}` WHERE {' AND '.join(clauses)} "
+		"ORDER BY `modified` DESC LIMIT %(cap)s",
+		values,
+		as_dict=False,
+	)
+	return {row[0] for row in rows}
+
+
+def _escape_like(value: str) -> str:
+	return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _as_referrer(doctype: str, row: dict) -> dict:
+	is_lead = doctype == LEAD_DOCTYPE
+	parts = " ".join(part for part in (row.get("first_name"), row.get("last_name")) if part).strip()
+	full_name = (row.get("lead_name") if is_lead else row.get("full_name")) or parts or row["name"]
+
+	return {
+		"doctype": doctype,
+		"name": row["name"],
+		"full_name": full_name,
+		"email": (row.get("email") if is_lead else row.get("email_id")) or None,
+		"mobile_no": row.get("mobile_no") or row.get("phone") or None,
+		"converted": bool(row.get("converted")) if is_lead else False,
+	}

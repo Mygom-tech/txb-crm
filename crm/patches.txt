@@ -54,3 +54,4 @@ crm.patches.v1_0.add_company_code_to_organization_layouts
 crm.patches.v1_0.reconcile_coaching_call_totals
 crm.patches.v1_0.sync_deal_primary_contact
 crm.patches.v1_0.sync_deal_primary_contact_identity
+crm.patches.v1_0.add_lead_referred_by_reference_fields

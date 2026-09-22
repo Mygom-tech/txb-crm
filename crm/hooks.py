@@ -183,6 +183,9 @@ doc_events = {
 			# Archived (converted) Leads reject user edits first, so no later validator runs
 			# against a record that is closed to mutation (TXB-132).
 			"crm.txb.doc_events.lead.guard_archived_lead",
+			# The Lead-or-Contact Referred By pair is validated here for every write path,
+			# including direct API and Data Import (TXB-254).
+			"crm.txb.doc_events.lead.validate_referred_by",
 			"crm.txb.doc_events.lead.require_reach_for_contacted",
 			# Discovery meeting set is reachable only through
 			# crm.txb.api.actions.schedule_discovery; every other write to that status is
