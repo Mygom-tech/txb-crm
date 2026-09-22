@@ -8,7 +8,13 @@ that were deliberately carried over rather than fixed here.
 import frappe
 from frappe import _
 
-from crm.txb.constants import LEAD_STATUS_FOLLOW_UP, LEAD_STATUS_NURTURE
+from crm.txb.constants import (
+	FIELD_REFERRED_BY,
+	FIELD_REFERRED_BY_TYPE,
+	LEAD_STATUS_FOLLOW_UP,
+	LEAD_STATUS_NURTURE,
+	REFERRED_BY_DOCTYPES,
+)
 from crm.txb.people import find_exact_duplicate
 
 STATUS_DISQUALIFIED = "Disqualified"
@@ -225,6 +231,71 @@ def guard_archived_lead(doc, method=None):
 		frappe.ValidationError,
 		title=_("Lead Converted"),
 	)
+
+
+def validate_referred_by(doc, method=None):
+	"""The typed Referred By reference is either entirely empty or a valid Lead/Contact (TXB-254).
+
+	The single enforcement point for every CRM Lead write path -- the UI, ``frappe.client``,
+	REST and Data Import all save through ``validate``. The pair must be set together, the type
+	must be ``CRM Lead`` or ``Contact``, the target must exist, and a Lead cannot refer itself.
+	Converted (archived) Leads are valid referrers.
+
+	Read access is checked only when the reference is set or changed, so a colleague who cannot
+	read an already-recorded referrer can still edit the rest of the Lead; system writes that
+	run with ``ignore_permissions`` skip it too. The legacy ``custom_referred_by_user`` is not
+	consulted.
+	"""
+	ref_type = (doc.get(FIELD_REFERRED_BY_TYPE) or "").strip()
+	ref_name = (doc.get(FIELD_REFERRED_BY) or "").strip()
+
+	if not ref_type and not ref_name:
+		return
+
+	title = _("Invalid Referred By")
+
+	if not ref_type or not ref_name:
+		frappe.throw(
+			_("Referred By needs both a record type and a record; set both or clear both."),
+			frappe.ValidationError,
+			title=title,
+		)
+
+	if ref_type not in REFERRED_BY_DOCTYPES:
+		frappe.throw(
+			_("Referred By must be a Lead or a Contact, not {0}.").format(frappe.bold(ref_type)),
+			frappe.ValidationError,
+			title=title,
+		)
+
+	if ref_type == "CRM Lead" and doc.name and ref_name == doc.name:
+		frappe.throw(_("A lead cannot be referred by itself."), frappe.ValidationError, title=title)
+
+	if not frappe.db.exists(ref_type, ref_name):
+		frappe.throw(
+			_("Referred By {0} {1} does not exist.").format(_(ref_type), frappe.bold(ref_name)),
+			frappe.ValidationError,
+			title=title,
+		)
+
+	changed = (
+		doc.is_new()
+		or doc.has_value_changed(FIELD_REFERRED_BY_TYPE)
+		or doc.has_value_changed(FIELD_REFERRED_BY)
+	)
+	if changed and not (
+		doc.flags.ignore_permissions or frappe.has_permission(ref_type, "read", doc=ref_name)
+	):
+		frappe.throw(
+			_("You do not have permission to reference {0} {1} as Referred By.").format(
+				_(ref_type), frappe.bold(ref_name)
+			),
+			frappe.PermissionError,
+			title=title,
+		)
+
+	doc.set(FIELD_REFERRED_BY_TYPE, ref_type)
+	doc.set(FIELD_REFERRED_BY, ref_name)
 
 
 def default_disqualified_reason(doc, method=None):

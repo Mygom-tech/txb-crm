@@ -11,10 +11,15 @@ from frappe.tests.utils import FrappeTestCase
 
 from crm.api import activities as activities_api
 from crm.fcrm.doctype.crm_lead.crm_lead import CONTACT_ORGANIZATION_LINK_FIELD, convert_to_deal
+from crm.patches.v1_0 import add_lead_referred_by_reference_fields
+from crm.txb.api import people_search
 from crm.txb.constants import (
 	FIELD_CONVERTED_AT,
 	FIELD_CONVERTED_CONTACT,
 	FIELD_CONVERTED_DEAL,
+	FIELD_REFERRED_BY,
+	FIELD_REFERRED_BY_LEGACY_USER,
+	FIELD_REFERRED_BY_TYPE,
 	PIPELINE_INDIVIDUAL_SESSION,
 )
 
@@ -1415,3 +1420,155 @@ class TestContactActivities(FrappeTestCase):
 		with patch("frappe.has_permission", side_effect=deny_deal):
 			with self.assertRaises(frappe.PermissionError):
 				activities_api.get_deal_activities(deal)
+
+
+class TestLeadReferredBy(FrappeTestCase):
+	"""The Lead-or-Contact Referred By contract: migration, validation and search (TXB-254)."""
+
+	def setUp(self):
+		ensure_company_code_fields()
+		add_lead_referred_by_reference_fields.execute()
+		self.tag = frappe.generate_hash(length=6)
+
+	def tearDown(self):
+		frappe.db.rollback()
+
+	def _contact(self, first_name, last_name="Referrer"):
+		return frappe.get_doc(
+			{
+				"doctype": "Contact",
+				"first_name": first_name,
+				"last_name": last_name,
+				"email_ids": [{"email_id": f"{first_name.lower()}@referrer.example.com", "is_primary": 1}],
+				"phone_nos": [{"phone": "+37060000001", "is_primary_mobile_no": 1}],
+			}
+		).insert()
+
+	def _referred(self, ref_type, ref_name, **kwargs):
+		return create_lead(
+			first_name=f"Referred{self.tag}",
+			**{FIELD_REFERRED_BY_TYPE: ref_type, FIELD_REFERRED_BY: ref_name},
+			**kwargs,
+		)
+
+	def test_migration_hides_legacy_user_field_and_adds_typed_reference(self):
+		meta = frappe.get_meta("CRM Lead")
+		legacy = meta.get_field(FIELD_REFERRED_BY_LEGACY_USER)
+		self.assertEqual((legacy.fieldtype, legacy.options, legacy.hidden), ("Link", "User", 1))
+
+		kind = meta.get_field(FIELD_REFERRED_BY_TYPE)
+		self.assertEqual(kind.hidden, 1)
+		self.assertEqual(set(filter(None, kind.options.split("\n"))), {"CRM Lead", "Contact"})
+
+		reference = meta.get_field(FIELD_REFERRED_BY)
+		self.assertEqual(
+			(reference.fieldtype, reference.options, reference.label, reference.hidden),
+			("Dynamic Link", FIELD_REFERRED_BY_TYPE, "Referred By", 0),
+		)
+
+	def test_migration_rerun_preserves_legacy_values(self):
+		lead = create_lead(first_name=f"Legacy{self.tag}")
+		lead.db_set(FIELD_REFERRED_BY_LEGACY_USER, "Administrator")
+
+		add_lead_referred_by_reference_fields.execute()
+
+		self.assertEqual(
+			frappe.db.get_value("CRM Lead", lead.name, FIELD_REFERRED_BY_LEGACY_USER), "Administrator"
+		)
+		self.assertFalse(frappe.db.get_value("CRM Lead", lead.name, FIELD_REFERRED_BY))
+
+	def test_empty_referral_is_valid(self):
+		lead = create_lead(first_name=f"Plain{self.tag}")
+		self.assertFalse(lead.get(FIELD_REFERRED_BY))
+		self.assertFalse(lead.get(FIELD_REFERRED_BY_TYPE))
+
+	def test_lead_contact_and_converted_lead_referrers_are_valid(self):
+		referrer_lead = create_lead(first_name=f"Active{self.tag}")
+		archived = create_lead(first_name=f"Archived{self.tag}")
+		archived.db_set("converted", 1)
+		contact = self._contact(f"Contact{self.tag}")
+
+		for ref_type, ref_name in (
+			("CRM Lead", referrer_lead.name),
+			("CRM Lead", archived.name),
+			("Contact", contact.name),
+		):
+			lead = self._referred(ref_type, ref_name)
+			stored = frappe.db.get_value(
+				"CRM Lead", lead.name, [FIELD_REFERRED_BY_TYPE, FIELD_REFERRED_BY]
+			)
+			self.assertEqual(tuple(stored), (ref_type, ref_name))
+
+	def test_half_populated_pair_is_rejected(self):
+		contact = self._contact(f"Half{self.tag}")
+		with self.assertRaises(frappe.ValidationError):
+			self._referred("Contact", None)
+		with self.assertRaises(frappe.ValidationError):
+			self._referred(None, contact.name)
+
+	def test_unsupported_type_is_rejected(self):
+		with self.assertRaises(frappe.ValidationError):
+			self._referred("User", "Administrator")
+
+	def test_missing_target_is_rejected(self):
+		with self.assertRaises(frappe.ValidationError):
+			self._referred("Contact", f"missing-{self.tag}")
+		with self.assertRaises(frappe.ValidationError):
+			self._referred("CRM Lead", f"CRM-LEAD-missing-{self.tag}")
+
+	def test_self_reference_is_rejected_on_save(self):
+		lead = create_lead(first_name=f"Self{self.tag}")
+		lead.set(FIELD_REFERRED_BY_TYPE, "CRM Lead")
+		lead.set(FIELD_REFERRED_BY, lead.name)
+		with self.assertRaises(frappe.ValidationError):
+			lead.save()
+
+	def test_unreadable_referrer_is_rejected(self):
+		contact = self._contact(f"Hidden{self.tag}")
+
+		def deny_contact(doctype, ptype=None, doc=None, *a, **k):
+			return doctype != "Contact"
+
+		with patch("frappe.has_permission", side_effect=deny_contact):
+			with self.assertRaises(frappe.PermissionError):
+				self._referred("Contact", contact.name)
+
+	def test_search_finds_active_and_converted_leads_and_contacts_by_partial_name(self):
+		active = create_lead(first_name=f"Rfa{self.tag}", last_name="Zzactive", mobile_no="+37060000002")
+		archived = create_lead(first_name=f"Rfb{self.tag}", last_name="Zzarchived")
+		archived.db_set("converted", 1)
+		contact = self._contact(f"Rfc{self.tag}", last_name="Zzcontact")
+
+		rows = people_search.search_referrers(query=self.tag, limit=20)
+		found = {(row["doctype"], row["name"]) for row in rows}
+		self.assertTrue(
+			{("CRM Lead", active.name), ("CRM Lead", archived.name), ("Contact", contact.name)} <= found
+		)
+
+		by_key = {(row["doctype"], row["name"]): row for row in rows}
+		self.assertTrue(by_key[("CRM Lead", archived.name)]["converted"])
+		self.assertEqual(by_key[("CRM Lead", active.name)]["mobile_no"], "+37060000002")
+		self.assertEqual(by_key[("CRM Lead", active.name)]["email"], active.email)
+		self.assertEqual(by_key[("Contact", contact.name)]["full_name"], f"Rfc{self.tag} Zzcontact")
+		self.assertTrue(by_key[("Contact", contact.name)]["email"])
+
+		# Partial last name plus first name narrows to the one person.
+		rows = people_search.search_referrers(query=f"rfc{self.tag} zzcont")
+		self.assertEqual([(r["doctype"], r["name"]) for r in rows], [("Contact", contact.name)])
+
+		# The Lead being edited is never offered as its own referrer.
+		rows = people_search.search_referrers(query=f"rfa{self.tag}", exclude_lead=active.name)
+		self.assertNotIn(("CRM Lead", active.name), {(r["doctype"], r["name"]) for r in rows})
+
+	def test_search_returns_only_readable_records(self):
+		self._contact(f"Rfd{self.tag}")
+		original_get_list = frappe.get_list
+
+		def get_list_without_contacts(doctype, *args, **kwargs):
+			if doctype == "Contact":
+				return []
+			return original_get_list(doctype, *args, **kwargs)
+
+		with patch("frappe.get_list", side_effect=get_list_without_contacts):
+			rows = people_search.search_referrers(query=f"rfd{self.tag}")
+		self.assertEqual(rows, [])

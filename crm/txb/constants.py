@@ -298,3 +298,12 @@ FIELD_CONTACT_SOURCE_WORKSHOP = "custom_source_workshop"
 # (crm.txb.registration_setup) share it without the setup module importing the registration API
 # -- that import created a circular dependency through crm.install during bench migrate (TXB-201).
 CONFIRMATION_TEMPLATE = "Registracijos patvirtinimas"
+
+# TXB-254: the Lead-or-Contact Referred By contract on CRM Lead. `custom_referred_by_user` is the
+# legacy Link->User, kept hidden so existing values survive; the typed pair below replaces it.
+# `custom_referred_by_type` is the hidden discriminator and `custom_referred_by` the visible
+# Dynamic Link holding the referrer's stable document name.
+FIELD_REFERRED_BY_LEGACY_USER = "custom_referred_by_user"
+FIELD_REFERRED_BY_TYPE = "custom_referred_by_type"
+FIELD_REFERRED_BY = "custom_referred_by"
+REFERRED_BY_DOCTYPES = ("CRM Lead", "Contact")
