@@ -212,6 +212,17 @@ FIELD_MEETING_KEY = "custom_txb_meeting_key"
 # `has_field`, so a site that has not yet run it still classifies notes from their body.
 FIELD_COACHING_CALL_STATUS = "custom_txb_coaching_call_status"
 
+# TXB-224 app-owned coaching call Delivery Date on FCRM Note, seeded from the Log Coaching Call
+# form's required `delivery_date`. The first canonical Coaching Call Note on a Delivering
+# Coaching deal seeds the deal's empty `FIELD_FIRST_CALL_DATE` from it, once. Hidden, read-only
+# and no-copy; installed by `crm.patches.v1_0.seed_first_coaching_call_date`, which also derives
+# it for historical notes from the ISO date in their titles.
+FIELD_COACHING_CALL_DELIVERY_DATE = "custom_txb_coaching_call_delivery_date"
+
+# The Opportunity's editable First Coaching Call Date (Datetime). Seeded, never owned, by the
+# first Coaching Call Note; the legacy `custom_first_coaching_date` is a different field.
+FIELD_FIRST_CALL_DATE = "custom_first_call_date"
+
 # The scheduled workshop date and time, collected by the native Set Workshop action. A
 # Workshop deal may not rest in "Workshop set" without it; see
 # `crm.txb.doc_events.deal.require_workshop_schedule`.

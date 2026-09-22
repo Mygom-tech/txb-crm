@@ -11,7 +11,9 @@ move the status. See crm/txb/permissions.py for the rule that enforces it.
 
 from crm.txb.coaching_calls import CALL_STATUSES, count_completed_calls
 from crm.txb.constants import (
+	FIELD_COACHING_CALL_DELIVERY_DATE,
 	FIELD_COACHING_CALL_STATUS,
+	FIELD_FIRST_CALL_DATE,
 	FIELD_CONTRACT_SIGNED,
 	FIELD_DELIVERY_COACH,
 	FIELD_DELIVERY_COACH_NAME,
@@ -31,6 +33,7 @@ from crm.txb.pipelines.common import (
 )
 
 import frappe
+from frappe.utils import getdate
 
 INACTIVE_REASONS = (
 	"Coaching completed",
@@ -311,8 +314,21 @@ def log_coaching_call(deal, data):
 		body.replace("\n", "<br>"),
 		title_date=data.get("delivery_date"),
 		title_suffix=data.get("topic"),
-		metadata={FIELD_COACHING_CALL_STATUS: _submitted_status(data)},
+		metadata={
+			FIELD_COACHING_CALL_STATUS: _submitted_status(data),
+			FIELD_COACHING_CALL_DELIVERY_DATE: (
+				getdate(data["delivery_date"]) if data.get("delivery_date") else None
+			),
+		},
 	)
+
+	# The note's insert hook may have seeded an empty First Coaching Call Date on the deal row
+	# (TXB-224). Carried onto the in-memory deal because the caller saves it next, and the stale
+	# empty value would otherwise write straight back over the seed.
+	if not deal.get(FIELD_FIRST_CALL_DATE):
+		deal.set(
+			FIELD_FIRST_CALL_DATE, frappe.db.get_value(DEAL_DOCTYPE, deal.name, FIELD_FIRST_CALL_DATE)
+		)
 
 	# The note is the record of the call, so the total is recounted from the deal's notes --
 	# including the one just inserted -- rather than advanced from whatever was stored. Assigned

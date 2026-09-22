@@ -224,7 +224,13 @@ doc_events = {
 		"before_validate": ["crm.txb.doc_events.note.classify_coaching_call"],
 		# A Contact-owned note may also name one of that Contact's Opportunities (TXB-248).
 		"validate": ["crm.txb.doc_events.opportunity_link.validate_opportunity_link"],
-		"after_insert": ["crm.txb.doc_events.note.reconcile_coaching_totals"],
+		# The first Coaching Call Note seeds the deal's empty First Coaching Call Date, once, with
+		# the deal row locked across the insert so concurrent first calls cannot race (TXB-224).
+		"before_insert": ["crm.txb.doc_events.note.lock_first_call_deal"],
+		"after_insert": [
+			"crm.txb.doc_events.note.reconcile_coaching_totals",
+			"crm.txb.doc_events.note.seed_first_coaching_call_date",
+		],
 		"on_update": ["crm.txb.doc_events.note.reconcile_coaching_totals"],
 		"after_delete": ["crm.txb.doc_events.note.reconcile_coaching_totals"],
 	},

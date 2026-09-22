@@ -22,12 +22,19 @@ Two sources of that status, in precedence order:
    never rewritten -- only classified.
 """
 
+import datetime
 import html
 import re
 
 import frappe
+from frappe.utils import getdate
 
-from crm.txb.constants import FIELD_COACHING_CALL_STATUS, PIPELINE_DELIVERING_COACHING
+from crm.txb.constants import (
+	FIELD_COACHING_CALL_DELIVERY_DATE,
+	FIELD_COACHING_CALL_STATUS,
+	FIELD_FIRST_CALL_DATE,
+	PIPELINE_DELIVERING_COACHING,
+)
 
 DEAL_DOCTYPE = "CRM Deal"
 NOTE_DOCTYPE = "FCRM Note"
@@ -55,6 +62,10 @@ STATUS_LINE = re.compile(r"call status\s*:\s*([^\n]*)", re.IGNORECASE)
 # the captured segment is never an exact status.
 BLOCK_TAGS = re.compile(r"<\s*/?\s*(br|p|div|li|tr|h[1-6])\b[^>]*>", re.IGNORECASE)
 ANY_TAG = re.compile(r"<[^>]*>")
+
+# An ISO date inside a historical Coaching Call title, e.g. "Coaching Call #3 - 2026-02-14 - Goals".
+# Read only by the migration: live notes carry `FIELD_COACHING_CALL_DELIVERY_DATE` instead.
+TITLE_ISO_DATE = re.compile(r"(?<!\d)(\d{4}-\d{2}-\d{2})(?!\d)")
 
 
 def note_status(title: str, content: str, stored: str = None) -> str | None:
@@ -131,6 +142,111 @@ def classify_note_status(title: str, content: str, stored: str = None) -> str | 
 def status_field_installed() -> bool:
 	"""Whether this site has run the reconcile patch; guarded so an un-migrated site still counts."""
 	return frappe.get_meta(NOTE_DOCTYPE).has_field(FIELD_COACHING_CALL_STATUS)
+
+
+def delivery_date_field_installed() -> bool:
+	"""Whether this site has run the first-call-date patch; an un-migrated site seeds nothing."""
+	return frappe.get_meta(NOTE_DOCTYPE).has_field(FIELD_COACHING_CALL_DELIVERY_DATE)
+
+
+def title_delivery_date(title: str) -> datetime.date | None:
+	"""The Delivery Date an historical Coaching Call title states, or None when it is ambiguous.
+
+	Strict on purpose: exactly one distinct, valid `YYYY-MM-DD` date. A title with no date, two
+	different dates, or an impossible one ("2026-02-30") yields nothing rather than a guess.
+	"""
+	found = set(TITLE_ISO_DATE.findall(title or ""))
+	if len(found) != 1:
+		return None
+	try:
+		return datetime.date.fromisoformat(found.pop())
+	except ValueError:
+		return None
+
+
+def first_call_value(delivery_date) -> str:
+	"""A note's Delivery Date as the Opportunity's First Coaching Call Datetime: local midnight."""
+	return f"{getdate(delivery_date).isoformat()} 00:00:00"
+
+
+def lock_deal_for_first_call(note) -> None:
+	"""Serialize a Coaching Call Note insert against its Opportunity (TXB-224).
+
+	Taken before the note is inserted, so two concurrent first calls on the same deal queue up
+	here; the second only proceeds once the first has committed or rolled back, and then sees
+	the seeded date (or the other note) and leaves the deal alone.
+	"""
+	if not delivery_date_field_installed():
+		return
+	if note.get("reference_doctype") != DEAL_DOCTYPE or not note.get("reference_docname"):
+		return
+	if not note.get(FIELD_COACHING_CALL_DELIVERY_DATE):
+		return
+
+	frappe.db.get_value(DEAL_DOCTYPE, note.get("reference_docname"), "name", for_update=True)
+
+
+def seed_first_call_date(note) -> str | None:
+	"""Seed a Delivering Coaching deal's empty First Coaching Call Date from its first call note.
+
+	Runs once, on insert, and only for a canonical Coaching Call Note -- one carrying a
+	recognized call status and a structured Delivery Date. The date is a seed, never a mirror:
+	a deal that already has a date, or that already has any other Coaching Call Note (so a user
+	who cleared the date keeps it cleared), is left alone, and note edits, deletes and moves
+	never come back here.
+
+	Written with `update_modified=False` inside the note's own transaction, for the same reason
+	as `reconcile_deal`: a rolled-back note takes the date with it, and the caller of Log
+	Coaching Call can still save the deal it holds in memory. Returns the value written, or None.
+	"""
+	if not delivery_date_field_installed():
+		return None
+
+	deal_name = note.get("reference_docname")
+	delivery_date = note.get(FIELD_COACHING_CALL_DELIVERY_DATE)
+	if note.get("reference_doctype") != DEAL_DOCTYPE or not deal_name or not delivery_date:
+		return None
+	if note.get(FIELD_COACHING_CALL_STATUS) not in CALL_STATUSES:
+		return None
+
+	deal = frappe.db.get_value(
+		DEAL_DOCTYPE,
+		deal_name,
+		["pipeline_type", FIELD_FIRST_CALL_DATE],
+		as_dict=True,
+		for_update=True,
+	)
+	if not deal or deal.get("pipeline_type") != PIPELINE_DELIVERING_COACHING:
+		return None
+	if deal.get(FIELD_FIRST_CALL_DATE):
+		return None
+	if _has_other_call_note(deal_name, note.name):
+		return None
+
+	value = first_call_value(delivery_date)
+	frappe.db.set_value(DEAL_DOCTYPE, deal_name, FIELD_FIRST_CALL_DATE, value, update_modified=False)
+	return value
+
+
+def _has_other_call_note(deal_name: str, note_name: str) -> bool:
+	"""Whether the deal already has a Coaching Call Note other than this one, by metadata or title."""
+	return bool(
+		frappe.get_all(
+			NOTE_DOCTYPE,
+			filters={
+				"reference_doctype": DEAL_DOCTYPE,
+				"reference_docname": deal_name,
+				"name": ["!=", note_name],
+			},
+			or_filters=[
+				[FIELD_COACHING_CALL_STATUS, "is", "set"],
+				[FIELD_COACHING_CALL_DELIVERY_DATE, "is", "set"],
+				["title", "like", f"%{TITLE_MARKER}%"],
+			],
+			limit=1,
+			pluck="name",
+		)
+	)
 
 
 def _row_status(note: dict) -> str | None:
