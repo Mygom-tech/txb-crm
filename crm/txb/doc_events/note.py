@@ -13,7 +13,9 @@ from crm.txb.coaching_calls import (
 	DEAL_DOCTYPE,
 	classify_note_status,
 	is_coaching_call_note,
+	lock_deal_for_first_call,
 	reconcile_deal,
+	seed_first_call_date,
 	status_field_installed,
 )
 from crm.txb.constants import FIELD_COACHING_CALL_STATUS
@@ -35,6 +37,20 @@ def classify_coaching_call(doc, method=None):
 	)
 	if status:
 		doc.set(FIELD_COACHING_CALL_STATUS, status)
+
+
+def lock_first_call_deal(doc, method=None):
+	"""Lock the Opportunity a Coaching Call Note is about to join, so first-call seeding is serial."""
+	lock_deal_for_first_call(doc)
+
+
+def seed_first_coaching_call_date(doc, method=None):
+	"""Seed the deal's empty First Coaching Call Date from its first Coaching Call Note (TXB-224).
+
+	Bound to insert only: the date is a one-time seed, so a later edit, delete or move of the
+	note never re-derives it.
+	"""
+	seed_first_call_date(doc)
 
 
 def reconcile_coaching_totals(doc, method=None):

@@ -56,3 +56,4 @@ crm.patches.v1_0.sync_deal_primary_contact
 crm.patches.v1_0.sync_deal_primary_contact_identity
 crm.patches.v1_0.add_lead_referred_by_reference_fields
 crm.patches.v1_0.add_contact_call_note_opportunity_field
+crm.patches.v1_0.seed_first_coaching_call_date
