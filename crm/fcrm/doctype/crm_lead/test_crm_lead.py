@@ -11,7 +11,7 @@ from frappe.tests.utils import FrappeTestCase
 
 from crm.api import activities as activities_api
 from crm.fcrm.doctype.crm_lead.crm_lead import CONTACT_ORGANIZATION_LINK_FIELD, convert_to_deal
-from crm.patches.v1_0 import add_lead_referred_by_reference_fields
+from crm.patches.v1_0 import add_contact_call_note_opportunity_field, add_lead_referred_by_reference_fields
 from crm.txb.api import people_search
 from crm.txb.constants import (
 	FIELD_CONVERTED_AT,
@@ -1420,6 +1420,173 @@ class TestContactActivities(FrappeTestCase):
 		with patch("frappe.has_permission", side_effect=deny_deal):
 			with self.assertRaises(frappe.PermissionError):
 				activities_api.get_deal_activities(deal)
+
+
+class TestContactOwnedCallsAndNotes(FrappeTestCase):
+	"""Regression for the Contact-owned call/note schema repair (TXB-256, follows TXB-248).
+
+	Pins that the migration patch leaves both DocTypes with the optional `opportunity` Link without
+	touching existing rows or their Contact reference fields, that the server validator accepts an
+	empty or Contact-linked Opportunity and rejects any other without persisting a partial record,
+	and that each saved record surfaces exactly once in the Contact and selected Opportunity history.
+	"""
+
+	DOCTYPES = ("CRM Call Log", "FCRM Note")
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		ensure_conversion_result_fields()
+		ensure_deal_statuses()
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+		frappe.db.rollback()
+
+	def _contact_and_deal(self, first_name, email):
+		lead = create_lead(first_name=first_name, email=email, organization=f"{first_name} Co")
+		deal = lead.convert_to_deal()
+		contact = frappe.db.get_value("CRM Lead", lead.name, FIELD_CONVERTED_CONTACT)
+		self.assertTrue(contact)
+		return contact, deal
+
+	def _new(self, doctype, contact, opportunity=None, title="Contact record"):
+		values = {"doctype": doctype, "reference_doctype": "Contact", "reference_docname": contact}
+		if opportunity:
+			values["opportunity"] = opportunity
+		if doctype == "FCRM Note":
+			values.update({"title": title, "content": "body"})
+		else:
+			values.update(
+				{
+					"id": frappe.generate_hash(length=10),
+					"type": "Incoming",
+					"status": "Completed",
+					"to": "+1234567890",
+					"from": "+0987654321",
+				}
+			)
+		return frappe.get_doc(values)
+
+	def _count(self, doctype, contact):
+		return frappe.db.count(doctype, {"reference_doctype": "Contact", "reference_docname": contact})
+
+	# -- ac-1: migration-visible schema, existing records preserved ------------------------------
+
+	def test_patch_installs_optional_opportunity_link_and_preserves_records(self):
+		contact, _ = self._contact_and_deal("Mia", "mia@ex.com")
+		existing = {
+			doctype: self._new(doctype, contact).insert(ignore_permissions=True) for doctype in self.DOCTYPES
+		}
+		counts = {doctype: frappe.db.count(doctype) for doctype in self.DOCTYPES}
+
+		# Idempotent: re-running the patch on an already-repaired schema is a no-op.
+		add_contact_call_note_opportunity_field.execute()
+		add_contact_call_note_opportunity_field.execute()
+
+		for doctype in self.DOCTYPES:
+			meta = frappe.get_meta(doctype)
+			field = meta.get_field("opportunity")
+			self.assertIsNotNone(field, doctype)
+			self.assertEqual(field.fieldtype, "Link")
+			self.assertEqual(field.options, "CRM Deal")
+			self.assertFalse(field.reqd)
+			self.assertTrue(frappe.db.has_column(doctype, "opportunity"), doctype)
+			self.assertEqual(meta.get_field("reference_doctype").fieldtype, "Link")
+			self.assertEqual(meta.get_field("reference_docname").fieldtype, "Dynamic Link")
+
+			self.assertEqual(frappe.db.count(doctype), counts[doctype])
+			row = frappe.db.get_value(
+				doctype,
+				existing[doctype].name,
+				["reference_doctype", "reference_docname", "opportunity"],
+				as_dict=True,
+			)
+			self.assertEqual((row.reference_doctype, row.reference_docname), ("Contact", contact))
+			self.assertFalse(row.opportunity)
+
+	# -- ac-2: valid empty/linked saves, invalid links rejected without partial records ----------
+
+	def test_contact_owned_saves_accept_empty_and_contact_linked_opportunity(self):
+		contact, deal = self._contact_and_deal("Ned", "ned@ex.com")
+		for doctype in self.DOCTYPES:
+			empty = self._new(doctype, contact).insert(ignore_permissions=True)
+			linked = self._new(doctype, contact, opportunity=deal).insert(ignore_permissions=True)
+			self.assertFalse(frappe.db.get_value(doctype, empty.name, "opportunity"))
+			self.assertEqual(
+				frappe.db.get_value(
+					doctype, linked.name, ["reference_doctype", "reference_docname", "opportunity"]
+				),
+				("Contact", contact, deal),
+			)
+
+	def test_invalid_opportunity_links_are_rejected_without_partial_records(self):
+		contact, deal = self._contact_and_deal("Ola", "ola@ex.com")
+		_, unrelated_deal = self._contact_and_deal("Pip", "pip@ex.com")
+
+		def deny_deal(doctype, ptype=None, doc=None, *a, **k):
+			return doctype != "CRM Deal"
+
+		for doctype in self.DOCTYPES:
+			before = self._count(doctype, contact)
+
+			with self.assertRaises(frappe.LinkValidationError):
+				self._new(doctype, contact, opportunity="CRM-DEAL-DOES-NOT-EXIST").insert(
+					ignore_permissions=True
+				)
+			with self.assertRaises(frappe.ValidationError):
+				self._new(doctype, contact, opportunity=unrelated_deal).insert(ignore_permissions=True)
+			with patch("frappe.has_permission", side_effect=deny_deal):
+				with self.assertRaises(frappe.PermissionError):
+					self._new(doctype, contact, opportunity=deal).insert(ignore_permissions=True)
+
+			self.assertEqual(self._count(doctype, contact), before, doctype)
+			self.assertFalse(frappe.db.exists(doctype, {"opportunity": unrelated_deal}))
+
+	# -- ac-3: records read once in Contact and selected Opportunity history ---------------------
+
+	def test_new_records_read_once_in_contact_and_opportunity_history(self):
+		contact, deal = self._contact_and_deal("Quin", "quin@ex.com")
+		_, other_deal = self._contact_and_deal("Rae", "rae@ex.com")
+		plain_note = self._new("FCRM Note", contact, title="Plain contact note").insert(
+			ignore_permissions=True
+		)
+		linked_note = self._new("FCRM Note", contact, opportunity=deal, title="Linked contact note").insert(
+			ignore_permissions=True
+		)
+		plain_call = self._new("CRM Call Log", contact).insert(ignore_permissions=True)
+		linked_call = self._new("CRM Call Log", contact, opportunity=deal).insert(ignore_permissions=True)
+
+		_, calls, notes, _, _ = activities_api.get_contact_activities(contact)
+		note_names = [note.get("name") for note in notes]
+		call_names = [call.get("name") for call in calls]
+		for record in (plain_note, linked_note):
+			self.assertEqual(note_names.count(record.name), 1)
+		for record in (plain_call, linked_call):
+			self.assertEqual(call_names.count(record.name), 1)
+		for note in notes:
+			if note.get("name") in (plain_note.name, linked_note.name):
+				self.assertEqual(note.get("owner"), "Administrator")
+				self.assertTrue(note.get("creation"))
+		for call in calls:
+			if call.get("name") in (plain_call.name, linked_call.name):
+				self.assertTrue(call.get("creation"))
+
+		_, deal_calls, deal_notes, _, _ = activities_api.get_deal_activities(deal)
+		deal_note_names = [note.get("name") for note in deal_notes]
+		deal_call_names = [call.get("name") for call in deal_calls]
+		self.assertEqual(deal_note_names.count(linked_note.name), 1)
+		self.assertEqual(deal_call_names.count(linked_call.name), 1)
+		self.assertNotIn(plain_note.name, deal_note_names)
+		self.assertNotIn(plain_call.name, deal_call_names)
+		linked_row = next(note for note in deal_notes if note.get("name") == linked_note.name)
+		self.assertEqual(
+			(linked_row.get("reference_doctype"), linked_row.get("reference_docname")), ("Contact", contact)
+		)
+
+		_, other_calls, other_notes, _, _ = activities_api.get_deal_activities(other_deal)
+		self.assertNotIn(linked_note.name, [note.get("name") for note in other_notes])
+		self.assertNotIn(linked_call.name, [call.get("name") for call in other_calls])
 
 
 class TestLeadReferredBy(FrappeTestCase):
