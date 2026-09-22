@@ -457,3 +457,139 @@ class TestActivationReadinessGate(FrappeTestCase):
 		deal = self.make_deal("Payment Hold", **READY_FIELDS)
 		result = execute_action(deal.name, "reactivate", {"reactivation_notes": "Paid"})
 		self.assertEqual(result["status"], "Active")
+
+
+READINESS_PATCH = {**READY_FIELDS}
+
+
+class TestActivationReadinessRemediation(FrappeTestCase):
+	"""TXB-258: the structured preflight and the atomic remediate-and-enter-Active contract."""
+
+	# Shared fixtures, borrowed rather than inherited so the TXB-251 tests do not run twice.
+	tearDown = TestActivationReadinessGate.tearDown
+	make_deal = TestActivationReadinessGate.make_deal
+	note_count = TestActivationReadinessGate.note_count
+
+	def test_preflight_lists_editable_source_fields_not_the_derived_name(self):
+		from crm.txb.api.actions import get_activation_readiness
+
+		deal = self.make_deal("Contract Cleared")
+		result = get_activation_readiness(deal.name, action="set_first_call_date")
+		self.assertFalse(result["ready"])
+		self.assertEqual(result["missing"], ALL_READINESS_LABELS)
+		self.assertEqual(
+			[field["fieldname"] for field in result["fields"]],
+			[
+				"custom_delivery_coach",
+				"custom_contract_signed",
+				"custom_payment_confirmed",
+				"custom_test_completed",
+				"custom_delivery_notes",
+			],
+		)
+		for field in result["fields"]:
+			self.assertIn("fieldtype", field)
+			self.assertIn("options", field)
+			self.assertIn("value", field)
+		self.assertEqual(result["fields"][1]["required_value"], "Yes")
+
+	def test_preflight_returns_only_what_is_still_missing(self):
+		from crm.txb.api.actions import get_activation_readiness
+
+		deal = self.make_deal("Inactive", **{**READY_FIELDS, "custom_payment_confirmed": "No"})
+		result = get_activation_readiness(deal.name, action="reactivate")
+		self.assertEqual(result["missing"], ["Payment Confirmed?"])
+		self.assertEqual([f["fieldname"] for f in result["fields"]], ["custom_payment_confirmed"])
+		self.assertEqual(result["fields"][0]["value"], "No")
+
+	def test_initial_activation_applies_patch_and_action_together(self):
+		from crm.txb.api.actions import complete_activation
+
+		deal = self.make_deal("Contract Cleared")
+		result = complete_activation(
+			deal.name,
+			readiness=READINESS_PATCH,
+			action="set_first_call_date",
+			data={"first_call_date": "2026-10-01 09:00:00", "call_notes": "Kick-off"},
+			expected_status="Contract Cleared",
+		)
+		self.assertEqual(result["status"], "Active")
+		saved = frappe.get_doc("CRM Deal", deal.name)
+		self.assertEqual(saved.custom_contract_signed, "Yes")
+		self.assertTrue(saved.custom_delivery_coach_name)
+
+	def test_reactivation_applies_patch_and_action_together(self):
+		from crm.txb.api.actions import complete_activation
+
+		deal = self.make_deal("On Hold")
+		result = complete_activation(
+			deal.name, readiness=READINESS_PATCH, action="reactivate", data={"reactivation_notes": "Back"}
+		)
+		self.assertEqual(result["status"], "Active")
+
+	def test_admin_direct_status_transition_applies_patch(self):
+		from crm.txb.api.actions import complete_activation
+
+		deal = self.make_deal("Payment Hold")
+		result = complete_activation(deal.name, readiness=READINESS_PATCH, status="Active")
+		self.assertEqual(result["status"], "Active")
+
+	def test_incomplete_patch_leaves_everything_unchanged(self):
+		from crm.txb.api.actions import complete_activation
+
+		deal = self.make_deal("Inactive")
+		before = self.note_count(deal.name)
+		with self.assertRaises(frappe.ValidationError):
+			complete_activation(
+				deal.name,
+				readiness={**READINESS_PATCH, "custom_delivery_notes": ""},
+				action="reactivate",
+				data={"reactivation_notes": "Back"},
+			)
+		self.assertEqual(self.note_count(deal.name), before)
+		saved = frappe.db.get_value(
+			"CRM Deal", deal.name, ["status", "custom_contract_signed"], as_dict=True
+		)
+		self.assertEqual(saved.status, "Inactive")
+		self.assertNotEqual(saved.custom_contract_signed, "Yes")
+
+	def test_derived_coach_name_cannot_be_submitted(self):
+		from crm.txb.api.actions import complete_activation
+
+		deal = self.make_deal("Contract Cleared")
+		with self.assertRaises(frappe.ValidationError):
+			complete_activation(
+				deal.name,
+				readiness={**READINESS_PATCH, "custom_delivery_coach_name": "Someone Else"},
+				action="set_first_call_date",
+				data={"first_call_date": "2026-10-01 09:00:00"},
+			)
+		self.assertEqual(frappe.db.get_value("CRM Deal", deal.name, "status"), "Contract Cleared")
+
+	def test_stale_state_is_refused_before_any_write(self):
+		from crm.txb.api.actions import complete_activation
+
+		deal = self.make_deal("Inactive")
+		with self.assertRaises(frappe.ValidationError):
+			complete_activation(
+				deal.name, readiness=READINESS_PATCH, action="reactivate", expected_status="On Hold"
+			)
+		self.assertNotEqual(frappe.db.get_value("CRM Deal", deal.name, "custom_contract_signed"), "Yes")
+
+	def test_action_not_available_from_current_status_is_refused(self):
+		from crm.txb.api.actions import complete_activation
+
+		deal = self.make_deal("Contract Cleared")
+		with self.assertRaises(frappe.ValidationError):
+			complete_activation(deal.name, readiness=READINESS_PATCH, action="reactivate")
+		self.assertEqual(frappe.db.get_value("CRM Deal", deal.name, "status"), "Contract Cleared")
+
+	def test_non_active_bound_request_is_refused(self):
+		from crm.txb.api.actions import complete_activation
+
+		deal = self.make_deal("Active", **READY_FIELDS)
+		with self.assertRaises(frappe.ValidationError):
+			complete_activation(deal.name, readiness={}, status="Inactive")
+		with self.assertRaises(frappe.ValidationError):
+			complete_activation(deal.name, readiness={}, action="mark_inactive", data={"inactive_reason": "Other"})
+		self.assertEqual(frappe.db.get_value("CRM Deal", deal.name, "status"), "Active")

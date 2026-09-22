@@ -142,15 +142,95 @@ ACTIVATION_READINESS = (
 )
 
 
+def _unmet_activation_readiness(deal) -> list[tuple[str, str, str | None]]:
+	"""Every `ACTIVATION_READINESS` rule the deal does not meet, in display order."""
+	unmet = []
+	for rule in ACTIVATION_READINESS:
+		fieldname, _label, required = rule
+		value = deal.get(fieldname)
+		if _is_blank(value) if required is None else value != required:
+			unmet.append(rule)
+	return unmet
+
+
 def missing_activation_readiness(deal) -> list[str]:
 	"""Labels of every readiness condition the deal does not meet, in display order."""
-	missing = []
-	for fieldname, label, required in ACTIVATION_READINESS:
-		value = deal.get(fieldname)
-		unmet = _is_blank(value) if required is None else value != required
-		if unmet:
-			missing.append(label)
-	return missing
+	return [label for _fieldname, label, _required in _unmet_activation_readiness(deal)]
+
+
+# TXB-258: Delivery Coach Name is still one of the six conditions, but it is derived from
+# Delivery Coach by `sync_delivery_coach_name`, so a remediation form is offered the source
+# field instead and the derived name can never be submitted independently.
+DERIVED_READINESS_SOURCES = {FIELD_DELIVERY_COACH_NAME: FIELD_DELIVERY_COACH}
+
+# The only fields a readiness remediation may write, in display order.
+READINESS_EDITABLE_FIELDS = tuple(
+	fieldname
+	for fieldname, _label, _required in ACTIVATION_READINESS
+	if fieldname not in DERIVED_READINESS_SOURCES
+)
+
+
+def missing_readiness_inputs(deal) -> list[dict]:
+	"""The editable source fields a user must fill for the deal to become delivery-ready.
+
+	One entry per unmet condition, with a derived condition mapped onto its source field (an
+	unmet Delivery Coach Name asks for Delivery Coach), de-duplicated and in display order.
+	Type and options come from the live CRM Deal metadata so the form renders what the
+	document will accept; `required_value` tells the form which answer satisfies a Yes/No
+	condition, and `value` is the deal's current value.
+	"""
+	rules = {fieldname: (label, required) for fieldname, label, required in ACTIVATION_READINESS}
+	fieldnames = []
+	for fieldname, _label, _required in _unmet_activation_readiness(deal):
+		source = DERIVED_READINESS_SOURCES.get(fieldname, fieldname)
+		if source not in fieldnames:
+			fieldnames.append(source)
+
+	inputs = []
+	for fieldname in fieldnames:
+		label, required = rules[fieldname]
+		df = deal.meta.get_field(fieldname)
+		inputs.append(
+			{
+				"fieldname": fieldname,
+				"label": label,
+				"fieldtype": df.fieldtype if df else "Data",
+				"options": df.options if df else None,
+				"reqd": 1,
+				"required_value": required,
+				"value": deal.get(fieldname),
+			}
+		)
+	return inputs
+
+
+def apply_readiness_patch(deal, patch: dict):
+	"""Write submitted readiness values onto the in-memory deal, allowlisted (TXB-258).
+
+	Only `READINESS_EDITABLE_FIELDS` may be set; anything else -- including the derived
+	Delivery Coach Name -- is refused before a value is touched. The derived name is then
+	re-synchronized from the coach so the readiness check sees what the save will store.
+	Nothing is saved here: the caller saves it together with the Active-bound transition.
+	"""
+	unknown = sorted(set(patch) - set(READINESS_EDITABLE_FIELDS))
+	if unknown:
+		frappe.throw(
+			frappe._("These fields cannot be set while completing delivery readiness: {0}").format(
+				", ".join(unknown)
+			),
+			frappe.ValidationError,
+			title=frappe._("Delivery Not Ready"),
+		)
+
+	for fieldname in READINESS_EDITABLE_FIELDS:
+		if fieldname in patch:
+			deal.set(fieldname, patch[fieldname])
+
+	# Local import: crm.txb.doc_events.deal imports this module.
+	from crm.txb.doc_events.deal import sync_delivery_coach_name
+
+	sync_delivery_coach_name(deal)
 
 
 def require_activation_readiness(deal, data=None):

@@ -11,10 +11,20 @@ import json
 import frappe
 from frappe import _
 
-from crm.txb.constants import LEAD_STATUS_FOLLOW_UP, LEAD_STATUS_NURTURE
+from crm.txb.constants import (
+	LEAD_STATUS_FOLLOW_UP,
+	LEAD_STATUS_NURTURE,
+	PIPELINE_DELIVERING_COACHING,
+	STATUS_ACTIVE,
+)
 from crm.txb import meetings
-from crm.txb.permissions import can_change_status, is_admin
+from crm.txb.permissions import admin_only_fields, can_change_status, is_admin
 from crm.txb.pipelines.actions import find_action, get_actions, resolve_to_state
+from crm.txb.pipelines.delivering_coaching import (
+	apply_readiness_patch,
+	missing_activation_readiness,
+	missing_readiness_inputs,
+)
 
 DEAL_DOCTYPE = "CRM Deal"
 LEAD_DOCTYPE = "CRM Lead"
@@ -56,6 +66,10 @@ FOLLOW_UP_MEETING_FLOW = meetings.LEAD_FOLLOW_UP_FLOW
 NURTURE_STATUS = LEAD_STATUS_NURTURE
 NURTURE_REQUIRED_FIELDS = ("nurture_context", "next_action")
 NURTURE_SAVEPOINT = "txb_nurture"
+
+# TXB-258: the readiness patch and the Active-bound transition share this savepoint, so filling
+# the missing readiness fields and entering Active commit together or not at all.
+READINESS_SAVEPOINT = "txb_activation_readiness"
 
 
 @frappe.whitelist()
@@ -159,6 +173,14 @@ def execute_action(deal: str, action: str, data: str | dict | None = None) -> di
 	frappe.has_permission(DEAL_DOCTYPE, "write", deal, throw=True)
 
 	doc = frappe.get_doc(DEAL_DOCTYPE, deal)
+	spec = checked_action(doc, action)
+	run_action(doc, spec, parse_data(data))
+
+	return {"deal": doc.name, "status": doc.status}
+
+
+def checked_action(doc, action: str) -> dict:
+	"""The registered action, once its from-state and role are re-checked against `doc`."""
 	spec = find_action(doc.pipeline_type, action)
 
 	if not spec:
@@ -183,7 +205,11 @@ def execute_action(deal: str, action: str, data: str | dict | None = None) -> di
 			title=_("Not permitted"),
 		)
 
-	values = parse_data(data)
+	return spec
+
+
+def run_action(doc, spec: dict, values: dict):
+	"""Validate, apply and save one action on the in-memory `doc`, as a single save."""
 	validate_required(spec, values)
 
 	# Conditional, action-specific rules (e.g. Next Coaching Call Date is required unless
@@ -210,7 +236,147 @@ def execute_action(deal: str, action: str, data: str | dict | None = None) -> di
 	finally:
 		frappe.flags.txb_action = None
 
+
+@frappe.whitelist()
+def get_activation_readiness(deal: str, action: str | None = None, status: str | None = None) -> dict:
+	"""Preflight for entering Active on a Delivering Coaching deal (TXB-258).
+
+	Takes the same request the client is about to make -- a registered Active-bound action
+	(`set_first_call_date`, `reactivate`) or a direct status of Active -- re-checks that this
+	user may make it from the deal's current status, and returns what stands in the way:
+	`missing` lists all six TXB-251 conditions still unmet (the derived Delivery Coach Name
+	included), `fields` only the editable source inputs that satisfy them, with metadata and
+	current values. Nothing is written.
+	"""
+	frappe.has_permission(DEAL_DOCTYPE, "write", deal, throw=True)
+
+	doc = frappe.get_doc(DEAL_DOCTYPE, deal)
+	check_activation_request(doc, action, status, {})
+
+	fields = missing_readiness_inputs(doc)
+	# Delivery Coach is an Admin-only field: offer it read-only to anyone else, as the form
+	# layout does, and let `guard_admin_only_fields` refuse the write at save.
+	if not is_admin():
+		restricted = admin_only_fields(DEAL_DOCTYPE)
+		fields = [
+			{**field, "read_only": 1} if field["fieldname"] in restricted else field for field in fields
+		]
+
+	missing = missing_activation_readiness(doc)
+	return {
+		"deal": doc.name,
+		"status": doc.status,
+		"to_state": STATUS_ACTIVE,
+		"ready": not missing,
+		"missing": missing,
+		"fields": fields,
+	}
+
+
+@frappe.whitelist()
+def complete_activation(
+	deal: str,
+	readiness: str | dict | None = None,
+	action: str | None = None,
+	data: str | dict | None = None,
+	status: str | None = None,
+	expected_status: str | None = None,
+) -> dict:
+	"""Fill missing delivery readiness and enter Active in one transaction (TXB-258).
+
+	`readiness` is an allowlisted patch of the editable readiness fields; `action` + `data`
+	or `status` is the original Active-bound request, re-checked from scratch against the
+	freshly loaded deal. `expected_status` is the status the client saw: if the deal has
+	moved since, the request is refused as stale rather than applied to a different state.
+
+	The patch and the transition land in one save under one savepoint, and every existing
+	gate still runs on it -- the action's own validator, the TXB-251 document guard, the
+	transition, status-role and Admin-only-field guards. Any failure rolls the savepoint back,
+	so readiness fields, status, notes and tasks are all left exactly as they were.
+	"""
+	frappe.has_permission(DEAL_DOCTYPE, "write", deal, throw=True)
+
+	doc = frappe.get_doc(DEAL_DOCTYPE, deal)
+	if expected_status is not None and doc.status != expected_status:
+		frappe.throw(
+			_('This deal is now "{0}", not "{1}". Reload it and try again.').format(
+				_(doc.status or ""), _(expected_status)
+			),
+			frappe.TimestampMismatchError,
+			title=_("Deal changed"),
+		)
+
+	values = parse_data(data)
+	spec = check_activation_request(doc, action, status, values)
+	patch = parse_data(readiness)
+
+	frappe.db.savepoint(READINESS_SAVEPOINT)
+	try:
+		apply_readiness_patch(doc, patch)
+		if spec:
+			run_action(doc, spec, values)
+		else:
+			# A bare status write, exactly as the detail page or Kanban would make it: no
+			# action flag is armed, so `guard_transition` and the readiness guard judge it.
+			doc.status = STATUS_ACTIVE
+			doc.save()
+	except Exception:
+		frappe.db.rollback(save_point=READINESS_SAVEPOINT)
+		raise
+
 	return {"deal": doc.name, "status": doc.status}
+
+
+def check_activation_request(doc, action: str | None, status: str | None, values: dict) -> dict | None:
+	"""Re-check an Active-bound request; returns the action spec, or None for a direct status.
+
+	Exactly one of `action` and `status` is accepted. An action must be registered, available
+	from the current status, permitted for this user and land on Active. A direct status must
+	be Active, from a status that is not already Active, by a user who may change the status
+	and holds the Admin recovery hatch -- anyone else must go through Take Action, which is
+	what `guard_transition` would tell them at save.
+	"""
+	if doc.pipeline_type != PIPELINE_DELIVERING_COACHING:
+		frappe.throw(
+			_("Delivery readiness applies only to {0} opportunities.").format(
+				_(PIPELINE_DELIVERING_COACHING)
+			),
+			frappe.ValidationError,
+		)
+
+	if bool(action) == bool(status):
+		frappe.throw(_("Provide exactly one of an action or a status."), frappe.ValidationError)
+
+	if action:
+		spec = checked_action(doc, action)
+		if resolve_to_state(spec, values) != STATUS_ACTIVE:
+			frappe.throw(
+				_('"{0}" does not set the deal to {1}.').format(_(spec["label"]), _(STATUS_ACTIVE)),
+				frappe.ValidationError,
+			)
+		return spec
+
+	if status != STATUS_ACTIVE:
+		frappe.throw(
+			_("Delivery readiness only gates the move to {0}.").format(_(STATUS_ACTIVE)),
+			frappe.ValidationError,
+		)
+	if doc.status == STATUS_ACTIVE:
+		frappe.throw(
+			_("This deal is already {0}.").format(_(STATUS_ACTIVE)),
+			frappe.TimestampMismatchError,
+			title=_("Deal changed"),
+		)
+	if not can_change_status(doc.pipeline_type) or not is_admin():
+		frappe.throw(
+			_(
+				"Change the status of a {0} opportunity through Take Action, so the "
+				"details that go with the change are recorded."
+			).format(_(doc.pipeline_type)),
+			frappe.PermissionError,
+			title=_("Not permitted"),
+		)
+	return None
 
 
 @frappe.whitelist()
