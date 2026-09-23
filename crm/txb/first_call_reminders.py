@@ -1,10 +1,10 @@
 """The first-coaching-call reminder lifecycle for Delivering Coaching Opportunities (TXB-227).
 
 One activation, at most one reminder. The Opportunity carries an app-owned *activation cycle*:
-an opaque identity minted the moment it transitions from a non-Active status into Active, plus
-the instant that cycle began. Leaving Active throws the cycle away (and cancels whatever
-reminder it raised); coming back records a fresh one, so the deadline restarts rather than
-resuming. Deals that were already Active when the migration ran carry no cycle at all and are
+an opaque identity minted the moment it enters Active -- whether it transitions there or the
+handover flow creates it Active outright (TXB-265) -- plus the instant that cycle began.
+Leaving Active throws the cycle away (and cancels whatever reminder it raised); coming back
+records a fresh one, so the deadline restarts rather than resuming. Deals that were already Active when the migration ran carry no cycle at all and are
 never reminded about -- only activations this app actually observed.
 
 Exactly-once is a database property, not a heuristic. The reminder Task stores its cycle in
@@ -110,19 +110,30 @@ def record_activation_cycle(deal, method=None):
 	"""Open or close the Opportunity's activation cycle as this save moves its status (TXB-227).
 
 	Bound to `validate`, so the cycle is written by the very save that changes the status: the
-	two can never disagree, and a save that fails takes the cycle with it. Only a transition
-	counts. An insert is not one -- a deal created straight into Active is the migration case
-	the contract excludes -- and a deal saved while already Active keeps the cycle and the
-	deadline it already had, so an unrelated edit never resets the clock.
+	two can never disagree, and a save that fails takes the cycle with it. An insert straight
+	into Active counts as an activation (TXB-265): the handover flow creates the delivery deal
+	already Active, and that is an activation this app observed, unlike the rows sitting in
+	Active when the migration ran, which it never saw and still never reminds about. Otherwise
+	only a transition counts: a deal saved while already Active keeps the cycle and the deadline
+	it already had, so an unrelated edit never resets the clock.
 
 	Closing only clears the fields; the reminder that cycle may have raised is cancelled after
 	the save commits, in `settle_activation_cycle`.
 	"""
-	if not cycle_fields_installed() or deal.is_new():
+	if not cycle_fields_installed():
+		return
+
+	is_active = deal.pipeline_type == PIPELINE_DELIVERING_COACHING and deal.status == STATUS_ACTIVE
+
+	if deal.is_new():
+		# There is no prior status to compare against; the deal either arrives Active, which
+		# opens its first cycle here, or arrives without one. Anything a copied document
+		# carried in these app-owned fields is not this deal's cycle and is dropped.
+		deal.set(FIELD_ACTIVATION_CYCLE, new_cycle_id(deal.name) if is_active else None)
+		deal.set(FIELD_ACTIVATION_STARTED_ON, now_datetime() if is_active else None)
 		return
 
 	previous = _previous_status(deal)
-	is_active = deal.pipeline_type == PIPELINE_DELIVERING_COACHING and deal.status == STATUS_ACTIVE
 
 	if is_active and previous != STATUS_ACTIVE:
 		deal.set(FIELD_ACTIVATION_CYCLE, new_cycle_id(deal.name))
