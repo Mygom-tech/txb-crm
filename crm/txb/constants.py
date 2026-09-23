@@ -223,6 +223,29 @@ FIELD_COACHING_CALL_DELIVERY_DATE = "custom_txb_coaching_call_delivery_date"
 # first Coaching Call Note; the legacy `custom_first_coaching_date` is a different field.
 FIELD_FIRST_CALL_DATE = "custom_first_call_date"
 
+# TXB-227 app-owned activation-cycle state on CRM Deal. `FIELD_ACTIVATION_CYCLE` is the opaque
+# identity of the Opportunity's current Delivering Coaching activation -- minted when the deal
+# transitions from a non-Active status into Active, cleared when it leaves -- and
+# `FIELD_ACTIVATION_STARTED_ON` is when that cycle began, which is what the first-call reminder
+# deadline is measured from. Hidden, read-only and no-copy: app-managed metadata, not user
+# input. Installed by `crm.patches.v1_0.add_first_call_reminder_fields`, which deliberately
+# leaves already-Active deals uninitialized, so only activations observed after the migration
+# are ever reminded about.
+FIELD_ACTIVATION_CYCLE = "custom_activation_cycle"
+FIELD_ACTIVATION_STARTED_ON = "custom_activation_started_on"
+
+# The reminder's durable identity on CRM Task: the activation cycle it belongs to. UNIQUE in the
+# database (see that same patch), which is the exactly-once guarantee -- one activation cycle can
+# carry at most one first-call reminder, no matter how many scheduler retries or concurrent runs
+# reach for it.
+FIELD_REMINDER_CYCLE = "custom_txb_reminder_cycle"
+
+# The configurable first-call reminder delay on FCRM Settings, in minutes. Read at evaluation
+# time so an administrator can shorten it for testing without a code change.
+SETTING_FIRST_CALL_REMINDER_MINUTES = "custom_first_call_reminder_minutes"
+FIRST_CALL_REMINDER_DEFAULT_MINUTES = 1440
+FIRST_CALL_REMINDER_MIN_MINUTES = 1
+
 # The scheduled workshop date and time, collected by the native Set Workshop action. A
 # Workshop deal may not rest in "Workshop set" without it; see
 # `crm.txb.doc_events.deal.require_workshop_schedule`.

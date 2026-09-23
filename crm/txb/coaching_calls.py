@@ -35,6 +35,7 @@ from crm.txb.constants import (
 	FIELD_FIRST_CALL_DATE,
 	PIPELINE_DELIVERING_COACHING,
 )
+from crm.txb.first_call_reminders import complete_first_call_reminder
 
 DEAL_DOCTYPE = "CRM Deal"
 NOTE_DOCTYPE = "FCRM Note"
@@ -214,6 +215,9 @@ def seed_first_call_date_from_action(
 
 	value = first_call_value(delivery_date)
 	frappe.db.set_value(DEAL_DOCTYPE, deal_name, FIELD_FIRST_CALL_DATE, value, update_modified=False)
+	# The row is written directly, so no CRM Deal document event fires: the first-call reminder
+	# this seed answers has to be closed from here (TXB-227).
+	complete_first_call_reminder(deal_name)
 	return value
 
 
@@ -273,6 +277,9 @@ def seed_first_call_date(note) -> str | None:
 
 	value = first_call_value(delivery_date)
 	frappe.db.set_value(DEAL_DOCTYPE, deal_name, FIELD_FIRST_CALL_DATE, value, update_modified=False)
+	# The row is written directly, so no CRM Deal document event fires: the first-call reminder
+	# this seed answers has to be closed from here (TXB-227).
+	complete_first_call_reminder(deal_name)
 	return value
 
 
