@@ -237,7 +237,11 @@ doc_events = {
 	"FCRM Settings": {
 		# The Admin Task Assignee must be someone who can actually work the tasks: enabled,
 		# a real account and holding the Admin role (TXB-263).
-		"validate": ["crm.txb.admin_assignment.validate_admin_task_assignee"],
+		"validate": [
+			"crm.txb.admin_assignment.validate_admin_task_assignee",
+			# The first-call reminder delay is configurable but never instantaneous (TXB-227).
+			"crm.txb.first_call_reminders.validate_reminder_delay",
+		],
 	},
 	"ToDo": {
 		"after_insert": ["crm.api.todo.after_insert"],
@@ -278,6 +282,10 @@ doc_events = {
 			"crm.txb.ownership.guard_owner_change",
 			# Delivery Coach and any future Admin-only field.
 			"crm.txb.permissions.guard_admin_only_fields",
+			# Last, because it writes rather than refuses: a Delivering Coaching deal entering
+			# Active opens a first-call reminder cycle here and leaving Active closes it, in
+			# the same save that moves the status (TXB-227).
+			"crm.txb.first_call_reminders.record_activation_cycle",
 		],
 		"before_insert": ["crm.txb.ownership.claim_owner_on_insert"],
 		# A new Delivering Coaching deal drops a linked task into the Admin's list (TXB-208).
@@ -287,7 +295,12 @@ doc_events = {
 			"crm.txb.doc_events.deal.sync_delivery_coach_name",
 		],
 		"on_update": [
-			"crm.fcrm.doctype.erpnext_crm_settings.erpnext_crm_settings.create_customer_in_erpnext"
+			"crm.fcrm.doctype.erpnext_crm_settings.erpnext_crm_settings.create_customer_in_erpnext",
+			# An activation cycle that just ended cancels its open first-call reminder, and a
+			# First Coaching Call Date that just arrived marks it Done (TXB-227). After the
+			# save, so a reminder is never closed for a write that did not commit.
+			"crm.txb.first_call_reminders.settle_activation_cycle",
+			"crm.txb.first_call_reminders.complete_reminder_on_first_call_date",
 		],
 	},
 	"Sales Order": {
@@ -343,6 +356,9 @@ scheduler_events = {
 		# Cadence preserved from the Server Scripts these replaced.
 		"0 9 * * *": ["crm.txb.tasks.reminders.stale_session_run_alert"],
 		"0 9 * * 1": ["crm.txb.tasks.reminders.weekly_vcs_reminder"],
+		# Every minute: the first-call reminder delay is configurable down to a single minute,
+		# and a job that ran less often would make that setting unobservable (TXB-227).
+		"* * * * *": ["crm.txb.tasks.reminders.first_call_reminders"],
 	},
 }
 

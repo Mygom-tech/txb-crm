@@ -1,17 +1,32 @@
 """Scheduled reminder jobs.
 
-Ported from the `Weekly VCS Reminder` and `Stale Session Run Alert` Server Scripts.
-Both create a CRM Task for a deal owner and both suppress repeats within a week.
+The two ported from the `Weekly VCS Reminder` and `Stale Session Run Alert` Server Scripts
+create a CRM Task for a deal owner and suppress repeats within a week -- a cooldown, which is
+adequate for a reminder that is meant to recur and inadequate for one that must happen exactly
+once. The first-coaching-call reminder (TXB-227) is the latter, so it does not live here: this
+module only gives `crm.txb.first_call_reminders` its scheduler entry point.
 """
 
 import frappe
 from frappe.utils import add_days, date_diff, today
 
 from crm.txb.constants import PIPELINE_INDIVIDUAL_SESSION, PIPELINE_WORKSHOP
+from crm.txb.first_call_reminders import run_first_call_reminders
 
 REMINDER_COOLDOWN_DAYS = 7
 STALE_SESSION_DAYS = 30
 TASK_PRIORITY = "Medium"
+
+
+def first_call_reminders():
+	"""Remind the Admin about Active coaching Opportunities with no first call yet. Every minute.
+
+	Frequent by design: the delay is configurable down to a single minute so it can be watched
+	end to end on a test site, and a coarser schedule would make that setting a lie. The pass
+	itself is cheap -- it reconciles open reminders and queries only Opportunities already past
+	the configured deadline -- and idempotent, so an overlapping run costs nothing.
+	"""
+	run_first_call_reminders()
 
 
 def weekly_vcs_reminder():
