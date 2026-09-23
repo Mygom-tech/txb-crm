@@ -9,7 +9,12 @@ Every action here is admin_only except Log Coaching Call, which is the one that 
 move the status. See crm/txb/permissions.py for the rule that enforces it.
 """
 
-from crm.txb.coaching_calls import CALL_STATUSES, count_completed_calls
+from crm.txb.coaching_calls import (
+	CALL_STATUSES,
+	count_completed_calls,
+	lock_deal_row,
+	seed_first_call_date_from_action,
+)
 from crm.txb.constants import (
 	FIELD_COACHING_CALL_DELIVERY_DATE,
 	FIELD_COACHING_CALL_STATUS,
@@ -287,6 +292,10 @@ def log_coaching_call(deal, data):
 	if data.get("delivery_date"):
 		deal.custom_last_coaching_call_date = data["delivery_date"]
 
+	# Taken before the deal's existing call notes are counted, so two concurrent first calls
+	# queue here and the second one counts the note the first inserted (TXB-261).
+	lock_deal_row(deal.name)
+
 	call_number = (
 		frappe.db.count(
 			NOTE_DOCTYPE,
@@ -308,7 +317,7 @@ def log_coaching_call(deal, data):
 		"--- LAST COACHING CALL ---" if data.get("is_last_call") else None,
 	)
 
-	add_note(
+	note = add_note(
 		deal,
 		f"Coaching Call #{call_number}",
 		body.replace("\n", "<br>"),
@@ -322,9 +331,18 @@ def log_coaching_call(deal, data):
 		},
 	)
 
-	# The note's insert hook may have seeded an empty First Coaching Call Date on the deal row
-	# (TXB-224). Carried onto the in-memory deal because the caller saves it next, and the stale
-	# empty value would otherwise write straight back over the seed.
+	# If this is the deal's first Coaching Call Note, it initializes an empty First Coaching Call
+	# Date from the Delivery Date just submitted (TXB-261). The note's own insert hook does the
+	# same for direct inserts, but only once the note metadata columns exist -- during migration
+	# skew that guard would otherwise turn the official action into a silent no-op. Both paths
+	# take the same row lock and apply the same guards under it, so whichever ran first wins and
+	# the other writes nothing. Last Coaching Call Date above is independent and always updates.
+	seed_first_call_date_from_action(
+		deal.name, note.name, data.get("delivery_date"), _submitted_status(data)
+	)
+
+	# Whichever path seeded it, the date now lives on the deal row and not on the deal the caller
+	# holds in memory and saves next -- the stale empty value would write straight back over it.
 	if not deal.get(FIELD_FIRST_CALL_DATE):
 		deal.set(
 			FIELD_FIRST_CALL_DATE, frappe.db.get_value(DEAL_DOCTYPE, deal.name, FIELD_FIRST_CALL_DATE)
