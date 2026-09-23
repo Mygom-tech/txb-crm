@@ -11,6 +11,7 @@ the approver with duplicates for the same record.
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
+from crm.txb.admin_assignment import ADMIN_TASK_ASSIGNEE_FIELD
 from crm.txb.api.ownership import request_claim
 from crm.txb.constants import ADMIN_ROLE
 
@@ -50,7 +51,7 @@ class TestClaimRequest(FrappeTestCase):
 		frappe.db.commit()  # nosemgrep -- roles must outlive per-test rollback
 
 	def setUp(self):
-		frappe.db.set_single_value("FCRM Settings", "custom_claim_approver", APPROVER)
+		frappe.db.set_single_value("FCRM Settings", ADMIN_TASK_ASSIGNEE_FIELD, APPROVER)
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
@@ -183,7 +184,7 @@ class TestClaimRequest(FrappeTestCase):
 			)
 
 	def test_a_blank_setting_falls_back_to_an_admin(self):
-		frappe.db.set_single_value("FCRM Settings", "custom_claim_approver", "")
+		frappe.db.set_single_value("FCRM Settings", ADMIN_TASK_ASSIGNEE_FIELD, "")
 		deal = self.make_deal()
 
 		frappe.set_user(SALESMAN)

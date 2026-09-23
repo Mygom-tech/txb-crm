@@ -10,7 +10,7 @@ import frappe
 from frappe import _
 from frappe.utils import get_url
 
-from crm.txb.api.ownership import approver
+from crm.txb.admin_assignment import resolve_admin_task_assignee
 from crm.txb.constants import (
 	ADMIN_ROLE,
 	FIELD_DELIVERY_COACH,
@@ -133,7 +133,7 @@ def create_coaching_admin_task(doc, method=None):
 		return
 
 	try:
-		assignee = approver()
+		assignee = resolve_admin_task_assignee()
 		first_name = frappe.db.get_value("User", assignee, "first_name") or assignee
 		message = f"{first_name}, įkrito naujas delivering coaching deal'as"
 		add_task(

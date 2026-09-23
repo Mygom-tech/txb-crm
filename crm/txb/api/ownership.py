@@ -10,7 +10,8 @@ import frappe
 from frappe import _
 from frappe.utils import get_url_to_form, now_datetime
 
-from crm.txb.constants import ADMIN_ROLE, OWNER_FIELDS
+from crm.txb.admin_assignment import resolve_admin_task_assignee
+from crm.txb.constants import OWNER_FIELDS
 from crm.txb.ownership import owner_field
 from crm.txb.permissions import is_admin
 
@@ -104,30 +105,10 @@ def open_request_for(doctype: str, name: str, requester: str) -> str | None:
 def approver() -> str:
 	"""Who receives Claim Request tasks.
 
-	The setting keeps this tied to the Admin role rather than to one person. A blank
-	setting degrades to the longest-standing Admin rather than breaking the request.
+	One authority for every system-generated Admin task, so a Claim Request lands with the
+	same person as the Delivering Coaching task (see `crm.txb.admin_assignment`).
 	"""
-	configured = frappe.db.get_single_value("FCRM Settings", "custom_claim_approver")
-	if configured and frappe.db.get_value("User", configured, "enabled"):
-		return configured
-
-	fallback = frappe.get_all(
-		"Has Role",
-		filters={"role": ADMIN_ROLE, "parenttype": "User"},
-		pluck="parent",
-		order_by="creation asc",
-	)
-	for user in fallback:
-		if user != "Administrator" and frappe.db.get_value("User", user, "enabled"):
-			frappe.logger().warning(
-				f"[request_claim] No Claim Request Approver configured; falling back to {user}"
-			)
-			return user
-
-	frappe.throw(
-		_("No Claim Request Approver is configured and no Admin user was found."),
-		frappe.ValidationError,
-	)
+	return resolve_admin_task_assignee()
 
 
 def record_label(doc) -> str:

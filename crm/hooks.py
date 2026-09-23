@@ -234,6 +234,11 @@ doc_events = {
 		"on_update": ["crm.txb.doc_events.note.reconcile_coaching_totals"],
 		"after_delete": ["crm.txb.doc_events.note.reconcile_coaching_totals"],
 	},
+	"FCRM Settings": {
+		# The Admin Task Assignee must be someone who can actually work the tasks: enabled,
+		# a real account and holding the Admin role (TXB-263).
+		"validate": ["crm.txb.admin_assignment.validate_admin_task_assignee"],
+	},
 	"ToDo": {
 		"after_insert": ["crm.api.todo.after_insert"],
 		"on_update": ["crm.api.todo.on_update"],

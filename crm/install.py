@@ -749,3 +749,32 @@ def add_ownership_custom_fields():
 		)
 
 		frappe.clear_cache(doctype="FCRM Settings")
+
+
+def add_admin_task_assignee_custom_field():
+	"""The single setting behind `crm.txb.admin_assignment` (TXB-263).
+
+	Optional: blank means "let the resolver pick the longest-standing Admin". Idempotent,
+	so the patch and a re-install both land on the same field.
+	"""
+	if frappe.get_meta("FCRM Settings").has_field("custom_admin_task_assignee"):
+		return
+
+	click.secho("* Installing Admin Task Assignee Custom Field in FCRM Settings")
+
+	create_custom_fields(
+		{
+			"FCRM Settings": [
+				{
+					"fieldname": "custom_admin_task_assignee",
+					"fieldtype": "Link",
+					"options": "User",
+					"label": "Admin Task Assignee",
+					"description": "Who receives system-generated Admin tasks. Must be an enabled user with the Admin role. Leave blank to fall back to the longest-standing Admin.",
+					"insert_after": "custom_claim_approver",
+				}
+			]
+		}
+	)
+
+	frappe.clear_cache(doctype="FCRM Settings")
