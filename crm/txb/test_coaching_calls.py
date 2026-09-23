@@ -75,6 +75,15 @@ class TestCoachingCallClassification(FrappeTestCase):
 class TestCoachingCallReconciliation(FrappeTestCase):
 	"""The stored total follows the deal's current linked notes through every note event."""
 
+	def setUp(self):
+		# Both note metadata columns, so the note lifecycle is exercised against the schema a
+		# migrated site actually has rather than skipping around a half-installed one.
+		from crm.patches.v1_0.reconcile_coaching_call_totals import _install_field as install_status
+		from crm.patches.v1_0.seed_first_coaching_call_date import _install_field as install_date
+
+		install_status()
+		install_date()
+
 	def tearDown(self):
 		frappe.db.rollback()
 
@@ -215,9 +224,13 @@ class TestFirstCoachingCallDate(FrappeTestCase):
 	FIRST = "custom_first_call_date"
 
 	def setUp(self):
-		from crm.patches.v1_0.seed_first_coaching_call_date import _install_field
+		# Both metadata prerequisites, not just the Delivery Date: seeding also classifies a note
+		# by its call status, and a half-installed schema is exactly the skew TXB-261 survives.
+		from crm.patches.v1_0.reconcile_coaching_call_totals import _install_field as install_status
+		from crm.patches.v1_0.seed_first_coaching_call_date import _install_field as install_date
 
-		_install_field()
+		install_status()
+		install_date()
 
 	def tearDown(self):
 		frappe.db.rollback()
@@ -348,3 +361,130 @@ class TestFirstCoachingCallDate(FrappeTestCase):
 		self.assertEqual(frappe.db.get_value(DEAL_DOCTYPE, empty.name, "modified"), modified)
 		self.assertEqual(str(self.stored_first(manual)), "2026-01-05 10:00:00")
 		self.assertIsNone(self.stored_first(workshop))
+
+	# TXB-261: what a coach actually sees and does -- the official action, the canonical field
+	# on a reloaded Opportunity, and the layout that renders it.
+
+	def log_call(self, deal, **data):
+		"""Run the real Log Coaching Call action and persist the deal exactly as the API does."""
+		from crm.txb.pipelines.delivering_coaching import log_coaching_call
+
+		log_coaching_call(deal, {"call_status": "Completed", **data})
+		deal.save(ignore_permissions=True)
+		deal.reload()
+		return deal
+
+	def test_the_official_action_persists_the_date_in_the_canonical_field(self):
+		deal = self.log_call(self.make_deal(), delivery_date="2026-08-17", is_last_call=1)
+
+		# Read back from the database, not from the handler's in-memory deal: the canonical
+		# field is what the reloaded Opportunity renders, on desktop and on mobile.
+		self.assertEqual(str(self.stored_first(deal)), "2026-08-17 00:00:00")
+		self.assertEqual(str(deal.get(self.FIRST)), "2026-08-17 00:00:00")
+		# The same call independently moves Last Coaching Call Date.
+		self.assertTrue(str(deal.custom_last_coaching_call_date).startswith("2026-08-17"))
+
+	def test_the_official_action_seeds_while_note_metadata_is_missing(self):
+		from unittest.mock import patch
+
+		# Mid-migration skew: the note's Delivery Date column is not installed yet, so the
+		# document-event path stands down. The action must still seed rather than no-op.
+		with patch("crm.txb.coaching_calls.delivery_date_field_installed", return_value=False):
+			deal = self.log_call(self.make_deal(), delivery_date="2026-08-17", is_last_call=1)
+
+		self.assertEqual(str(self.stored_first(deal)), "2026-08-17 00:00:00")
+
+	def test_later_calls_move_only_the_last_date(self):
+		deal = self.log_call(self.make_deal(), delivery_date="2026-08-17", next_call_date="2026-08-24")
+		self.log_call(deal, delivery_date="2026-08-24", is_last_call=1)
+
+		self.assertEqual(str(self.stored_first(deal)), "2026-08-17 00:00:00")
+		self.assertTrue(str(deal.custom_last_coaching_call_date).startswith("2026-08-24"))
+
+	def test_a_manually_cleared_first_date_is_not_repopulated_by_the_action(self):
+		deal = self.log_call(self.make_deal(), delivery_date="2026-08-17", next_call_date="2026-08-24")
+
+		deal.set(self.FIRST, None)
+		deal.save(ignore_permissions=True)
+
+		self.log_call(deal, delivery_date="2026-08-24", is_last_call=1)
+		self.assertIsNone(self.stored_first(deal))
+		self.assertTrue(str(deal.custom_last_coaching_call_date).startswith("2026-08-24"))
+
+	def test_a_rejected_call_changes_neither_date(self):
+		from crm.txb.pipelines.delivering_coaching import validate_log_coaching_call
+
+		deal = self.make_deal()
+		# The date is mandatory until "this is the last call" is ticked; a submission that
+		# fails validation never reaches the handler, so nothing is written at all.
+		with self.assertRaises(frappe.MandatoryError):
+			validate_log_coaching_call(deal, {"call_status": "Completed", "delivery_date": "2026-08-17"})
+
+		deal.reload()
+		self.assertIsNone(self.stored_first(deal))
+		self.assertIsNone(deal.custom_last_coaching_call_date)
+
+	def test_the_migration_renders_the_canonical_field_in_the_deal_layout(self):
+		import json
+
+		from crm.patches.v1_0 import repair_first_coaching_call_date_field as patch
+
+		layout = self.deal_layout()
+		original = layout.layout
+		self.addCleanup(self.restore_layout, layout.name, original)
+
+		layout.layout = json.dumps(
+			[
+				{
+					"label": "Delivery Sheet",
+					"columns": [
+						{"fields": ["custom_delivery_coach", patch.LEGACY_FIRST_FIELD, "custom_last_coaching_call_date"]}
+					],
+				}
+			]
+		)
+		layout.save()
+
+		patch.execute()
+		patch.execute()
+
+		fields = json.loads(frappe.db.get_value("CRM Fields Layout", layout.name, "layout"))[0][
+			"columns"
+		][0]["fields"]
+		# Replaced in place: the canonical field holds the legacy field's exact position, and
+		# the fields around it -- including Last Coaching Call Date -- are untouched.
+		self.assertEqual(
+			fields, ["custom_delivery_coach", self.FIRST, "custom_last_coaching_call_date"]
+		)
+
+	def test_the_migration_copies_a_legacy_date_only_into_an_empty_canonical_field(self):
+		from crm.patches.v1_0 import repair_first_coaching_call_date_field as patch
+
+		legacy = patch.LEGACY_FIRST_FIELD
+		if not frappe.get_meta(DEAL_DOCTYPE).has_field(legacy):
+			self.skipTest(f"{legacy} is not installed on this site")
+
+		empty = self.make_deal(**{legacy: "2026-02-03 00:00:00"})
+		manual = self.make_deal(**{legacy: "2026-02-03 00:00:00", self.FIRST: "2026-01-05 10:00:00"})
+
+		patch.execute()
+		patch.execute()
+
+		self.assertEqual(str(self.stored_first(empty)), "2026-02-03 00:00:00")
+		# A canonical value already there -- seeded or typed by a coach -- always wins.
+		self.assertEqual(str(self.stored_first(manual)), "2026-01-05 10:00:00")
+		# The legacy field itself stays installed and populated.
+		self.assertIsNotNone(frappe.db.get_value(DEAL_DOCTYPE, empty.name, legacy))
+
+	def deal_layout(self):
+		"""The stored Opportunity Data Fields layout, created on a site that has none."""
+		name = "CRM Deal-Data Fields"
+		if frappe.db.exists("CRM Fields Layout", name):
+			return frappe.get_doc("CRM Fields Layout", name)
+		return frappe.get_doc(
+			{"doctype": "CRM Fields Layout", "dt": DEAL_DOCTYPE, "type": "Data Fields", "layout": "[]"}
+		).insert(ignore_permissions=True)
+
+	def restore_layout(self, name, layout):
+		if frappe.db.exists("CRM Fields Layout", name):
+			frappe.db.set_value("CRM Fields Layout", name, "layout", layout, update_modified=False)

@@ -169,6 +169,54 @@ def first_call_value(delivery_date) -> str:
 	return f"{getdate(delivery_date).isoformat()} 00:00:00"
 
 
+def lock_deal_row(deal_name: str) -> None:
+	"""Take the Opportunity row lock that serializes first-call seeding (TXB-261).
+
+	The official Log Coaching Call action takes it before it counts the deal's existing call
+	notes, so a concurrent first call queues here and then counts the note the winner inserted.
+	"""
+	if deal_name:
+		frappe.db.get_value(DEAL_DOCTYPE, deal_name, "name", for_update=True)
+
+
+def seed_first_call_date_from_action(
+	deal_name: str, note_name: str, delivery_date, call_status: str
+) -> str | None:
+	"""Seed an empty First Coaching Call Date from the submitted first-call Delivery Date (TXB-261).
+
+	The document-event path (`seed_first_call_date`) reads the note's structured metadata, which
+	a site mid-migration may not have installed yet -- there the hook correctly stands down, and
+	the official action would silently log a first call that seeds nothing. This path takes the
+	same row lock and the same guards, but from the values the action itself submitted, so the
+	seed never depends on note metadata being present.
+
+	Every guard of the document-event path still applies, and by the same rules: the pipeline,
+	an already-set date, and a date a user deliberately cleared on a deal that already has call
+	notes. Written with `update_modified=False` inside the action's transaction, so a
+	rolled-back note takes the date with it. Returns the value written, or None.
+	"""
+	if not deal_name or not delivery_date or call_status not in CALL_STATUSES:
+		return None
+
+	deal = frappe.db.get_value(
+		DEAL_DOCTYPE,
+		deal_name,
+		["pipeline_type", FIELD_FIRST_CALL_DATE],
+		as_dict=True,
+		for_update=True,
+	)
+	if not deal or deal.get("pipeline_type") != PIPELINE_DELIVERING_COACHING:
+		return None
+	if deal.get(FIELD_FIRST_CALL_DATE):
+		return None
+	if _has_other_call_note(deal_name, note_name):
+		return None
+
+	value = first_call_value(delivery_date)
+	frappe.db.set_value(DEAL_DOCTYPE, deal_name, FIELD_FIRST_CALL_DATE, value, update_modified=False)
+	return value
+
+
 def lock_deal_for_first_call(note) -> None:
 	"""Serialize a Coaching Call Note insert against its Opportunity (TXB-224).
 
@@ -229,7 +277,18 @@ def seed_first_call_date(note) -> str | None:
 
 
 def _has_other_call_note(deal_name: str, note_name: str) -> bool:
-	"""Whether the deal already has a Coaching Call Note other than this one, by metadata or title."""
+	"""Whether the deal already has a Coaching Call Note other than this one, by metadata or title.
+
+	Only metadata columns this site has actually installed are queried: a site part-way through
+	the migration still answers the question from note titles rather than failing on a column
+	that is not there yet.
+	"""
+	or_filters = [["title", "like", f"%{TITLE_MARKER}%"]]
+	if status_field_installed():
+		or_filters.append([FIELD_COACHING_CALL_STATUS, "is", "set"])
+	if delivery_date_field_installed():
+		or_filters.append([FIELD_COACHING_CALL_DELIVERY_DATE, "is", "set"])
+
 	return bool(
 		frappe.get_all(
 			NOTE_DOCTYPE,
@@ -238,11 +297,7 @@ def _has_other_call_note(deal_name: str, note_name: str) -> bool:
 				"reference_docname": deal_name,
 				"name": ["!=", note_name],
 			},
-			or_filters=[
-				[FIELD_COACHING_CALL_STATUS, "is", "set"],
-				[FIELD_COACHING_CALL_DELIVERY_DATE, "is", "set"],
-				["title", "like", f"%{TITLE_MARKER}%"],
-			],
+			or_filters=or_filters,
 			limit=1,
 			pluck="name",
 		)
