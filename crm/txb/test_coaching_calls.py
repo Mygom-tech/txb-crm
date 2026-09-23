@@ -258,6 +258,9 @@ class TestFirstCoachingCallDate(FrappeTestCase):
 	def stored_first(self, deal):
 		return frappe.db.get_value(DEAL_DOCTYPE, deal.name, self.FIRST)
 
+	def stored_last(self, deal):
+		return frappe.db.get_value(DEAL_DOCTYPE, deal.name, "custom_last_coaching_call_date")
+
 	def test_title_dates_are_read_strictly(self):
 		from datetime import date
 
@@ -381,8 +384,9 @@ class TestFirstCoachingCallDate(FrappeTestCase):
 		# field is what the reloaded Opportunity renders, on desktop and on mobile.
 		self.assertEqual(str(self.stored_first(deal)), "2026-08-17 00:00:00")
 		self.assertEqual(str(deal.get(self.FIRST)), "2026-08-17 00:00:00")
-		# The same call independently moves Last Coaching Call Date.
-		self.assertTrue(str(deal.custom_last_coaching_call_date).startswith("2026-08-17"))
+		# Last Coaching Call Date is a manual field: the first call leaves it empty (TXB-262).
+		self.assertIsNone(deal.custom_last_coaching_call_date)
+		self.assertIsNone(self.stored_last(deal))
 
 	def test_the_official_action_seeds_while_note_metadata_is_missing(self):
 		from unittest.mock import patch
@@ -394,12 +398,28 @@ class TestFirstCoachingCallDate(FrappeTestCase):
 
 		self.assertEqual(str(self.stored_first(deal)), "2026-08-17 00:00:00")
 
-	def test_later_calls_move_only_the_last_date(self):
+	def test_later_calls_move_neither_date(self):
 		deal = self.log_call(self.make_deal(), delivery_date="2026-08-17", next_call_date="2026-08-24")
 		self.log_call(deal, delivery_date="2026-08-24", is_last_call=1)
 
 		self.assertEqual(str(self.stored_first(deal)), "2026-08-17 00:00:00")
-		self.assertTrue(str(deal.custom_last_coaching_call_date).startswith("2026-08-24"))
+		self.assertIsNone(self.stored_last(deal))
+
+	def test_the_action_never_touches_a_populated_last_date(self):
+		# A Last date someone typed in by hand survives the first call and every later one,
+		# byte for byte, whatever Delivery Date the coach submits (TXB-262).
+		deal = self.make_deal(custom_last_coaching_call_date="2026-01-05 10:00:00")
+		before = self.stored_last(deal)
+
+		self.log_call(deal, delivery_date="2026-08-17", next_call_date="2026-08-24")
+		self.assertEqual(self.stored_last(deal), before)
+
+		self.log_call(deal, delivery_date="2026-08-24", is_last_call=1)
+		self.assertEqual(self.stored_last(deal), before)
+		self.assertEqual(deal.custom_last_coaching_call_date, before)
+		# The last-call flag is a separate field and still answers the coach's tick.
+		self.assertEqual(deal.custom_last_coaching_call, "Yes")
+		self.assertEqual(str(self.stored_first(deal)), "2026-08-17 00:00:00")
 
 	def test_a_manually_cleared_first_date_is_not_repopulated_by_the_action(self):
 		deal = self.log_call(self.make_deal(), delivery_date="2026-08-17", next_call_date="2026-08-24")
@@ -409,7 +429,7 @@ class TestFirstCoachingCallDate(FrappeTestCase):
 
 		self.log_call(deal, delivery_date="2026-08-24", is_last_call=1)
 		self.assertIsNone(self.stored_first(deal))
-		self.assertTrue(str(deal.custom_last_coaching_call_date).startswith("2026-08-24"))
+		self.assertIsNone(self.stored_last(deal))
 
 	def test_a_rejected_call_changes_neither_date(self):
 		from crm.txb.pipelines.delivering_coaching import validate_log_coaching_call
@@ -422,7 +442,7 @@ class TestFirstCoachingCallDate(FrappeTestCase):
 
 		deal.reload()
 		self.assertIsNone(self.stored_first(deal))
-		self.assertIsNone(deal.custom_last_coaching_call_date)
+		self.assertIsNone(self.stored_last(deal))
 
 	def test_the_migration_renders_the_canonical_field_in_the_deal_layout(self):
 		import json

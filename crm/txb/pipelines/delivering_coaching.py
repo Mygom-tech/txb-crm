@@ -289,8 +289,6 @@ def log_coaching_call(deal, data):
 		deal.custom_last_coaching_call = "Yes"
 	if data.get("next_call_date"):
 		deal.custom_next_call_date = data["next_call_date"]
-	if data.get("delivery_date"):
-		deal.custom_last_coaching_call_date = data["delivery_date"]
 
 	# Taken before the deal's existing call notes are counted, so two concurrent first calls
 	# queue here and the second one counts the note the first inserted (TXB-261).
@@ -336,7 +334,9 @@ def log_coaching_call(deal, data):
 	# same for direct inserts, but only once the note metadata columns exist -- during migration
 	# skew that guard would otherwise turn the official action into a silent no-op. Both paths
 	# take the same row lock and apply the same guards under it, so whichever ran first wins and
-	# the other writes nothing. Last Coaching Call Date above is independent and always updates.
+	# the other writes nothing. Last Coaching Call Date is never touched: the product owner asked
+	# for it to stay a manual field, so whatever it holds -- including nothing -- is left alone
+	# (TXB-262). The separate Yes/No "last coaching call" flag above is unrelated to it.
 	seed_first_call_date_from_action(
 		deal.name, note.name, data.get("delivery_date"), _submitted_status(data)
 	)
