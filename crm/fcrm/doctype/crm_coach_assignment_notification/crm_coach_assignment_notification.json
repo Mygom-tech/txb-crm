@@ -1,0 +1,167 @@
+{
+ "actions": [],
+ "autoname": "field:event_key",
+ "creation": "2026-09-28 10:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "event_key",
+  "deal",
+  "mode",
+  "column_break_assignment",
+  "intended_user",
+  "effective_user",
+  "assigned_by",
+  "assigned_at",
+  "section_break_email",
+  "email_status",
+  "email_sent_at",
+  "email_error",
+  "column_break_slack",
+  "slack_status",
+  "slack_sent_at",
+  "slack_error"
+ ],
+ "fields": [
+  {
+   "fieldname": "event_key",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Event Key",
+   "read_only": 1,
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "deal",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Opportunity",
+   "options": "CRM Deal",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "mode",
+   "fieldtype": "Select",
+   "label": "Mode",
+   "options": "Disabled\nTest redirect\nLive",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_assignment",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "intended_user",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Intended Coach",
+   "options": "User",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "effective_user",
+   "fieldtype": "Link",
+   "label": "Effective Recipient",
+   "options": "User",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "assigned_by",
+   "fieldtype": "Link",
+   "label": "Assigned By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "assigned_at",
+   "fieldtype": "Datetime",
+   "label": "Assigned At",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_break_email",
+   "fieldtype": "Section Break",
+   "label": "Delivery"
+  },
+  {
+   "default": "Pending",
+   "fieldname": "email_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Email Status",
+   "options": "Pending\nSent\nFailed\nSkipped",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "email_sent_at",
+   "fieldtype": "Datetime",
+   "label": "Email Sent At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "email_error",
+   "fieldtype": "Small Text",
+   "label": "Email Error",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_slack",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Pending",
+   "fieldname": "slack_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Slack Status",
+   "options": "Pending\nSent\nFailed\nSkipped",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "slack_sent_at",
+   "fieldtype": "Datetime",
+   "label": "Slack Sent At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "slack_error",
+   "fieldtype": "Small Text",
+   "label": "Slack Error",
+   "read_only": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-09-28 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "FCRM",
+ "name": "CRM Coach Assignment Notification",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager"
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

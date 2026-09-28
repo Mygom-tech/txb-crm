@@ -10,6 +10,10 @@ from crm.domain_enrichment.install import seed_default_rules_and_mappings
 from crm.fcrm.doctype.crm_dashboard.crm_dashboard import create_default_manager_dashboard
 from crm.fcrm.doctype.crm_products.crm_products import create_product_details_script
 from crm.txb.call_log_status import reconcile_call_log_status_options
+from crm.txb.delivery_coach_notifications import (
+	ensure_assignment_email_template,
+	ensure_notification_settings,
+)
 from crm.txb.registration_setup import ensure_registration_setup
 
 
@@ -40,6 +44,9 @@ def after_install(force=False):
 	# Clear any drifted CRM Call Log `status` options override so a manually logged "No Answer"
 	# dial passes Frappe's Select validation. Idempotent; re-asserted on every migrate too.
 	reconcile_call_log_status_options()
+	# Delivery Coach assignment notifications (TXB-269): Disabled until an operator opts in.
+	ensure_notification_settings()
+	ensure_assignment_email_template()
 	frappe.db.commit()
 
 
