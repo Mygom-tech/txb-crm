@@ -301,6 +301,9 @@ doc_events = {
 			# save, so a reminder is never closed for a write that did not commit.
 			"crm.txb.first_call_reminders.settle_activation_cycle",
 			"crm.txb.first_call_reminders.complete_reminder_on_first_call_date",
+			# A newly assigned Delivery Coach is emailed and Slacked once, by a job queued after
+			# commit so delivery can never delay or roll back the save (TXB-270).
+			"crm.txb.delivery_coach_assignment.queue_assignment_notification",
 		],
 	},
 	"Sales Order": {
@@ -388,7 +391,8 @@ before_tests = "crm.tests.before_tests"
 # Ignore links to specified DocTypes when deleting documents
 # -----------------------------------------------------------
 
-ignore_links_on_delete = ["Failed Lead Sync Log"]
+# The coach assignment notification ledger is history; it must not block deleting a Deal (TXB-270).
+ignore_links_on_delete = ["Failed Lead Sync Log", "CRM Coach Assignment Notification"]
 
 # Request Events
 # ----------------
