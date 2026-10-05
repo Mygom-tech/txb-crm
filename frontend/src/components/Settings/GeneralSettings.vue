@@ -100,15 +100,71 @@
           />
         </div>
       </div>
+      <template v-if="isAdmin()">
+        <div class="h-px border-t mx-2 border-outline-gray-modals" />
+        <div class="flex gap-4 items-center justify-between py-3 px-2">
+          <div class="flex flex-col">
+            <div class="text-p-base font-medium text-ink-gray-7 truncate">
+              {{ __('Contact inactivity interval') }}
+            </div>
+            <div class="text-p-sm text-ink-gray-5">
+              {{
+                __(
+                  'Remind a Contact owner after this many minutes without human contact (0 to {0}). 0 or blank means {1}.',
+                  [MAX_INTERVAL_MINUTES, intervalLabel(0)],
+                )
+              }}
+            </div>
+            <div v-if="intervalError" class="text-p-sm text-ink-red-4">
+              {{ intervalError }}
+            </div>
+          </div>
+          <div class="flex shrink-0 items-center gap-2">
+            <FormControl
+              v-model="intervalDraft"
+              type="text"
+              inputmode="numeric"
+              class="w-32"
+              :placeholder="__('Minutes')"
+              data-test="inactivity-interval"
+            />
+            <Button
+              :label="__('Save')"
+              variant="solid"
+              :disabled="!intervalDirty"
+              :loading="settings.save.loading"
+              @click="saveInterval"
+            />
+          </div>
+        </div>
+        <div class="h-px border-t mx-2 border-outline-gray-modals" />
+        <OwnerExceptionsList />
+      </template>
     </div>
   </div>
 </template>
 
 <script setup>
+import OwnerExceptionsList from '@/components/ContactInactivity/OwnerExceptionsList.vue'
+import {
+  MAX_INTERVAL_MINUTES,
+  intervalLabel,
+  useIntervalDraft,
+} from '@/components/ContactInactivity/contactInactivity'
 import { getSettings } from '@/stores/settings'
-import { FormControl, Switch, toast } from 'frappe-ui'
+import { usersStore } from '@/stores/users'
+import { Button, FormControl, Switch, toast } from 'frappe-ui'
 
 const { _settings: settings } = getSettings()
+const { isAdmin } = usersStore()
+
+// Edited as a draft; nothing reaches FCRM Settings until Save is clicked.
+const {
+  draft: intervalDraft,
+  error: intervalError,
+  dirty: intervalDirty,
+  save: submitInterval,
+} = useIntervalDraft(settings)
 
 const timestampFormatOptions = [
   { label: __('Relative'), value: 'Relative' },
@@ -130,6 +186,16 @@ function toggle(settingKey) {
 function save() {
   settings.save.submit(null, {
     onSuccess: () => toast.success(__('Setting updated successfully')),
+  })
+}
+
+function saveInterval() {
+  submitInterval({
+    onSuccess: () => toast.success(__('Setting updated successfully')),
+    onError: (err) => {
+      settings.reload()
+      toast.error(err.messages?.[0] || __('Could not save the interval'))
+    },
   })
 }
 </script>

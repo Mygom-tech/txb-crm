@@ -120,6 +120,7 @@
           </template>
         </FileUploader>
       </div>
+      <ContactInactivityStatus :contact="contactId" />
       <div
         v-if="sections.data"
         class="flex flex-1 flex-col justify-between overflow-hidden"
@@ -242,6 +243,7 @@ import NoteIcon from '@/components/Icons/NoteIcon.vue'
 import DealsListView from '@/components/ListViews/DealsListView.vue'
 import Activities from '@/components/Activities/Activities.vue'
 import ContactNotes from '@/components/ContactNotes.vue'
+import ContactInactivityStatus from '@/components/ContactInactivity/ContactInactivityStatus.vue'
 import CustomActions from '@/components/CustomActions.vue'
 import RequestOwnershipModal from '@/components/Modals/RequestOwnershipModal.vue'
 import CreateDealFromContactModal from '@/components/Modals/CreateDealFromContactModal.vue'

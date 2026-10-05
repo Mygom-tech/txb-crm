@@ -127,6 +127,7 @@
       </template>
       <template #tab-panel="{ tab }">
         <div v-if="tab.name == 'Details'">
+          <ContactInactivityStatus :contact="contactId" />
           <div
             v-if="sections.data"
             class="flex flex-1 flex-col justify-between overflow-hidden"
@@ -198,6 +199,7 @@ import NoteIcon from '@/components/Icons/NoteIcon.vue'
 import DealsListView from '@/components/ListViews/DealsListView.vue'
 import Activities from '@/components/Activities/Activities.vue'
 import ContactNotes from '@/components/ContactNotes.vue'
+import ContactInactivityStatus from '@/components/ContactInactivity/ContactInactivityStatus.vue'
 import { validateIsImageFile } from '@/utils'
 import { useContactFields } from '@/composables/useContactFields'
 import { timestampCell } from '@/composables/useTimelinePreferences'
