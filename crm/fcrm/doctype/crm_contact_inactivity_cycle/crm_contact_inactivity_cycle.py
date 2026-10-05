@@ -27,8 +27,11 @@ class CRMContactInactivityCycle(Document):
 		cycle_no: DF.Int
 		due_at: DF.Datetime
 		ended_at: DF.Datetime | None
+		exception: DF.Literal["", "Unowned", "Disabled Owner"]
+		exception_at: DF.Datetime | None
 		live_key: DF.Data | None
 		reminded_at: DF.Datetime | None
+		reminder_task: DF.Link | None
 		status: DF.Literal["Open", "Due", "Reminded", "Closed", "Settled"]
 	# end: auto-generated types
 
