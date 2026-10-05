@@ -115,7 +115,8 @@ class TestCoachingCallRecap(FrappeTestCase):
 
 	# ac-1
 	def test_an_omitted_or_ticked_send_recap_queues_one_recap_to_the_primary_email(self):
-		for extra in ({}, {"send_recap": 1}, {"send_recap": None}):
+		ticked = ({}, {"send_recap": 1}, {"send_recap": None}, {"send_recap": "true"}, {"send_recap": "Yes"})
+		for extra in ticked:
 			with self.subTest(extra=extra):
 				deal, contact, email = self.make_deal_with_email()
 
@@ -135,19 +136,30 @@ class TestCoachingCallRecap(FrappeTestCase):
 
 	# ac-2
 	def test_an_unticked_send_recap_records_an_opt_out_without_a_recipient(self):
-		deal = self.make_deal()
+		for value in (0, "0", "false", "no"):
+			with self.subTest(send_recap=value):
+				deal = self.make_deal()
 
-		result = self.log_call(deal, send_recap=0)
+				result = self.log_call(deal, send_recap=value)
 
-		self.assertEqual(self.count(NOTE_DOCTYPE, deal), 1)
-		recap = self.recap(result["recap"]["name"])
-		self.assertEqual(result["recap"]["status"], STATUS_OPTED_OUT)
-		self.assertEqual(recap.status, STATUS_OPTED_OUT)
-		self.assertEqual(recap.consent, 0)
-		self.assertEqual(recap.consent_by, "Administrator")
-		self.assertTrue(recap.consent_at)
-		self.assertFalse(recap.recipient_email)
-		self.assertEqual(recap.note, result["note"])
+				self.assertEqual(self.count(NOTE_DOCTYPE, deal), 1)
+				recap = self.recap(result["recap"]["name"])
+				self.assertEqual(result["recap"]["status"], STATUS_OPTED_OUT)
+				self.assertEqual(recap.status, STATUS_OPTED_OUT)
+				self.assertEqual(recap.consent, 0)
+				self.assertEqual(recap.consent_by, "Administrator")
+				self.assertTrue(recap.consent_at)
+				self.assertFalse(recap.recipient_email)
+				self.assertEqual(recap.note, result["note"])
+
+	def test_an_unrecognized_send_recap_is_refused_rather_than_read_as_an_opt_out(self):
+		deal, _contact, _email = self.make_deal_with_email()
+
+		with self.assertRaises(frappe.ValidationError):
+			self.log_call(deal, send_recap="maybe")
+
+		self.assertEqual(self.count(NOTE_DOCTYPE, deal), 0)
+		self.assertEqual(self.count(RECAP_DOCTYPE, deal), 0)
 
 	# ac-3
 	def test_a_ticked_send_recap_without_a_usable_email_is_refused_and_writes_nothing(self):
@@ -176,10 +188,14 @@ class TestCoachingCallRecap(FrappeTestCase):
 		submission_id = frappe.generate_hash(length=20)
 
 		first = self.log_call(deal, submission_id=submission_id)
+		modified = frappe.db.get_value(DEAL_DOCTYPE, deal.name, "modified")
 		second = self.log_call(deal, submission_id=submission_id, call_notes="Edited resubmission")
 
 		self.assertEqual(second["note"], first["note"])
 		self.assertEqual(second["recap"], first["recap"])
+		self.assertNotIn("_txb_skip_save", second)
+		# The replay does not save the deal again.
+		self.assertEqual(frappe.db.get_value(DEAL_DOCTYPE, deal.name, "modified"), modified)
 		self.assertEqual(self.count(NOTE_DOCTYPE, deal), 1)
 		self.assertEqual(self.count(RECAP_DOCTYPE, deal), 1)
 		self.assertEqual(self.next_call_tasks(deal), 1)

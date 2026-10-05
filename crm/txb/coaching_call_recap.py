@@ -9,7 +9,7 @@ so a Coaching Call Note inserted or edited any other way records no recap.
 
 import frappe
 from frappe import _
-from frappe.utils import cint, escape_html, getdate, now_datetime, validate_email_address
+from frappe.utils import escape_html, getdate, now_datetime, validate_email_address
 
 from crm.fcrm.doctype.crm_deal.crm_deal import get_effective_primary_contact
 
@@ -26,10 +26,29 @@ class RecapRecipientMissing(frappe.ValidationError):
 	"""A recap was requested but the Deal has no usable primary client email."""
 
 
+SEND_RECAP_YES = ("1", "true", "yes")
+SEND_RECAP_NO = ("0", "false", "no")
+
+
 def wants_recap(data: dict) -> bool:
-	"""Whether the coach asked for the recap; an omitted or null `send_recap` means yes."""
+	"""Whether the coach asked for the recap; an omitted or null `send_recap` means yes.
+
+	Anything other than 1/0, true/false or yes/no is refused rather than read as an opt-out.
+	"""
 	value = data.get("send_recap")
-	return value is None or value == "" or bool(cint(value))
+	if value is None or value == "":
+		return True
+	if isinstance(value, int | float):
+		return bool(value)
+	text = str(value).strip().lower()
+	if text in SEND_RECAP_YES:
+		return True
+	if text in SEND_RECAP_NO:
+		return False
+	frappe.throw(
+		_("Invalid send_recap value {0}: use 1/0, true/false or yes/no.").format(frappe.bold(value)),
+		frappe.ValidationError,
+	)
 
 
 def require_recipient(deal, data: dict) -> tuple[str | None, str | None]:

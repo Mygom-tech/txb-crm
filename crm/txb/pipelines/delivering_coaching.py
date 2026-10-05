@@ -46,6 +46,10 @@ from crm.txb.pipelines.common import (
 import frappe
 from frappe.utils import getdate
 
+# Internal handler-result key: the handler left the deal untouched, so `run_action` skips its
+# save and the deal's save hooks do not run again (TXB-273 replay).
+SKIP_SAVE = "_txb_skip_save"
+
 INACTIVE_REASONS = (
 	"Coaching completed",
 	"Client withdrew",
@@ -293,16 +297,18 @@ def log_coaching_call(deal, data):
 
 	Each call also records one recap -- queued for the client by default, or opted out -- and
 	returns `{note, recap: {name, status}}`. A resubmitted `submission_id` returns the call it
-	first recorded and writes nothing more (TXB-273).
+	first recorded and writes nothing more, not even the deal save (TXB-273).
 	"""
 	# Taken before anything is read or written, so two concurrent first calls queue here and the
 	# second one counts the note the first inserted (TXB-261), and a resubmission queued behind its
-	# first attempt sees the recap that attempt recorded (TXB-273).
+	# first attempt sees the recap that attempt recorded (TXB-273). `execute_action` already holds
+	# it from before the deal was loaded; re-taking it here is a no-op there and keeps direct
+	# callers serialized.
 	lock_deal_row(deal.name)
 
 	replayed = find_submission(deal.name, data.get("submission_id"))
 	if replayed:
-		return recap_result(replayed.note, replayed.name, replayed.status)
+		return {**recap_result(replayed.note, replayed.name, replayed.status), SKIP_SAVE: True}
 
 	# Refused before any write or deal change, so a recap with nowhere to go leaves nothing behind.
 	recipient = require_recipient(deal, data)
