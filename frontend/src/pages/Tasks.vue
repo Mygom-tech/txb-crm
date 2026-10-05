@@ -123,22 +123,13 @@
       <div class="flex gap-2 items-center justify-between">
         <div>
           <Button
-            v-if="getRow(itemName, 'reference_docname').label"
+            v-if="reference(itemName).route"
             class="-ml-2"
             variant="ghost"
             size="sm"
-            :label="
-              getRow(itemName, 'reference_doctype').label == 'CRM Deal'
-                ? __('Deal')
-                : __('Lead')
-            "
+            :label="reference(itemName).label"
             :iconRight="ArrowUpRightIcon"
-            @click.stop="
-              redirect(
-                getRow(itemName, 'reference_doctype').label,
-                getRow(itemName, 'reference_docname').label,
-              )
-            "
+            @click.stop="router.push(reference(itemName).route)"
           />
         </div>
         <Dropdown
@@ -195,6 +186,7 @@ import ViewControls from '@/components/ViewControls.vue'
 import TasksListView from '@/components/ListViews/TasksListView.vue'
 import EmptyState from '@/components/ListViews/EmptyState.vue'
 import KanbanView from '@/components/Kanban/KanbanView.vue'
+import { taskReference } from '@/components/ContactInactivity/taskReference'
 import { useDoctypeModal } from '@/composables/doctypeModal'
 import { getMeta } from '@/stores/meta'
 import { usersStore } from '@/stores/users'
@@ -377,14 +369,11 @@ async function deleteTask(name) {
   })
 }
 
-function redirect(doctype, docname) {
-  if (!docname) return
-  let name = doctype == 'CRM Deal' ? 'Deal' : 'Lead'
-  let params = { leadId: docname }
-  if (name == 'Deal') {
-    params = { dealId: docname }
-  }
-  router.push({ name: name, params: params })
+function reference(itemName) {
+  return taskReference(
+    getRow(itemName, 'reference_doctype').label,
+    getRow(itemName, 'reference_docname').label,
+  )
 }
 
 const openTaskFromURL = () => {
