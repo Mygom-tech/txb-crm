@@ -206,6 +206,7 @@ class TestCoachingCallReconciliation(FrappeTestCase):
 				"delivery_date": "2026-08-17",
 				"topic": "Leadership styles",
 				"is_last_call": 1,
+				"send_recap": 0,
 			},
 		)
 
@@ -332,7 +333,9 @@ class TestFirstCoachingCallDate(FrappeTestCase):
 		from crm.txb.pipelines.delivering_coaching import log_coaching_call
 
 		deal = self.make_deal()
-		log_coaching_call(deal, {"call_status": "Completed", "delivery_date": "2026-08-17"})
+		log_coaching_call(
+			deal, {"call_status": "Completed", "delivery_date": "2026-08-17", "send_recap": 0}
+		)
 		deal.save(ignore_permissions=True)
 		deal.reload()
 		self.assertEqual(str(deal.get(self.FIRST)), "2026-08-17 00:00:00")
@@ -372,7 +375,7 @@ class TestFirstCoachingCallDate(FrappeTestCase):
 		"""Run the real Log Coaching Call action and persist the deal exactly as the API does."""
 		from crm.txb.pipelines.delivering_coaching import log_coaching_call
 
-		log_coaching_call(deal, {"call_status": "Completed", **data})
+		log_coaching_call(deal, {"call_status": "Completed", "send_recap": 0, **data})
 		deal.save(ignore_permissions=True)
 		deal.reload()
 		return deal

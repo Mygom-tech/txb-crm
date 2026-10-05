@@ -1,0 +1,180 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-10-05 10:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "submission_id",
+  "deal",
+  "note",
+  "revision_of",
+  "column_break_consent",
+  "consent",
+  "consent_by",
+  "consent_at",
+  "created_by",
+  "section_break_recipient",
+  "recipient_contact",
+  "recipient_email",
+  "content_snapshot",
+  "section_break_delivery",
+  "status",
+  "attempts",
+  "column_break_delivery",
+  "sent_at",
+  "last_error"
+ ],
+ "fields": [
+  {
+   "fieldname": "submission_id",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Submission ID",
+   "read_only": 1,
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "deal",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Opportunity",
+   "options": "CRM Deal",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "note",
+   "fieldtype": "Link",
+   "label": "Note",
+   "options": "FCRM Note",
+   "read_only": 1
+  },
+  {
+   "fieldname": "revision_of",
+   "fieldtype": "Link",
+   "label": "Revision Of",
+   "options": "CRM Coaching Call Recap",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_consent",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "fieldname": "consent",
+   "fieldtype": "Check",
+   "label": "Send Recap",
+   "read_only": 1
+  },
+  {
+   "fieldname": "consent_by",
+   "fieldtype": "Link",
+   "label": "Consent By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "consent_at",
+   "fieldtype": "Datetime",
+   "label": "Consent At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "created_by",
+   "fieldtype": "Link",
+   "label": "Created By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_recipient",
+   "fieldtype": "Section Break",
+   "label": "Recap"
+  },
+  {
+   "fieldname": "recipient_contact",
+   "fieldtype": "Link",
+   "label": "Recipient Contact",
+   "options": "Contact",
+   "read_only": 1
+  },
+  {
+   "fieldname": "recipient_email",
+   "fieldtype": "Data",
+   "label": "Recipient Email",
+   "options": "Email",
+   "read_only": 1
+  },
+  {
+   "fieldname": "content_snapshot",
+   "fieldtype": "JSON",
+   "label": "Content Snapshot",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_delivery",
+   "fieldtype": "Section Break",
+   "label": "Delivery"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "opted_out\nqueued\nsent\nfailed",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "attempts",
+   "fieldtype": "Int",
+   "label": "Attempts",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_delivery",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "sent_at",
+   "fieldtype": "Datetime",
+   "label": "Sent At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_error",
+   "fieldtype": "Small Text",
+   "label": "Last Error",
+   "read_only": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-10-05 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "FCRM",
+ "name": "CRM Coaching Call Recap",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager"
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

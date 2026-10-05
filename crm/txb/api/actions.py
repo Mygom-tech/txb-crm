@@ -18,9 +18,11 @@ from crm.txb.constants import (
 	STATUS_ACTIVE,
 )
 from crm.txb import meetings
+from crm.txb.coaching_calls import lock_deal_row
 from crm.txb.permissions import admin_only_fields, can_change_status, is_admin
 from crm.txb.pipelines.actions import find_action, get_actions, resolve_to_state
 from crm.txb.pipelines.delivering_coaching import (
+	SKIP_SAVE,
 	apply_readiness_patch,
 	missing_activation_readiness,
 	missing_readiness_inputs,
@@ -169,14 +171,20 @@ def execute_action(deal: str, action: str, data: str | dict | None = None) -> di
 	Everything is applied to one in-memory document and saved once, so a failure part-way
 	leaves nothing behind. The old wizard fired several sequential requests and could
 	half-apply an action if one of them failed.
+
+	A handler may return extra response keys -- Log Coaching Call returns its `note` and
+	`recap` (TXB-273) -- which are merged into the result.
 	"""
 	frappe.has_permission(DEAL_DOCTYPE, "write", deal, throw=True)
 
+	# Locked before the deal is loaded, so a request that queued behind another on this deal
+	# loads what that one saved rather than failing its own save on a stale timestamp.
+	lock_deal_row(deal)
 	doc = frappe.get_doc(DEAL_DOCTYPE, deal)
 	spec = checked_action(doc, action)
-	run_action(doc, spec, parse_data(data))
+	result = run_action(doc, spec, parse_data(data))
 
-	return {"deal": doc.name, "status": doc.status}
+	return {"deal": doc.name, "status": doc.status, **(result or {})}
 
 
 def checked_action(doc, action: str) -> dict:
@@ -209,7 +217,12 @@ def checked_action(doc, action: str) -> dict:
 
 
 def run_action(doc, spec: dict, values: dict):
-	"""Validate, apply and save one action on the in-memory `doc`, as a single save."""
+	"""Validate, apply and save one action on the in-memory `doc`, as a single save.
+
+	Returns whatever the handler returned (None for most actions). A handler that changed
+	nothing -- a replayed Log Coaching Call -- marks its result with `SKIP_SAVE`, and the deal
+	is then not saved, so its save hooks do not run again.
+	"""
 	validate_required(spec, values)
 
 	# Conditional, action-specific rules (e.g. Next Coaching Call Date is required unless
@@ -226,15 +239,19 @@ def run_action(doc, spec: dict, values: dict):
 	# cannot leave it armed for the rest of the request.
 	frappe.flags.txb_action = doc.name
 	try:
-		spec["handler"](doc, values)
+		result = spec["handler"](doc, values)
+		skip_save = isinstance(result, dict) and result.pop(SKIP_SAVE, False)
 
 		to_state = resolve_to_state(spec, values)
 		if to_state:
 			doc.status = to_state
 
-		doc.save()
+		if not skip_save:
+			doc.save()
 	finally:
 		frappe.flags.txb_action = None
+
+	return result
 
 
 @frappe.whitelist()

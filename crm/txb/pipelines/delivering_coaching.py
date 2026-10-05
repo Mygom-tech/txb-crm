@@ -10,10 +10,15 @@ move the status. See crm/txb/permissions.py for the rule that enforces it.
 """
 
 from crm.txb import human_contact
+from crm.txb.coaching_call_recap import (
+	create_recap,
+	find_submission,
+	recap_result,
+	require_recipient,
+)
 from crm.txb.coaching_calls import (
 	CALL_STATUSES,
 	count_completed_calls,
-	lock_deal_row,
 	seed_first_call_date_from_action,
 )
 from crm.txb.constants import (
@@ -40,6 +45,10 @@ from crm.txb.pipelines.common import (
 
 import frappe
 from frappe.utils import getdate
+
+# Internal handler-result key: the handler left the deal untouched, so `run_action` skips its
+# save and the deal's save hooks do not run again (TXB-273 replay).
+SKIP_SAVE = "_txb_skip_save"
 
 INACTIVE_REASONS = (
 	"Coaching completed",
@@ -285,15 +294,26 @@ def log_coaching_call(deal, data):
 	"""The only Delivering Coaching action that does not move the status.
 
 	That is why coaches keep it: logging a call is their daily work and changes no state.
+
+	Each call also records one recap -- queued for the client by default, or opted out -- and
+	returns `{note, recap: {name, status}}`. A resubmitted `submission_id` returns the call it
+	first recorded and writes nothing more, not even the deal save (TXB-273).
 	"""
+	# Runs under the deal row lock `execute_action` takes before it loads the deal, so two
+	# concurrent first calls queue there and the second one counts the note the first inserted
+	# (TXB-261), a resubmission queued behind its first attempt sees the recap that attempt
+	# recorded (TXB-273), and neither saves a deal it loaded before the other's save.
+	replayed = find_submission(deal.name, data.get("submission_id"))
+	if replayed:
+		return {**recap_result(replayed.note, replayed.name, replayed.status), SKIP_SAVE: True}
+
+	# Refused before any write or deal change, so a recap with nowhere to go leaves nothing behind.
+	recipient = require_recipient(deal, data)
+
 	if data.get("is_last_call"):
 		deal.custom_last_coaching_call = "Yes"
 	if data.get("next_call_date"):
 		deal.custom_next_call_date = data["next_call_date"]
-
-	# Taken before the deal's existing call notes are counted, so two concurrent first calls
-	# queue here and the second one counts the note the first inserted (TXB-261).
-	lock_deal_row(deal.name)
 
 	call_number = (
 		frappe.db.count(
@@ -329,6 +349,7 @@ def log_coaching_call(deal, data):
 			),
 		},
 	)
+	recap = create_recap(deal, note, data, recipient, note.title)
 
 	# A Completed call is human contact with the coached client; any other status records none
 	# (TXB-277). The Note is the source, so a later status edit can re-sync and void it.
@@ -366,6 +387,8 @@ def log_coaching_call(deal, data):
 			"Follow up for next coaching call",
 			assigned_to=deal.custom_assigned_coach,
 		)
+
+	return recap_result(note.name, recap.name, recap.status)
 
 
 def _submitted_status(data) -> str | None:
@@ -524,6 +547,8 @@ DELIVERING_COACHING_ACTIONS = (
 				# TXB-238: same business-hour dropdown start as first_call_date above.
 				"time_options_start": "07:00",
 			},
+			# TXB-273: ticked by default; unticking records an opted-out recap instead of a send.
+			{"fieldname": "send_recap", "label": "Email the recap to the client", "fieldtype": "Check", "default": 1},
 		],
 	},
 	{

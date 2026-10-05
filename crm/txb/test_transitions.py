@@ -543,6 +543,7 @@ class TestLogCoachingCall(FrappeTestCase):
 			deal.name,
 			"log_coaching_call",
 			{
+				"send_recap": 0,
 				"call_status": "Completed",
 				"delivery_date": "2026-08-17",
 				"topic": "Leadership styles",
@@ -586,6 +587,7 @@ class TestLogCoachingCall(FrappeTestCase):
 			deal.name,
 			"log_coaching_call",
 			{
+				"send_recap": 0,
 				"call_status": "Completed",
 				"delivery_date": "2026-08-17",
 				"topic": "Leadership styles",
@@ -613,6 +615,7 @@ class TestLogCoachingCall(FrappeTestCase):
 				deal.name,
 				"log_coaching_call",
 				{
+					"send_recap": 0,
 					"call_status": "Completed",
 					"delivery_date": "2026-08-17",
 					"topic": topic,
@@ -650,6 +653,7 @@ class TestLogCoachingCall(FrappeTestCase):
 			deal.name,
 			"log_coaching_call",
 			{
+				"send_recap": 0,
 				"call_status": "Completed",
 				"delivery_date": "2026-08-17",
 				"topic": "Leadership styles",
@@ -722,6 +726,7 @@ class TestLogCoachingCall(FrappeTestCase):
 			deal.name,
 			"log_coaching_call",
 			{
+				"send_recap": 0,
 				"call_status": "Completed",
 				"delivery_date": "2026-08-17",
 				"topic": "Leadership styles",
@@ -750,6 +755,7 @@ class TestLogCoachingCall(FrappeTestCase):
 			deal.name,
 			"log_coaching_call",
 			{
+				"send_recap": 0,
 				"call_status": "Completed",
 				"delivery_date": "2026-08-17",
 				"topic": "Wrap up",
