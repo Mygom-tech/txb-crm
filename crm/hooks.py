@@ -243,6 +243,10 @@ doc_events = {
 			"crm.txb.first_call_reminders.validate_reminder_delay",
 		],
 	},
+	"CRM Coaching Call Recap": {
+		# A recap inserted queued is emailed by a job queued after commit (TXB-274).
+		"after_insert": ["crm.txb.coaching_call_recap_dispatch.queue_new_recap"],
+	},
 	"ToDo": {
 		"after_insert": ["crm.api.todo.after_insert"],
 		"on_update": ["crm.api.todo.on_update"],
@@ -354,7 +358,11 @@ scheduler_events = {
 	"monthly_long": ["crm.lead_syncing.background_sync.sync_leads_from_sources_monthly"],
 	"cron": {
 		"*/5 * * * *": ["crm.lead_syncing.background_sync.sync_leads_from_sources_5_minutes"],
-		"*/10 * * * *": ["crm.lead_syncing.background_sync.sync_leads_from_sources_10_minutes"],
+		"*/10 * * * *": [
+			"crm.lead_syncing.background_sync.sync_leads_from_sources_10_minutes",
+			# Re-queues Coaching Call recaps whose send job was lost (TXB-274).
+			"crm.txb.coaching_call_recap_dispatch.sweep_stale_recaps",
+		],
 		"*/15 * * * *": ["crm.lead_syncing.background_sync.sync_leads_from_sources_15_minutes"],
 		# Cadence preserved from the Server Scripts these replaced.
 		"0 9 * * *": ["crm.txb.tasks.reminders.stale_session_run_alert"],
