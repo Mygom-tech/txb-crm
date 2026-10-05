@@ -79,6 +79,7 @@
           :tabs="tabs"
           @beforeSave="beforeStatusChange"
           @afterSave="reloadResources"
+          @createCoachingNote="onCreateCoachingNote"
         />
       </template>
     </Tabs>
@@ -434,7 +435,11 @@ import {
   applyPipelineDependencies,
   applyPipelineVisibility,
 } from '@/utils/pipelineLayout'
-import { actionOptions, runAction } from '@/utils/takeAction'
+import {
+  actionOptions,
+  coachingNoteAction,
+  runAction,
+} from '@/utils/takeAction'
 import {
   completeActivationReadiness,
   isActivationStatusChange,
@@ -667,6 +672,21 @@ async function onTakeAction(action, defaults) {
   } catch (error) {
     toast.error(error.messages?.[0] || __('Could not complete the action'))
   }
+}
+
+// TXB-275: the Coaching Notes create control opens Log Coaching Call, the only writer of a
+// Coaching Call Note, through the same path as the Take Action menu.
+function onCreateCoachingNote() {
+  const action = coachingNoteAction(
+    availableActions.value,
+    tabs.value[tabIndex.value]?.name,
+    doc.value?.pipeline_type,
+  )
+  if (!action) {
+    toast.error(__('Log Coaching Call is not available for this deal right now'))
+    return
+  }
+  onTakeAction(action)
 }
 
 // The available actions are filtered by the deal's status **on the server**, so they may

@@ -35,20 +35,16 @@
       </template>
       <span>{{ __('Schedule an Event') }}</span>
     </Button>
-    <!-- Coaching Call Notes (Delivering Coaching pipeline) keep the Notes module readable but do
-         not yet accept new submissions (TXB-133): the create control is present but disabled and
-         labelled "Soon" so the affordance is discoverable without implementing submission. -->
-    <Tooltip
+    <!-- Coaching Call Notes (Delivering Coaching pipeline) are written by Log Coaching Call
+         (TXB-275): the deal page opens that action, so the note, recap and follow-up stay one
+         server-checked submission rather than a free-form note. -->
+    <Button
       v-else-if="title == 'Notes' && isCoachingNotes"
-      :text="__('Coaching Call Note submission is coming soon')"
-    >
-      <Button
-        variant="solid"
-        :label="__('Soon')"
-        iconLeft="plus"
-        :disabled="true"
-      />
-    </Tooltip>
+      variant="solid"
+      :label="__('New Coaching Note')"
+      iconLeft="plus"
+      @click="emit('createCoachingNote')"
+    />
     <Button
       v-else-if="title == 'Notes'"
       variant="solid"
@@ -109,7 +105,7 @@ import { globalStore } from '@/stores/global'
 import { whatsappEnabled } from '@/composables/whatsapp'
 import { callEnabled } from '@/composables/telephony'
 import { isCoachingPipeline } from '@/utils/dealPresentation'
-import { Dropdown, Tooltip } from 'frappe-ui'
+import { Dropdown } from 'frappe-ui'
 import { computed, h } from 'vue'
 
 const props = defineProps({
@@ -120,11 +116,13 @@ const props = defineProps({
   whatsappBox: { type: Object, default: () => ({}) },
 })
 
+// The deal page owns the available actions, so it resolves and runs Log Coaching Call.
+const emit = defineEmits(['createCoachingNote'])
+
 const { makeCall } = globalStore()
 
-// Coaching Call Notes live in the Notes module of a Delivering Coaching Opportunity; their
-// submission is intentionally not implemented in this phase (TXB-133), so the create control is
-// disabled and labelled "Soon" rather than removed.
+// Coaching Call Notes live in the Notes module of a Delivering Coaching Opportunity and are
+// created through Log Coaching Call rather than the generic note modal.
 const isCoachingNotes = computed(() => isCoachingPipeline(props.doc?.pipeline_type))
 
 const tabIndex = defineModel({ type: Number })
