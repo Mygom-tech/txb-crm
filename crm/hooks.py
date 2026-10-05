@@ -406,6 +406,8 @@ ignore_links_on_delete = [
 	"Failed Lead Sync Log",
 	"CRM Coach Assignment Notification",
 	"CRM Human Contact Event",
+	# Every Contact has an inactivity cycle; it must not block deleting the Contact (TXB-278).
+	"CRM Contact Inactivity Cycle",
 ]
 
 # Request Events

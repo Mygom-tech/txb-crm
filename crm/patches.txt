@@ -61,3 +61,4 @@ crm.patches.v1_0.repair_first_coaching_call_date_field
 crm.patches.v1_0.add_admin_task_assignee_field
 crm.patches.v1_0.add_first_call_reminder_fields
 crm.patches.v1_0.add_delivery_coach_notification_foundation
+crm.patches.v1_0.add_contact_inactivity_cycles

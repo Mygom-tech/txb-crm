@@ -1,0 +1,124 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-10-05 12:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "contact",
+  "cycle_no",
+  "status",
+  "live_key",
+  "column_break_anchor",
+  "anchor_at",
+  "anchor_source",
+  "due_at",
+  "reminded_at",
+  "ended_at"
+ ],
+ "fields": [
+  {
+   "fieldname": "contact",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Contact",
+   "options": "Contact",
+   "read_only": 1,
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "cycle_no",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Cycle No",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "default": "Open",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Open\nDue\nReminded\nClosed\nSettled",
+   "read_only": 1,
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "description": "The Contact while this cycle is live (Open, Due or Reminded), otherwise empty. Unique, so a Contact has at most one live cycle.",
+   "fieldname": "live_key",
+   "fieldtype": "Data",
+   "label": "Live Key",
+   "no_copy": 1,
+   "read_only": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "column_break_anchor",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "anchor_at",
+   "fieldtype": "Datetime",
+   "label": "Anchor At",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "anchor_source",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Anchor Source",
+   "options": "History\nRollout\nCreation",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "due_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Due At",
+   "read_only": 1,
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "reminded_at",
+   "fieldtype": "Datetime",
+   "label": "Reminded At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "ended_at",
+   "fieldtype": "Datetime",
+   "label": "Ended At",
+   "read_only": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-10-05 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "FCRM",
+ "name": "CRM Contact Inactivity Cycle",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager"
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": []
+}
