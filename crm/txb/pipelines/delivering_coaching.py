@@ -18,7 +18,6 @@ from crm.txb.coaching_call_recap import (
 from crm.txb.coaching_calls import (
 	CALL_STATUSES,
 	count_completed_calls,
-	lock_deal_row,
 	seed_first_call_date_from_action,
 )
 from crm.txb.constants import (
@@ -299,13 +298,10 @@ def log_coaching_call(deal, data):
 	returns `{note, recap: {name, status}}`. A resubmitted `submission_id` returns the call it
 	first recorded and writes nothing more, not even the deal save (TXB-273).
 	"""
-	# Taken before anything is read or written, so two concurrent first calls queue here and the
-	# second one counts the note the first inserted (TXB-261), and a resubmission queued behind its
-	# first attempt sees the recap that attempt recorded (TXB-273). `execute_action` already holds
-	# it from before the deal was loaded; re-taking it here is a no-op there and keeps direct
-	# callers serialized.
-	lock_deal_row(deal.name)
-
+	# Runs under the deal row lock `execute_action` takes before it loads the deal, so two
+	# concurrent first calls queue there and the second one counts the note the first inserted
+	# (TXB-261), a resubmission queued behind its first attempt sees the recap that attempt
+	# recorded (TXB-273), and neither saves a deal it loaded before the other's save.
 	replayed = find_submission(deal.name, data.get("submission_id"))
 	if replayed:
 		return {**recap_result(replayed.note, replayed.name, replayed.status), SKIP_SAVE: True}
