@@ -1,0 +1,81 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-10-05 12:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "event",
+  "contact",
+  "column_break_evidence",
+  "occurred_at",
+  "evidence"
+ ],
+ "fields": [
+  {
+   "fieldname": "event",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Event",
+   "options": "CRM Human Contact Event",
+   "read_only": 1,
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "contact",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Contact",
+   "options": "Contact",
+   "read_only": 1,
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "column_break_evidence",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "occurred_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Occurred At",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "evidence",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Evidence",
+   "options": "Direct\nEmail Match\nPhone Match\nParticipant",
+   "read_only": 1,
+   "reqd": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-10-05 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "FCRM",
+ "name": "CRM Human Contact Attribution",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager"
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "occurred_at",
+ "sort_order": "DESC",
+ "states": []
+}
