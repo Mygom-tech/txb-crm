@@ -213,7 +213,9 @@ async function sendMail() {
   if (attachments.value.length) {
     capture('email_attachments_added')
   }
-  await call('frappe.core.doctype.communication.email.make', {
+  // Sends through communication.email.make and records the send as human
+  // contact, which a direct make call cannot be told apart from (TXB-277).
+  await call('crm.txb.api.human_contact.human_send_email', {
     recipients: recipients.join(', '),
     attachments: attachments.value.map((x) => x.name),
     cc: cc.join(', '),
@@ -222,7 +224,6 @@ async function sendMail() {
     content: newEmail.value,
     doctype: props.doctype,
     name: doc.value.name,
-    send_email: 1,
     sender: fromEmail,
     sender_full_name: getUser()?.full_name || undefined,
   })
