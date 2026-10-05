@@ -9,6 +9,7 @@ Every action here is admin_only except Log Coaching Call, which is the one that 
 move the status. See crm/txb/permissions.py for the rule that enforces it.
 """
 
+from crm.txb import human_contact
 from crm.txb.coaching_calls import (
 	CALL_STATUSES,
 	count_completed_calls,
@@ -328,6 +329,10 @@ def log_coaching_call(deal, data):
 			),
 		},
 	)
+
+	# A Completed call is human contact with the coached client; any other status records none
+	# (TXB-277). The Note is the source, so a later status edit can re-sync and void it.
+	human_contact.sync_source(NOTE_DOCTYPE, note.name)
 
 	# If this is the deal's first Coaching Call Note, it initializes an empty First Coaching Call
 	# Date from the Delivery Date just submitted (TXB-261). The note's own insert hook does the

@@ -7,6 +7,7 @@ from frappe.permissions import add_permission, update_permission_property
 from crm.api.doc import get_assigned_users
 from crm.fcrm.doctype.crm_notification.crm_notification import notify_user
 from crm.integrations.api import get_contact_lead_or_deal_from_number
+from crm.txb import human_contact
 
 ALLOWED_WHATSAPP_ROLES = ["System Manager", "Sales Manager", "Sales User"]
 
@@ -56,6 +57,8 @@ def on_update(doc, method):
 	)
 
 	notify_agent(doc)
+	# TXB-277: re-check a recorded send on every update, so one that later fails is voided.
+	human_contact.sync_doc(doc)
 
 
 def notify_agent(doc):
@@ -292,6 +295,7 @@ def create_whatsapp_message(
 		}
 	)
 	doc.insert(ignore_permissions=True)
+	human_contact.record_human_send(doc)
 	return doc.name
 
 
@@ -312,6 +316,7 @@ def send_whatsapp_template(reference_doctype: str, reference_name: str, template
 		}
 	)
 	doc.insert(ignore_permissions=True)
+	human_contact.record_human_send(doc)
 	return doc.name
 
 

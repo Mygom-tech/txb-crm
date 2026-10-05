@@ -392,7 +392,13 @@ before_tests = "crm.tests.before_tests"
 # -----------------------------------------------------------
 
 # The coach assignment notification ledger is history; it must not block deleting a Deal (TXB-270).
-ignore_links_on_delete = ["Failed Lead Sync Log", "CRM Coach Assignment Notification"]
+# A human contact event must not block deleting its source or the record it names; the vanished
+# source is voided on its next sync instead (TXB-277).
+ignore_links_on_delete = [
+	"Failed Lead Sync Log",
+	"CRM Coach Assignment Notification",
+	"CRM Human Contact Event",
+]
 
 # Request Events
 # ----------------

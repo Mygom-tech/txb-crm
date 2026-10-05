@@ -24,6 +24,7 @@ import hashlib
 import frappe
 from frappe.utils import add_to_date, escape_html, get_datetime
 
+from crm.txb import human_contact
 from crm.txb.constants import FIELD_CONVERTED_CONTACT, FIELD_MEETING_KEY
 
 EVENT_DOCTYPE = "Event"
@@ -40,6 +41,8 @@ SUBJECT_NAME_SEPARATOR = " — "
 # (via customisation) Cancelled; the activity reader treats Cancelled as the cancellation moment.
 STATUS_OPEN = "Open"
 STATUS_CANCELLED = "Cancelled"
+# TXB-277: set only by an explicit complete_meeting; the one meeting status that records contact.
+STATUS_COMPLETED = human_contact.MEETING_COMPLETED
 
 # A meeting with no explicit end is treated as a one-hour calendar block, so the Event always
 # carries a valid, non-degenerate duration for the calendar and the activity reader.
@@ -136,6 +139,31 @@ def cancel_meeting_event(reference_doctype: str, reference_docname: str, flow: s
 	event.status = STATUS_CANCELLED
 	event.save(ignore_permissions=True)
 	return event.name
+
+
+def complete_meeting(event_name: str) -> dict | None:
+	"""Mark a meeting as having taken place and record it as human contact (TXB-277).
+
+	Scheduling, rescheduling and cancelling never record contact; only this explicit completion
+	does. Idempotent: completing an already Completed meeting re-syncs the same event row. A
+	cancelled meeting did not happen, so it cannot be completed.
+	"""
+	event = frappe.get_doc(EVENT_DOCTYPE, event_name)
+	if event.status == STATUS_CANCELLED:
+		frappe.throw(frappe._("A cancelled meeting cannot be completed."), frappe.ValidationError)
+	if event.status != STATUS_COMPLETED:
+		event.status = STATUS_COMPLETED
+		event.save(ignore_permissions=True)
+	return human_contact.record_human_send(event)
+
+
+def reopen_meeting(event_name: str) -> dict | None:
+	"""Undo a completion: the meeting is Open again and its contact event is voided (TXB-277)."""
+	event = frappe.get_doc(EVENT_DOCTYPE, event_name)
+	if event.status == STATUS_COMPLETED:
+		event.status = STATUS_OPEN
+		event.save(ignore_permissions=True)
+	return human_contact.sync_doc(event)
 
 
 # TXB-246: the Lead scheduling flows whose Events are occurrence-based rather than the one

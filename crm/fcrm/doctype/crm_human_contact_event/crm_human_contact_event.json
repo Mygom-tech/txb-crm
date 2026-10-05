@@ -1,0 +1,145 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-10-05 10:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "source_key",
+  "source_doctype",
+  "source_name",
+  "channel",
+  "provenance",
+  "voided",
+  "column_break_contact",
+  "actor",
+  "occurred_at",
+  "reference_doctype",
+  "reference_name",
+  "section_break_recipients",
+  "recipients"
+ ],
+ "fields": [
+  {
+   "fieldname": "source_key",
+   "fieldtype": "Data",
+   "label": "Source Key",
+   "read_only": 1,
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "source_doctype",
+   "fieldtype": "Link",
+   "label": "Source Type",
+   "options": "DocType",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "source_name",
+   "fieldtype": "Dynamic Link",
+   "label": "Source",
+   "options": "source_doctype",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "channel",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Channel",
+   "options": "Email\nWhatsApp\nCall\nCoaching Call\nMeeting",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "default": "Human",
+   "fieldname": "provenance",
+   "fieldtype": "Select",
+   "label": "Provenance",
+   "options": "Human",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "voided",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Voided",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_contact",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "actor",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Actor",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "occurred_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Occurred At",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "reference_doctype",
+   "fieldtype": "Link",
+   "label": "Reference Type",
+   "options": "DocType",
+   "read_only": 1
+  },
+  {
+   "fieldname": "reference_name",
+   "fieldtype": "Dynamic Link",
+   "in_standard_filter": 1,
+   "label": "Reference",
+   "options": "reference_doctype",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_recipients",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "recipients",
+   "fieldtype": "JSON",
+   "label": "Recipients",
+   "read_only": 1,
+   "reqd": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-10-05 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "FCRM",
+ "name": "CRM Human Contact Event",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager"
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "occurred_at",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
