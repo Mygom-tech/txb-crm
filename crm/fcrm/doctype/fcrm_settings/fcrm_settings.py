@@ -55,6 +55,32 @@ class FCRMSettings(Document):
 		self.do_not_allow_to_delete_if_standard()
 		self.setup_forecasting()
 		self.make_currency_read_only()
+		self.validate_contact_inactivity_interval()
+
+	def on_update(self):
+		if self.flags.contact_inactivity_interval_changed:
+			# Every Open cycle's due date moves with the interval; the job reads the saved value.
+			frappe.enqueue(
+				"crm.txb.contact_inactivity.recompute_unreminded", queue="long", enqueue_after_commit=True
+			)
+
+	def validate_contact_inactivity_interval(self):
+		"""Only a whole number of minutes in range, and only a System Manager may change it (TXB-278)."""
+		# Imported here so loading this controller never loads the inactivity engine.
+		from crm.txb.contact_inactivity import SETTING_INTERVAL_MINUTES, parse_interval
+
+		if not frappe.get_meta(self.doctype).has_field(SETTING_INTERVAL_MINUTES):
+			return
+		value = parse_interval(self.get(SETTING_INTERVAL_MINUTES))
+		before = self.get_doc_before_save()
+		if value == (parse_interval(before.get(SETTING_INTERVAL_MINUTES)) if before else 0):
+			return
+		if frappe.session.user != "Administrator" and "System Manager" not in frappe.get_roles():
+			frappe.throw(
+				_("Only a System Manager can change the Contact inactivity interval."),
+				frappe.PermissionError,
+			)
+		self.flags.contact_inactivity_interval_changed = True
 
 	def do_not_allow_to_delete_if_standard(self):
 		if not self.has_value_changed("dropdown_items"):
