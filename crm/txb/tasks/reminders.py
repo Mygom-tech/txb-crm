@@ -3,14 +3,17 @@
 The two ported from the `Weekly VCS Reminder` and `Stale Session Run Alert` Server Scripts
 create a CRM Task for a deal owner and suppress repeats within a week -- a cooldown, which is
 adequate for a reminder that is meant to recur and inadequate for one that must happen exactly
-once. The first-coaching-call reminder (TXB-227) is the latter, so it does not live here: this
-module only gives `crm.txb.first_call_reminders` its scheduler entry point.
+once. The first-coaching-call reminder (TXB-227) and the Contact inactivity reminder (TXB-280)
+are the latter, so they do not live here: this module only gives
+`crm.txb.first_call_reminders` and `crm.txb.contact_inactivity_reminders` their scheduler entry
+points.
 """
 
 import frappe
 from frappe.utils import add_days, date_diff, today
 
 from crm.txb.constants import PIPELINE_INDIVIDUAL_SESSION, PIPELINE_WORKSHOP
+from crm.txb.contact_inactivity_reminders import run_contact_inactivity_reminders
 from crm.txb.first_call_reminders import run_first_call_reminders
 
 REMINDER_COOLDOWN_DAYS = 7
@@ -27,6 +30,15 @@ def first_call_reminders():
 	the configured deadline -- and idempotent, so an overlapping run costs nothing.
 	"""
 	run_first_call_reminders()
+
+
+def contact_inactivity_reminders():
+	"""Remind Contact owners about Contacts with no human contact for the site interval. Every minute.
+
+	The interval is configurable down to a single minute, for the same reason as the first-call
+	delay. Each Due cycle gets at most one Task, so an overlapping run costs nothing.
+	"""
+	run_contact_inactivity_reminders()
 
 
 def weekly_vcs_reminder():

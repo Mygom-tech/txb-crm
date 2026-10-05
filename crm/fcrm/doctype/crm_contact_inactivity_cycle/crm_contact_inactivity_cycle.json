@@ -14,7 +14,11 @@
   "anchor_source",
   "due_at",
   "reminded_at",
-  "ended_at"
+  "ended_at",
+  "section_break_reminder",
+  "reminder_task",
+  "exception",
+  "exception_at"
  ],
  "fields": [
   {
@@ -97,12 +101,42 @@
    "fieldtype": "Datetime",
    "label": "Ended At",
    "read_only": 1
+  },
+  {
+   "fieldname": "section_break_reminder",
+   "fieldtype": "Section Break",
+   "label": "Reminder"
+  },
+  {
+   "description": "The cycle's one reminder Task. Kept even if the Task is later deleted, so the cycle is never reminded twice.",
+   "fieldname": "reminder_task",
+   "fieldtype": "Link",
+   "label": "Reminder Task",
+   "no_copy": 1,
+   "options": "CRM Task",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "description": "Why a Due cycle has no reminder yet: its Contact has no owner, or the owner's user is disabled.",
+   "fieldname": "exception",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Exception",
+   "options": "\nUnowned\nDisabled Owner",
+   "read_only": 1
+  },
+  {
+   "fieldname": "exception_at",
+   "fieldtype": "Datetime",
+   "label": "Exception At",
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-05 12:00:00.000000",
+ "modified": "2026-10-05 18:00:00.000000",
  "modified_by": "Administrator",
  "module": "FCRM",
  "name": "CRM Contact Inactivity Cycle",

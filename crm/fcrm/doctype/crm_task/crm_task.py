@@ -43,6 +43,9 @@ class CRMTask(Document):
 				_("An Opportunity Task cannot be deleted. Cancel it instead to preserve its history."),
 				frappe.PermissionError,
 			)
+		# A Contact inactivity reminder may be deleted (TXB-280). Nothing is undone here on purpose:
+		# its cycle stays Reminded and keeps `reminder_task`, so a deletion never earns the cycle a
+		# second reminder.
 
 	def validate(self):
 		if self.is_new() or not self.assigned_to:

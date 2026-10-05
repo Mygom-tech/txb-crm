@@ -165,8 +165,21 @@ doc_events = {
 		"before_insert": ["crm.txb.ownership.claim_owner_on_insert"],
 		"before_validate": ["crm.txb.doc_events.contact.sync_organization"],
 		"validate": ["crm.txb.ownership.guard_owner_change"],
-		# Primary Contact identity is mirrored into its linked Deals (TXB-252).
-		"on_update": ["crm.api.contact.on_update"],
+		"on_update": [
+			# Primary Contact identity is mirrored into its linked Deals (TXB-252).
+			"crm.api.contact.on_update",
+			# A new owner takes over the open inactivity reminder (TXB-280).
+			"crm.txb.contact_inactivity_reminders.move_reminder_to_new_owner",
+		],
+	},
+	"CRM Task": {
+		# A Done or Canceled inactivity reminder Settles its cycle (TXB-280).
+		"on_update": ["crm.txb.contact_inactivity_reminders.settle_on_task_close"],
+	},
+	"CRM Human Contact Event": {
+		# Human contact is attributed to its Contacts and restarts their inactivity cycles,
+		# cancelling any reminder still open on the cycle it closes (TXB-280).
+		"on_update": ["crm.txb.contact_inactivity_reminders.close_on_human_contact"],
 	},
 	"CRM Lead": {
 		# prevent_duplicate first: it throws, so nothing else should run before it.
@@ -368,8 +381,12 @@ scheduler_events = {
 		"0 9 * * *": ["crm.txb.tasks.reminders.stale_session_run_alert"],
 		"0 9 * * 1": ["crm.txb.tasks.reminders.weekly_vcs_reminder"],
 		# Every minute: the first-call reminder delay is configurable down to a single minute,
-		# and a job that ran less often would make that setting unobservable (TXB-227).
-		"* * * * *": ["crm.txb.tasks.reminders.first_call_reminders"],
+		# and a job that ran less often would make that setting unobservable (TXB-227). The
+		# Contact inactivity interval goes down to a minute too (TXB-280).
+		"* * * * *": [
+			"crm.txb.tasks.reminders.first_call_reminders",
+			"crm.txb.tasks.reminders.contact_inactivity_reminders",
+		],
 	},
 }
 
@@ -406,7 +423,8 @@ ignore_links_on_delete = [
 	"Failed Lead Sync Log",
 	"CRM Coach Assignment Notification",
 	"CRM Human Contact Event",
-	# Every Contact has an inactivity cycle; it must not block deleting the Contact (TXB-278).
+	# Every Contact has an inactivity cycle; it must not block deleting the Contact (TXB-278) or
+	# its reminder Task (TXB-280).
 	"CRM Contact Inactivity Cycle",
 ]
 
