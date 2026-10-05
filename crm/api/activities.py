@@ -9,6 +9,8 @@ from frappe.translate import get_translated_doctypes
 from frappe.utils import get_datetime
 
 from crm.fcrm.doctype.crm_call_log.crm_call_log import parse_call_log
+from crm.txb.coaching_call_recap import RECAP_DOCTYPE
+from crm.txb.coaching_call_recap_dispatch import STATUS_FAILED, STATUS_SENT
 from crm.txb.constants import FIELD_CONVERTED_AT, FIELD_CONVERTED_CONTACT
 
 # --- Normalized Opportunity activity event contract (TXB-133) ------------------------------
@@ -212,6 +214,62 @@ def _note_metadata_events(notes: list, *, is_lead: bool):
 			canonical_docname=note["name"],
 			summary=title,
 			target={"doctype": "FCRM Note", "name": note["name"]},
+		)
+		activities.append(activity)
+	return activities
+
+
+def _coaching_recap_events(deal: str):
+	"""One `coaching_recap` event per Coaching Call recap ledger row of `deal` (TXB-274).
+
+	Each carries the row's delivery status and which recovery command applies: Retry for a
+	failed send, Send revised copy for a sent one, neither without write access to the Deal.
+	The recap itself stays the canonical record; its email content is not copied here.
+	"""
+	can_write = bool(frappe.has_permission("CRM Deal", "write", deal))
+	rows = frappe.get_all(
+		RECAP_DOCTYPE,
+		filters={"deal": deal},
+		fields=[
+			"name",
+			"note",
+			"status",
+			"recipient_email",
+			"attempts",
+			"last_error",
+			"sent_at",
+			"revision_of",
+			"created_by",
+			"creation",
+		],
+	)
+	activities = []
+	for row in rows:
+		activity = {
+			"name": row.name,
+			"activity_type": "coaching_recap",
+			"creation": row.creation,
+			"owner": row.created_by,
+			"recap": row.name,
+			"note": row.note,
+			"status": row.status,
+			"recipient_email": row.recipient_email,
+			"attempts": row.attempts,
+			"last_error": row.last_error,
+			"sent_at": row.sent_at,
+			"revision_of": row.revision_of,
+			"can_retry": can_write and row.status == STATUS_FAILED,
+			"can_send_revised": can_write and row.status == STATUS_SENT,
+			"is_lead": False,
+		}
+		_with_event_envelope(
+			activity,
+			occurred_at=row.creation,
+			actor=row.created_by,
+			canonical_doctype=RECAP_DOCTYPE,
+			canonical_docname=row.name,
+			summary=_("Coaching call recap"),
+			target={"doctype": RECAP_DOCTYPE, "name": row.name},
 		)
 		activities.append(activity)
 	return activities
@@ -506,6 +564,8 @@ def _read_deal_activities(name: str, include_lead: bool = True):
 	# Note bodies remain in `notes` (the authoritative Notes module); these are reference-only.
 	activities.extend(_meeting_events("CRM Deal", name, is_lead=False))
 	activities.extend(_note_metadata_events(deal_notes, is_lead=False))
+	# TXB-274: one entry per Coaching Call recap, with its delivery status and recovery commands.
+	activities.extend(_coaching_recap_events(name))
 
 	_tag_call_events(calls)
 
