@@ -169,14 +169,17 @@ def execute_action(deal: str, action: str, data: str | dict | None = None) -> di
 	Everything is applied to one in-memory document and saved once, so a failure part-way
 	leaves nothing behind. The old wizard fired several sequential requests and could
 	half-apply an action if one of them failed.
+
+	A handler may return extra response keys -- Log Coaching Call returns its `note` and
+	`recap` (TXB-273) -- which are merged into the result.
 	"""
 	frappe.has_permission(DEAL_DOCTYPE, "write", deal, throw=True)
 
 	doc = frappe.get_doc(DEAL_DOCTYPE, deal)
 	spec = checked_action(doc, action)
-	run_action(doc, spec, parse_data(data))
+	result = run_action(doc, spec, parse_data(data))
 
-	return {"deal": doc.name, "status": doc.status}
+	return {"deal": doc.name, "status": doc.status, **(result or {})}
 
 
 def checked_action(doc, action: str) -> dict:
@@ -209,7 +212,10 @@ def checked_action(doc, action: str) -> dict:
 
 
 def run_action(doc, spec: dict, values: dict):
-	"""Validate, apply and save one action on the in-memory `doc`, as a single save."""
+	"""Validate, apply and save one action on the in-memory `doc`, as a single save.
+
+	Returns whatever the handler returned (None for most actions).
+	"""
 	validate_required(spec, values)
 
 	# Conditional, action-specific rules (e.g. Next Coaching Call Date is required unless
@@ -226,7 +232,7 @@ def run_action(doc, spec: dict, values: dict):
 	# cannot leave it armed for the rest of the request.
 	frappe.flags.txb_action = doc.name
 	try:
-		spec["handler"](doc, values)
+		result = spec["handler"](doc, values)
 
 		to_state = resolve_to_state(spec, values)
 		if to_state:
@@ -235,6 +241,8 @@ def run_action(doc, spec: dict, values: dict):
 		doc.save()
 	finally:
 		frappe.flags.txb_action = None
+
+	return result
 
 
 @frappe.whitelist()
