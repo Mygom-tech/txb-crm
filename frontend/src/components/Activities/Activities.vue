@@ -316,6 +316,16 @@
               </div>
             </div>
           </div>
+          <div
+            v-else-if="activity.activity_type == 'coaching_recap'"
+            :id="activity.name"
+            class="mb-4"
+          >
+            <CoachingRecapArea
+              :activity="activity"
+              @reload="all_activities.reload()"
+            />
+          </div>
           <div v-else class="mb-4 flex flex-col gap-2 py-1.5">
             <div class="flex items-center justify-stretch gap-2 text-base">
               <div
@@ -534,6 +544,7 @@ import EmailArea from '@/components/Activities/EmailArea.vue'
 import CommentArea from '@/components/Activities/CommentArea.vue'
 import CallArea from '@/components/Activities/CallArea.vue'
 import NoteArea from '@/components/Activities/NoteArea.vue'
+import CoachingRecapArea from '@/components/Activities/CoachingRecapArea.vue'
 import TaskArea from '@/components/Activities/TaskArea.vue'
 import AttachmentArea from '@/components/Activities/AttachmentArea.vue'
 import DataFields from '@/components/Activities/DataFields.vue'
