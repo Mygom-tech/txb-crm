@@ -780,7 +780,7 @@ def get_contact_activities(name: str):
 	"""
 	_authorize_contact_activities(name)
 
-	lead_names, deal_names = _resolve_contact_sources(name)
+	lead_names, deal_names = resolve_contact_sources(name)
 	converted_at = _converted_at_by_lead(lead_names)
 
 	activities, calls, notes, tasks, attachments = [], [], [], [], []
@@ -860,7 +860,7 @@ def _authorize_contact_activities(contact: str):
 		frappe.throw(_("Not permitted"), frappe.PermissionError)
 
 
-def _resolve_contact_sources(contact: str):
+def resolve_contact_sources(contact: str):
 	"""Resolve the distinct archived Leads and linked Opportunities for a Contact.
 
 	Opportunities are the Contact's linked CRM Deals. Leads are the union of (a) every Lead
@@ -868,6 +868,8 @@ def _resolve_contact_sources(contact: str):
 	provenance by a linked Opportunity -- CRM Deal.lead is non-unique, so the same Lead reached
 	through several Opportunities is collapsed to one here. Both lists are sorted so downstream
 	ordering is deterministic.
+
+	Public because contact attribution (TXB-279) uses the same definition of "linked".
 	"""
 	deal_names = sorted(
 		set(
@@ -903,6 +905,9 @@ def _resolve_contact_sources(contact: str):
 				lead_names.add(row.lead)
 
 	return sorted(lead_names), deal_names
+
+
+_resolve_contact_sources = resolve_contact_sources
 
 
 def _converted_at_by_lead(lead_names: list) -> dict:
