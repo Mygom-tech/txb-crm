@@ -229,6 +229,7 @@
           :tabs="tabs"
           @beforeSave="beforeStatusChange"
           @afterSave="reloadAssignees"
+          @createCoachingNote="onCreateCoachingNote"
         />
       </template>
     </Tabs>
@@ -311,7 +312,11 @@ import { setupCustomizations, isTranslatable } from '@/utils'
 import { getView } from '@/utils/view'
 import { allowedStatusesFor } from '@/utils/pipelineStatuses'
 import { notesTabLabel } from '@/utils/dealPresentation'
-import { actionOptions, runAction } from '@/utils/takeAction'
+import {
+  actionOptions,
+  coachingNoteAction,
+  runAction,
+} from '@/utils/takeAction'
 import {
   completeActivationReadiness,
   isActivationStatusChange,
@@ -386,6 +391,20 @@ async function onTakeAction(action, defaults) {
   } catch (error) {
     toast.error(error.messages?.[0] || __('Could not complete the action'))
   }
+}
+
+// TXB-275: Coaching Notes create opens Log Coaching Call. See Deal.vue.
+function onCreateCoachingNote() {
+  const action = coachingNoteAction(
+    availableActions.value,
+    tabs.value[tabIndex.value]?.name,
+    doc.value?.pipeline_type,
+  )
+  if (!action) {
+    toast.error(__('Log Coaching Call is not available for this deal right now'))
+    return
+  }
+  onTakeAction(action)
 }
 
 // Refetch once the server has accepted a change: a local edit mutates doc.status

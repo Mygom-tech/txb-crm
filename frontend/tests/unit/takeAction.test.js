@@ -4,7 +4,10 @@ import {
   actionFields,
   requiredFieldnames,
   actionDefaults,
+  coachingNoteAction,
+  runAction,
 } from '@/utils/takeAction'
+import { renderFieldLayoutDialog } from '@/utils/renderFieldLayoutDialog'
 import { findMissingMandatory } from '@/utils/fieldTransforms'
 import { evaluateDependsOnValue } from '@/utils/expressions'
 import {
@@ -24,7 +27,14 @@ import { createApp, h, reactive } from 'vue'
 // `vueRef` bridges Vue's `h` into the hoisted mock factory, since top-level imports are not yet
 // initialised when the factory is registered.
 const vueRef = vi.hoisted(() => ({ h: null }))
+// TXB-275: runAction posts through frappe-ui's `call` and opens its form through
+// renderFieldLayoutDialog; both are stubbed so a test scripts the server and the coach.
+const frappeCall = vi.hoisted(() => vi.fn())
+vi.mock('@/utils/renderFieldLayoutDialog', () => ({
+  renderFieldLayoutDialog: vi.fn(),
+}))
 vi.mock('frappe-ui', () => ({
+  call: (...args) => frappeCall(...args),
   DatePicker: {
     name: 'DatePicker',
     props: ['value', 'format', 'placeholder', 'inputClass'],
@@ -558,5 +568,237 @@ describe('Discovery standalone Time option and commit contract (TXB-241)', () =>
     const { container } = mountTime(plainTime, '')
     expect(timeFieldOptions(plainTime)).toBeNull()
     expect(optionValues(container)).toHaveLength(0)
+  })
+})
+
+// TXB-275: Log Coaching Call as the server offers it, with the recap opt-out ticked by default.
+const LOG_CALL_WITH_RECAP = {
+  ...LOG_CALL,
+  fields: [
+    ...LOG_CALL.fields,
+    {
+      fieldname: 'send_recap',
+      label: 'Email the recap to the client',
+      fieldtype: 'Check',
+      default: 1,
+    },
+  ],
+}
+
+const ENTERED = {
+  call_status: 'Completed',
+  delivery_date: '2026-10-05',
+  completed_calls: 2,
+  topic: 'Quarterly goals',
+  call_notes: 'Agreed next steps',
+  is_last_call: 0,
+  next_call_date: '2026-10-12 09:00:00',
+  send_recap: 1,
+}
+
+const SERVER_RESULT = {
+  deal: 'CRM-DEAL-0001',
+  status: 'Active',
+  note: 'NOTE-0001',
+  recap: { name: 'RECAP-0001', status: 'queued' },
+}
+
+function recapRecipientMissing() {
+  return Object.assign(new Error('ValidationError'), {
+    exc_type: 'RecapRecipientMissing',
+    messages: [
+      'RECAP_RECIPIENT_MISSING: The client has no usable primary email. Add one, or untick sending the recap.',
+    ],
+  })
+}
+
+/**
+ * Script one dialog open the way FieldLayoutDialog behaves: each attempt submits the form
+ * through `onSubmit`; a throw keeps it open with the message and the same values, which the
+ * next attempt (a function of the kept values) may edit. `null` is the coach cancelling.
+ */
+function scriptDialog(...attempts) {
+  const seen = { options: null, errors: [], kept: [] }
+  renderFieldLayoutDialog.mockImplementationOnce(async (options) => {
+    seen.options = options
+    let values = { ...options.defaults }
+    for (const attempt of attempts) {
+      if (attempt === null) return null
+      values = typeof attempt === 'function' ? attempt(values) : attempt
+      try {
+        await options.onSubmit({ ...values })
+        return values
+      } catch (error) {
+        seen.errors.push(error.message)
+        seen.kept.push({ ...values })
+      }
+    }
+    return null
+  })
+  return seen
+}
+
+function postedData(callIndex) {
+  const [method, params] = frappeCall.mock.calls[callIndex]
+  expect(method).toBe('crm.txb.api.actions.execute_action')
+  return params.data
+}
+
+describe('Log Coaching Call recap opt-out (TXB-275)', () => {
+  afterEach(() => {
+    frappeCall.mockReset()
+    renderFieldLayoutDialog.mockReset()
+  })
+
+  it("seeds 'Send recap' ticked through actionDefaults", () => {
+    expect(actionDefaults(LOG_CALL_WITH_RECAP, '2026-10-05').send_recap).toBe(1)
+  })
+
+  it('opens the dialog with send_recap=1 and posts 1 when left ticked', async () => {
+    frappeCall.mockResolvedValueOnce(SERVER_RESULT)
+    const seen = scriptDialog((defaults) => ({ ...defaults, ...ENTERED }))
+
+    const result = await runAction('CRM-DEAL-0001', LOG_CALL_WITH_RECAP, {
+      today: '2026-10-05',
+    })
+
+    expect(seen.options.defaults.send_recap).toBe(1)
+    expect(result).toEqual(SERVER_RESULT)
+    expect(frappeCall).toHaveBeenCalledTimes(1)
+    expect(frappeCall.mock.calls[0][1]).toMatchObject({
+      deal: 'CRM-DEAL-0001',
+      action: 'log_coaching_call',
+    })
+    expect(postedData(0).send_recap).toBe(1)
+  })
+
+  it('posts send_recap 0 when the coach unticks it', async () => {
+    frappeCall.mockResolvedValueOnce({
+      ...SERVER_RESULT,
+      recap: { name: 'RECAP-0001', status: 'opted_out' },
+    })
+    scriptDialog({ ...ENTERED, send_recap: false })
+
+    await runAction('CRM-DEAL-0001', LOG_CALL_WITH_RECAP, { today: '2026-10-05' })
+
+    expect(postedData(0).send_recap).toBe(0)
+  })
+
+  it('reuses the submission_id when retrying after a network error', async () => {
+    frappeCall
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(SERVER_RESULT)
+    const seen = scriptDialog(ENTERED, (kept) => kept)
+
+    const result = await runAction('CRM-DEAL-0001', LOG_CALL_WITH_RECAP, {
+      today: '2026-10-05',
+    })
+
+    expect(result).toEqual(SERVER_RESULT)
+    expect(seen.errors).toHaveLength(1)
+    expect(frappeCall).toHaveBeenCalledTimes(2)
+    const first = postedData(0).submission_id
+    expect(typeof first).toBe('string')
+    expect(first.length).toBeGreaterThan(0)
+    expect(postedData(1).submission_id).toBe(first)
+  })
+
+  it('reuses the submission_id when retrying after RECAP_RECIPIENT_MISSING', async () => {
+    frappeCall
+      .mockRejectedValueOnce(recapRecipientMissing())
+      .mockResolvedValueOnce(SERVER_RESULT)
+    scriptDialog(ENTERED, (kept) => kept)
+
+    await runAction('CRM-DEAL-0001', LOG_CALL_WITH_RECAP, { today: '2026-10-05' })
+
+    expect(frappeCall).toHaveBeenCalledTimes(2)
+    expect(postedData(1).submission_id).toBe(postedData(0).submission_id)
+  })
+
+  it('creates a new submission_id each time the dialog is opened', async () => {
+    frappeCall.mockResolvedValue(SERVER_RESULT)
+    scriptDialog(ENTERED)
+    scriptDialog(ENTERED)
+
+    await runAction('CRM-DEAL-0001', LOG_CALL_WITH_RECAP, { today: '2026-10-05' })
+    await runAction('CRM-DEAL-0001', LOG_CALL_WITH_RECAP, { today: '2026-10-05' })
+
+    expect(frappeCall).toHaveBeenCalledTimes(2)
+    expect(postedData(1).submission_id).not.toBe(postedData(0).submission_id)
+  })
+
+  it('keeps the entered values after RECAP_RECIPIENT_MISSING and resubmits once unticked', async () => {
+    frappeCall
+      .mockRejectedValueOnce(recapRecipientMissing())
+      .mockResolvedValueOnce({
+        ...SERVER_RESULT,
+        recap: { name: 'RECAP-0001', status: 'opted_out' },
+      })
+    const seen = scriptDialog(ENTERED, (kept) => ({ ...kept, send_recap: 0 }))
+
+    const result = await runAction('CRM-DEAL-0001', LOG_CALL_WITH_RECAP, {
+      today: '2026-10-05',
+    })
+
+    // The form stayed open with the coach's entries and says how to recover.
+    expect(seen.kept[0]).toEqual(ENTERED)
+    expect(seen.errors[0]).toMatch(/primary email/)
+    expect(seen.errors[0]).toMatch(/untick/)
+    expect(result.recap.status).toBe('opted_out')
+    const { submission_id, ...resubmitted } = postedData(1)
+    expect(submission_id).toBe(postedData(0).submission_id)
+    expect(resubmitted).toEqual({ ...ENTERED, send_recap: 0 })
+  })
+
+  it('returns null when the coach cancels the form after RECAP_RECIPIENT_MISSING', async () => {
+    frappeCall.mockRejectedValueOnce(recapRecipientMissing())
+    const seen = scriptDialog(ENTERED, null)
+
+    const result = await runAction('CRM-DEAL-0001', LOG_CALL_WITH_RECAP, {
+      today: '2026-10-05',
+    })
+
+    expect(result).toBeNull()
+    expect(seen.errors).toHaveLength(1)
+    expect(frappeCall).toHaveBeenCalledTimes(1)
+  })
+
+  it('still closes the form and rejects on any other server error', async () => {
+    const refusal = Object.assign(new Error('PermissionError'), {
+      exc_type: 'PermissionError',
+      messages: ['Not permitted'],
+    })
+    frappeCall.mockRejectedValueOnce(refusal)
+    const seen = scriptDialog(ENTERED)
+
+    await expect(
+      runAction('CRM-DEAL-0001', LOG_CALL_WITH_RECAP, { today: '2026-10-05' }),
+    ).rejects.toBe(refusal)
+    expect(seen.errors).toHaveLength(0)
+  })
+})
+
+describe('coachingNoteAction (TXB-275)', () => {
+  const COACHING = 'Delivering Coaching'
+  const ACTIONS = [
+    { name: 'put_on_hold', label: 'Put on Hold' },
+    LOG_CALL_WITH_RECAP,
+  ]
+
+  it('returns Log Coaching Call for Coaching Notes create', () => {
+    expect(coachingNoteAction(ACTIONS, 'Notes', COACHING)).toBe(
+      LOG_CALL_WITH_RECAP,
+    )
+  })
+
+  it('returns null when the server does not offer Log Coaching Call', () => {
+    expect(coachingNoteAction([ACTIONS[0]], 'Notes', COACHING)).toBeNull()
+    expect(coachingNoteAction(undefined, 'Notes', COACHING)).toBeNull()
+  })
+
+  it('returns null when the tab is not Coaching Notes', () => {
+    expect(coachingNoteAction(ACTIONS, 'Activity', COACHING)).toBeNull()
+    // A non-coaching deal's Notes tab keeps the generic New Note.
+    expect(coachingNoteAction(ACTIONS, 'Notes', 'Lead Generation')).toBeNull()
   })
 })

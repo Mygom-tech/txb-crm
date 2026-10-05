@@ -13,6 +13,7 @@
     :doc="doc"
     :whatsappBox="whatsappBox"
     :modalRef="modalRef"
+    @createCoachingNote="emit('createCoachingNote')"
   />
   <FadedScrollableDiv class="flex flex-col h-full overflow-y-auto">
     <div
@@ -607,7 +608,7 @@ const props = defineProps({
   readOnly: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['beforeSave', 'afterSave'])
+const emit = defineEmits(['beforeSave', 'afterSave', 'createCoachingNote'])
 
 const route = useRoute()
 
