@@ -226,9 +226,21 @@ doc_events = {
 	"CRM Call Log": {
 		"before_validate": ["crm.txb.doc_events.call_log.default_phone_numbers"],
 		"validate": ["crm.txb.doc_events.opportunity_link.validate_opportunity_link"],
-		"after_insert": ["crm.txb.doc_events.call_log.update_deal_call_count"],
-		"on_update": ["crm.txb.doc_events.call_log.update_deal_call_count"],
-		"after_delete": ["crm.txb.doc_events.call_log.update_deal_call_count"],
+		# A completed outgoing call is human contact by its caller: one Call event per log, kept in
+		# step with every save and voided on delete. No backfill -- older logs wait for a save
+		# (TXB-285).
+		"after_insert": [
+			"crm.txb.doc_events.call_log.update_deal_call_count",
+			"crm.txb.doc_events.call_log.sync_human_contact",
+		],
+		"on_update": [
+			"crm.txb.doc_events.call_log.update_deal_call_count",
+			"crm.txb.doc_events.call_log.sync_human_contact",
+		],
+		"after_delete": [
+			"crm.txb.doc_events.call_log.update_deal_call_count",
+			"crm.txb.doc_events.call_log.void_human_contact",
+		],
 	},
 	"FCRM Note": {
 		# A coaching call note is the record of the call, so a Delivering Coaching deal's
@@ -240,12 +252,21 @@ doc_events = {
 		# The first Coaching Call Note seeds the deal's empty First Coaching Call Date, once, with
 		# the deal row locked across the insert so concurrent first calls cannot race (TXB-224).
 		"before_insert": ["crm.txb.doc_events.note.lock_first_call_deal"],
+		# A logged coaching call's Human Contact Event follows its Note's edits and delete
+		# (TXB-285).
 		"after_insert": [
 			"crm.txb.doc_events.note.reconcile_coaching_totals",
 			"crm.txb.doc_events.note.seed_first_coaching_call_date",
+			"crm.txb.doc_events.note.sync_human_contact",
 		],
-		"on_update": ["crm.txb.doc_events.note.reconcile_coaching_totals"],
-		"after_delete": ["crm.txb.doc_events.note.reconcile_coaching_totals"],
+		"on_update": [
+			"crm.txb.doc_events.note.reconcile_coaching_totals",
+			"crm.txb.doc_events.note.sync_human_contact",
+		],
+		"after_delete": [
+			"crm.txb.doc_events.note.reconcile_coaching_totals",
+			"crm.txb.doc_events.note.void_human_contact",
+		],
 	},
 	"FCRM Settings": {
 		# The Admin Task Assignee must be someone who can actually work the tasks: enabled,

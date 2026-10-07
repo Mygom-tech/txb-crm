@@ -9,6 +9,7 @@ Only Delivering Coaching deals are touched; `crm.txb.coaching_calls.reconcile_de
 place that rule lives.
 """
 
+from crm.txb import human_contact
 from crm.txb.coaching_calls import (
 	DEAL_DOCTYPE,
 	classify_note_status,
@@ -87,3 +88,18 @@ def _is_relevant(state) -> bool:
 	every time one of them is touched.
 	"""
 	return bool(state.get(FIELD_COACHING_CALL_STATUS)) or is_coaching_call_note(state.get("title"))
+
+
+def sync_human_contact(doc, method=None):
+	"""Keep a logged coaching call's Human Contact Event in step with its Note (TXB-285).
+
+	Bound to insert and update. Only a Note the Log Coaching Call action recorded has an event,
+	so an edit away from Completed voids it and an edit back un-voids the same row, while a Note
+	inserted by any other path records nothing.
+	"""
+	human_contact.sync_doc(doc)
+
+
+def void_human_contact(doc, method=None):
+	"""A deleted coaching call Note voids its Human Contact Event, if it had one (TXB-285)."""
+	human_contact.sync_source(doc.doctype, doc.name)

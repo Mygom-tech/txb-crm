@@ -7,6 +7,7 @@ events here instead.
 
 import frappe
 
+from crm.txb import human_contact
 from crm.txb.constants import PIPELINE_DELIVERING_COACHING
 
 CALL_STATUS_COMPLETED = "Completed"
@@ -52,3 +53,18 @@ def update_deal_call_count(doc, method=None):
 	)
 
 	frappe.db.set_value(DEAL_DOCTYPE, doc.reference_docname, "total_completed_calls", count)
+
+
+def sync_human_contact(doc, method=None):
+	"""Keep the call's one Human Contact Event in step with it (TXB-285).
+
+	Bound to insert and update: a completed outgoing call records one Call event for its caller,
+	and an edit that makes it incoming or not Completed voids that same row. Only saves reach
+	this, so a call logged before the hook existed records nothing until it is next saved.
+	"""
+	human_contact.sync_doc(doc)
+
+
+def void_human_contact(doc, method=None):
+	"""A deleted call voids its Human Contact Event, if it had one (TXB-285)."""
+	human_contact.sync_source(doc.doctype, doc.name)
