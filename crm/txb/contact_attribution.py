@@ -12,7 +12,8 @@ evidence:
 - Email Match / Phone Match: a recipient's address or number is one of the Contact's own.
 
 Sharing the Deal or Lead is not evidence, so contact on a Deal with several Contacts counts only
-for the ones it was with.
+for the ones it was with. A Call event carries only the number dialled, so it is attributed
+directly when the call was logged on the Contact and otherwise only on a Phone Match (TXB-285).
 """
 
 import json

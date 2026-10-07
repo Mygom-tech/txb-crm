@@ -1,17 +1,18 @@
 """Typed, human-origin contact events (TXB-277).
 
 A CRM Human Contact Event row exists only for contact the server itself verified as made by a
-person: a manual email send, an outgoing WhatsApp send, a Completed coaching call and a meeting
-someone marked completed. Everything else -- system, reminder, assignment or registration mail,
-inbound or failed messages, reactions, scheduled/cancelled meetings -- records nothing.
+person: a manual email send, an outgoing WhatsApp send, a completed outgoing call, a Completed
+coaching call and a meeting someone marked completed. Everything else -- system, reminder,
+assignment or registration mail, inbound or failed messages, reactions, inbound or unanswered
+calls, scheduled/cancelled meetings -- records nothing.
 
 Two questions decide a row, and they are answered at different times:
 
-- Provenance. Emails, WhatsApp messages and meetings look identical whether a person or the
-  system wrote them, so human origin is established only by the whitelisted action that a person
-  invoked: it flags the source document (HUMAN_ORIGIN_FLAG) and records it. From then on, the
-  ledger row itself is the durable proof. A coaching call Note proves itself: its Completed status
-  is app-owned metadata written only by the Log Coaching Call action.
+- Provenance. Emails, WhatsApp messages, coaching call Notes and meetings look identical whether
+  a person or the system wrote them, so human origin is established only by the whitelisted action
+  that a person invoked: it flags the source document (HUMAN_ORIGIN_FLAG) and records it. From then
+  on, the ledger row itself is the durable proof. A completed outgoing Call Log proves itself: it
+  is a call its caller placed (TXB-285).
 - Qualification. `classify` reads the source's current state, so `sync_source` can be re-run at
   any time: it upserts the one row per `source_key`, and voids it (rather than deleting it) when
   the source stops qualifying -- a reopened meeting, a failed send, a deleted source.
@@ -23,16 +24,19 @@ import frappe
 from frappe.utils import get_datetime, now_datetime, parse_addr, split_emails
 
 from crm.txb.constants import FIELD_COACHING_CALL_DELIVERY_DATE, FIELD_COACHING_CALL_STATUS
+from crm.txb.people import normalize_phone
 
 EVENT_DOCTYPE = "CRM Human Contact Event"
 COMMUNICATION_DOCTYPE = "Communication"
 WHATSAPP_DOCTYPE = "WhatsApp Message"
 NOTE_DOCTYPE = "FCRM Note"
+CALL_LOG_DOCTYPE = "CRM Call Log"
 MEETING_DOCTYPE = "Event"
 DEAL_DOCTYPE = "CRM Deal"
 
 CHANNEL_EMAIL = "Email"
 CHANNEL_WHATSAPP = "WhatsApp"
+CHANNEL_CALL = "Call"
 CHANNEL_COACHING_CALL = "Coaching Call"
 CHANNEL_MEETING = "Meeting"
 PROVENANCE_HUMAN = "Human"
@@ -43,6 +47,8 @@ HUMAN_ORIGIN_FLAG = "txb_human_origin"
 # A Communication whose delivery ended in one of these never reached anyone.
 FAILED_EMAIL_STATUSES = ("Error", "Rejected")
 MEETING_COMPLETED = "Completed"
+CALL_OUTGOING = "Outgoing"
+CALL_COMPLETED = "Completed"
 
 # The upsert rolls back to here when a concurrent writer wins the race for the same source_key.
 UPSERT_SAVEPOINT = "txb_human_contact_event"
@@ -77,9 +83,12 @@ def classify(doc) -> str | None:
 		from crm.txb.coaching_calls import STATUS_COMPLETED, note_status
 
 		status = note_status(doc.title, doc.content, doc.get(FIELD_COACHING_CALL_STATUS))
-		if doc.reference_doctype == DEAL_DOCTYPE and status == STATUS_COMPLETED:
-			return CHANNEL_COACHING_CALL
-		return None
+		qualifies = doc.reference_doctype == DEAL_DOCTYPE and status == STATUS_COMPLETED
+		return CHANNEL_COACHING_CALL if qualifies and _human_origin(doc) else None
+
+	if doc.doctype == CALL_LOG_DOCTYPE:
+		qualifies = doc.get("type") == CALL_OUTGOING and doc.get("status") == CALL_COMPLETED
+		return CHANNEL_CALL if qualifies else None
 
 	if doc.doctype == MEETING_DOCTYPE:
 		return CHANNEL_MEETING if doc.status == MEETING_COMPLETED and _human_origin(doc) else None
@@ -122,6 +131,8 @@ def _sync(doctype: str, name: str, doc) -> dict | None:
 			return None
 		if not existing.voided:
 			existing.voided = 1
+			# Voiding runs from the source's after_delete too, when its link no longer resolves.
+			existing.flags.ignore_links = True
 			existing.save(ignore_permissions=True)
 		return existing.as_dict()
 
@@ -186,6 +197,8 @@ def _actor(doc) -> str:
 		return frappe.session.user
 	if doc.doctype == COMMUNICATION_DOCTYPE:
 		return doc.user or doc.owner
+	if doc.doctype == CALL_LOG_DOCTYPE:
+		return doc.get("caller") or doc.owner
 	return doc.owner
 
 
@@ -198,6 +211,8 @@ def _occurred_at(doc):
 	if doc.doctype == MEETING_DOCTYPE:
 		# Completing a meeting ahead of its slot must not record contact in the future.
 		return min(get_datetime(doc.starts_on), now_datetime())
+	if doc.doctype == CALL_LOG_DOCTYPE:
+		return get_datetime(doc.get("end_time") or doc.get("start_time") or doc.creation)
 	return doc.creation
 
 
@@ -214,6 +229,10 @@ def _recipients(doc) -> list[dict]:
 
 	if doc.doctype == WHATSAPP_DOCTYPE:
 		return [{"phone": doc.get("to")}] if doc.get("to") else []
+
+	if doc.doctype == CALL_LOG_DOCTYPE:
+		# The number dialled; the "-" placeholder a log without one is given is no number at all.
+		return [{"phone": doc.get("to")}] if normalize_phone(doc.get("to")) else []
 
 	if doc.doctype == NOTE_DOCTYPE:
 		contacts = frappe.get_all(

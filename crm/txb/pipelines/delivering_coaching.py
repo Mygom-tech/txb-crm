@@ -352,8 +352,9 @@ def log_coaching_call(deal, data):
 	recap = create_recap(deal, note, data, recipient, note.title)
 
 	# A Completed call is human contact with the coached client; any other status records none
-	# (TXB-277). The Note is the source, so a later status edit can re-sync and void it.
-	human_contact.sync_source(NOTE_DOCTYPE, note.name)
+	# (TXB-277). The Note is the source, so a later status edit can re-sync and void it. Recorded
+	# as this coach's own send: the same Note inserted by any other path records nothing (TXB-285).
+	human_contact.record_human_send(note)
 
 	# If this is the deal's first Coaching Call Note, it initializes an empty First Coaching Call
 	# Date from the Delivery Date just submitted (TXB-261). The note's own insert hook does the
