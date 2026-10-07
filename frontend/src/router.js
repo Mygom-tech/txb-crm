@@ -38,6 +38,11 @@ const routes = [
     component: () => import('@/pages/Dashboard.vue'),
   },
   {
+    path: '/team-activity',
+    name: 'Team Activity',
+    component: () => import('@/pages/TeamActivity.vue'),
+  },
+  {
     alias: '/leads',
     path: '/leads/view/:viewType?',
     name: 'Leads',
@@ -228,6 +233,9 @@ router.beforeEach(async (to, from, next) => {
     window.location.href = '/login?redirect-to=/crm'
   } else if (to.matched.length === 0) {
     next({ name: 'Invalid Page' })
+  } else if (to.name === 'Team Activity' && !isAdminUser) {
+    // Team-wide figures are Admin-only; sales roles never mount the page or call its API.
+    next({ name: 'Not Permitted' })
   } else if (['Deal', 'Lead'].includes(to.name) && !to.hash) {
     // Native `Lead Creation Redirect`: a freshly opened lead route (arriving without a tab
     // hash, i.e. no explicit in-session selection) is redirected to the Data tab. Deals

@@ -174,6 +174,7 @@
 <script setup>
 import BrushCleaningIcon from '~icons/lucide/brush-cleaning'
 import LucideLayoutDashboard from '~icons/lucide/layout-dashboard'
+import LucideActivity from '~icons/lucide/activity'
 import CRMLogo from '@/components/Icons/CRMLogo.vue'
 import InviteIcon from '@/components/Icons/InviteIcon.vue'
 import ConvertIcon from '@/components/Icons/ConvertIcon.vue'
@@ -257,6 +258,12 @@ const links = [
     icon: LucideLayoutDashboard,
     to: 'Dashboard',
     condition: () => !props.mobile,
+  },
+  {
+    label: 'Team activity',
+    icon: LucideActivity,
+    to: 'Team Activity',
+    condition: () => !props.mobile && (isAdmin() || user === 'Administrator'),
   },
   {
     label: 'Leads',
@@ -425,7 +432,7 @@ function toggleHelpModal() {
 
 // onboarding
 const { user } = sessionStore()
-const { users, isManager } = usersStore()
+const { users, isManager, isAdmin } = usersStore()
 const { isOnboardingStepsCompleted, setUp } = useOnboarding('frappecrm')
 
 async function getFirstLead() {
