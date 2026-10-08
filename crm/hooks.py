@@ -275,6 +275,8 @@ doc_events = {
 			"crm.txb.admin_assignment.validate_admin_task_assignee",
 			# The first-call reminder delay is configurable but never instantaneous (TXB-227).
 			"crm.txb.first_call_reminders.validate_reminder_delay",
+			# Delivery Coach notification mode, recipient and Slack token are System Manager-only (TXB-288).
+			"crm.txb.permissions.guard_notification_settings",
 		],
 	},
 	"CRM Coaching Call Recap": {

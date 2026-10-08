@@ -16,6 +16,11 @@ from crm.txb.constants import (
 	PIPELINE_DELIVERING_COACHING,
 	STATUS_FIELDS,
 )
+from crm.txb.delivery_coach_notifications import (
+	SETTING_MODE,
+	SETTING_SLACK_BOT_TOKEN,
+	SETTING_TEST_USER,
+)
 from crm.txb.pipelines.actions import PIPELINE_ACTIONS
 from crm.txb.pipelines.transitions import is_allowed
 
@@ -36,6 +41,11 @@ PIPELINE_STATUS_ROLES = {
 ADMIN_ONLY_FIELDS = {
 	"CRM Deal": (FIELD_DELIVERY_COACH,),
 }
+
+# FCRM Settings fields only a System Manager may write (TXB-288). They decide who a Delivery
+# Coach notification reaches and which Slack bot sends it, so ordinary settings access -- a
+# Sales Manager's -- must not reach them.
+SYSTEM_MANAGER_ONLY_SETTINGS = (SETTING_MODE, SETTING_TEST_USER, SETTING_SLACK_BOT_TOKEN)
 
 
 def can_change_status(pipeline_type: str | None, user: str | None = None) -> bool:
@@ -148,6 +158,51 @@ def is_admin(user: str | None = None) -> bool:
 		return True
 
 	return ADMIN_ROLE in frappe.get_roles(user)
+
+
+def is_system_manager(user: str | None = None) -> bool:
+	"""Frappe's "System Manager" role, plus the Administrator account itself."""
+	user = user or frappe.session.user
+	if user == "Administrator":
+		return True
+
+	return "System Manager" in frappe.get_roles(user)
+
+
+def guard_notification_settings(doc, method=None):
+	"""Refuse a change to a System Manager-only FCRM Settings field by anyone else.
+
+	FCRM Settings `validate` is the boundary: the settings page, `frappe.client` and REST
+	writes all save through it. The Slack bot token is a Password, which an unchanged form
+	posts back masked as asterisks -- Frappe keeps the stored token then, so that is not a
+	change. The error names the fields, never a value.
+	"""
+	if is_system_manager():
+		return
+
+	before = doc.get_doc_before_save()
+	blocked = [
+		fieldname
+		for fieldname in SYSTEM_MANAGER_ONLY_SETTINGS
+		if doc.meta.has_field(fieldname) and _setting_changed(doc, before, fieldname)
+	]
+	if not blocked:
+		return
+
+	frappe.throw(
+		_("Only a System Manager can change {0}.").format(
+			", ".join(_(doc.meta.get_label(fieldname)) for fieldname in blocked)
+		),
+		frappe.PermissionError,
+		title=_("Not permitted"),
+	)
+
+
+def _setting_changed(doc, before, fieldname: str) -> bool:
+	value = doc.get(fieldname) or ""
+	if doc.meta.get_field(fieldname).fieldtype == "Password" and value and doc.is_dummy_password(value):
+		return False
+	return value != ((before.get(fieldname) if before else None) or "")
 
 
 def guard_transition(doc, method=None):

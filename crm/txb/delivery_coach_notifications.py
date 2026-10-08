@@ -8,21 +8,27 @@ it gives the notification consumer three things to build on:
   starts Disabled; Live is only ever reached by an operator switching it on.
 * The `CRM Coach Assignment Notification` ledger: one row per committed assignment event,
   unique on `event_key`, with independent email and Slack states so a channel can be retried
-  without resending the other or one already Sent.
-* An editable Email Template in the TxB wrapper, rendered from `build_assignment_email_context`.
+  without resending the other or one already Sent. Its captured routing and assignment
+  generation never change after insert; each channel counts its attempts and stamps its
+  latest claim and recovery (TXB-288).
+* An editable Email Template in the TXB-116 wrapper and signature, rendered from
+  `build_assignment_email_context`.
 
+Only a System Manager may change the settings (`crm.txb.permissions.guard_notification_settings`).
 The decrypted Slack token is never stored outside Frappe's encrypted password store and is
 redacted from every error summary written to the ledger.
 """
 
+import hashlib
 import re
 
 import frappe
+from bs4 import BeautifulSoup
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 from frappe.utils import format_datetime, get_url
 from frappe.utils.password import get_decrypted_password
 
-from crm.txb.constants import SETTING_FIRST_CALL_REMINDER_MINUTES
+from crm.txb.constants import CONFIRMATION_TEMPLATE, SETTING_FIRST_CALL_REMINDER_MINUTES
 
 SETTINGS_DOCTYPE = "FCRM Settings"
 LEDGER_DOCTYPE = "CRM Coach Assignment Notification"
@@ -41,19 +47,27 @@ STATUS_PENDING = "Pending"
 STATUS_SENT = "Sent"
 STATUS_FAILED = "Failed"
 STATUS_SKIPPED = "Skipped"
+# The provider may or may not have accepted the message (a timeout after the request left).
+STATUS_UNCERTAIN = "Uncertain"
 
 # Which channel state may follow which. Sent and Skipped are final, so a retry can never
 # resend a delivered channel; Failed may be retried (back to Pending, or straight to an
-# outcome); Pending may reach any outcome.
+# outcome); Pending may reach any outcome. Uncertain is held for reconciliation: never back to
+# Pending, so it is not resent automatically -- only confirmed Sent, Failed or Skipped.
 CHANNEL_TRANSITIONS = {
-	STATUS_PENDING: {STATUS_PENDING, STATUS_SENT, STATUS_FAILED, STATUS_SKIPPED},
-	STATUS_FAILED: {STATUS_FAILED, STATUS_PENDING, STATUS_SENT, STATUS_SKIPPED},
+	STATUS_PENDING: {STATUS_PENDING, STATUS_SENT, STATUS_FAILED, STATUS_SKIPPED, STATUS_UNCERTAIN},
+	STATUS_FAILED: {STATUS_FAILED, STATUS_PENDING, STATUS_SENT, STATUS_SKIPPED, STATUS_UNCERTAIN},
+	STATUS_UNCERTAIN: {STATUS_UNCERTAIN, STATUS_SENT, STATUS_FAILED, STATUS_SKIPPED},
 	STATUS_SENT: {STATUS_SENT},
 	STATUS_SKIPPED: {STATUS_SKIPPED},
 }
+# The states a delivery attempt may be claimed from.
+CLAIMABLE_STATUSES = (STATUS_PENDING, STATUS_FAILED)
 
 ASSIGNMENT_EMAIL_TEMPLATE = "TxB Delivery Coach Assignment"
 ERROR_SUMMARY_MAX_LENGTH = 500
+# Shown for a blank organization or program type, so every row of the message is present.
+NOT_PROVIDED = "Not provided"
 
 SETTINGS_FIELDS = [
 	{
@@ -92,32 +106,34 @@ _SUBJECT = (
 	"New client assigned: {{ client_name }}"
 )
 
-# The TxB email wrapper: outer container, branded navy header, padded content, signature footer.
-_BODY = (
-	'<div style="max-width: 600px; margin: 0 auto; font-family: Arial, sans-serif;">'
-	'<div style="background: #002d5b; padding: 20px; text-align: center; color: #ffffff;'
-	' font-size: 22px; font-weight: bold;">TxB</div>'
-	'<div style="padding: 30px; color: #333;">'
+# The assignment content only. The branded wrapper and signature around it are not kept here:
+# they are TXB-116's, taken from the site's confirmation template by `build_assignment_email_body`.
+# Values are escaped, since a guest registration names the client.
+_CONTENT = (
 	"{% if is_test_redirect %}"
 	'<p style="background: #fff4e5; padding: 10px; border: 1px solid #f5a623;">'
 	"<strong>Test notification.</strong> This assignment is intended for "
-	"<strong>{{ intended_coach_name }}</strong>.</p>"
+	"<strong>{{ intended_coach_name | e }}</strong>.</p>"
 	"{% endif %}"
-	"<p>Hi {{ intended_coach_name }},</p>"
-	"<p>{{ assigned_by_name }} assigned a client to you as Delivery Coach on {{ assigned_at }}.</p>"
+	"<p>Hi {{ intended_coach_name | e }},</p>"
+	"<p>{{ assigned_by_name | e }} assigned a client to you as Delivery Coach on "
+	"{{ assigned_at | e }}.</p>"
 	"<table>"
-	"<tr><td>Client:</td><td>{{ client_name }}</td></tr>"
-	"{% if organization %}<tr><td>Organization:</td><td>{{ organization }}</td></tr>{% endif %}"
-	"{% if program_type %}<tr><td>Program:</td><td>{{ program_type }}</td></tr>{% endif %}"
-	"<tr><td>Status:</td><td>{{ status }}</td></tr>"
+	"<tr><td>Client:</td><td>{{ client_name | e }}</td></tr>"
+	"<tr><td>Organization:</td><td>{{ organization | e }}</td></tr>"
+	"<tr><td>Program:</td><td>{{ program_type | e }}</td></tr>"
+	"<tr><td>Status:</td><td>{{ status | e }}</td></tr>"
 	"</table>"
-	'<p><a href="{{ opportunity_url }}">Open the Opportunity in CRM</a></p>'
-	"</div>"
-	'<div style="background: #f4f4f4; padding: 20px; color: #666; font-size: 12px;">'
-	"<p>Best regards,<br>TxB team</p>"
-	"</div>"
-	"</div>"
+	'<p><a href="{{ opportunity_url | e }}">Open the Opportunity in CRM</a></p>'
 )
+
+# SHA-256 of the body TXB-269 seeded with its own navy header and English signature. A template
+# still holding exactly that -- or the bare `_CONTENT` -- was never edited and may be re-seeded.
+_UNEDITED_SEED_SHA256 = "0be7b47f2a590a8b7de3ca4d6bf56a962c95c161e43d8e8224fc43764e222aed"
+
+# The confirmation's greeting, which sits in the TXB-116 padded content container.
+_GREETING_RE = re.compile(r"\{\{\s*first_name\s*\}\}")
+_CONTENT_SLOT = "txb-assignment-content-slot"
 
 _TOKEN_PATTERNS = (
 	re.compile(r"xox[a-z]-[A-Za-z0-9-]+"),
@@ -141,19 +157,59 @@ def ensure_notification_settings() -> None:
 		frappe.db.set_single_value(SETTINGS_DOCTYPE, SETTING_MODE, MODE_DISABLED)
 
 
+def build_assignment_email_body() -> str:
+	"""The assignment content inside this site's TXB-116 wrapper and signature.
+
+	The TXB-116 wrapper is not code: it is the operator-authored registration confirmation
+	Email Template (`CONFIRMATION_TEMPLATE`) -- branded header, padded content container ending
+	in the signature, footer. Its content container (the element holding the greeting) gets
+	the assignment content in place of the registration text; the header, footer and the
+	container's closing signature paragraph are reused as they are. A confirmation with no
+	recognisable container gives the bare content, never a second, independent brand.
+	"""
+	html = frappe.db.get_value("Email Template", CONFIRMATION_TEMPLATE, "response_html")
+	soup = BeautifulSoup(html or "", "html.parser")
+	greeting = soup.find(string=_GREETING_RE)
+	container = greeting.find_parent(["div", "td"]) if greeting else None
+	# A container holding all the text is the whole email, not the content between header and footer.
+	if container is None or container.get_text(strip=True) == soup.get_text(strip=True):
+		return _CONTENT
+
+	children = container.find_all(True, recursive=False)
+	last = children[-1] if children else None
+	signature = str(last) if last is not None and last.name == "p" and "{" not in str(last) else ""
+	container.clear()
+	container.append(_CONTENT_SLOT)
+	return str(soup).replace(_CONTENT_SLOT, _CONTENT + signature, 1)
+
+
+def _is_unedited_seed(body: str | None) -> bool:
+	return body == _CONTENT or hashlib.sha256((body or "").encode()).hexdigest() == _UNEDITED_SEED_SHA256
+
+
 def ensure_assignment_email_template() -> None:
-	"""Seed the assignment Email Template once; an existing one is the operator's to edit."""
-	if frappe.db.exists("Email Template", ASSIGNMENT_EMAIL_TEMPLATE):
+	"""Seed the assignment Email Template, or bring a never-edited seed to the TXB-116 body.
+
+	Any other body is the operator's and is left exactly as it is, so re-running the migration
+	keeps their edits.
+	"""
+	body = build_assignment_email_body()
+	if not frappe.db.exists("Email Template", ASSIGNMENT_EMAIL_TEMPLATE):
+		frappe.get_doc(
+			{
+				"doctype": "Email Template",
+				"name": ASSIGNMENT_EMAIL_TEMPLATE,
+				"subject": _SUBJECT,
+				"use_html": 1,
+				"response_html": body,
+			}
+		).insert(ignore_permissions=True)
 		return
-	frappe.get_doc(
-		{
-			"doctype": "Email Template",
-			"name": ASSIGNMENT_EMAIL_TEMPLATE,
-			"subject": _SUBJECT,
-			"use_html": 1,
-			"response_html": _BODY,
-		}
-	).insert(ignore_permissions=True)
+
+	template = frappe.get_doc("Email Template", ASSIGNMENT_EMAIL_TEMPLATE)
+	if template.response_html != body and _is_unedited_seed(template.response_html):
+		template.response_html = body
+		template.save(ignore_permissions=True)
 
 
 def get_notification_config() -> dict:
@@ -214,12 +270,12 @@ def build_assignment_email_context(
 	"""The documented context of the assignment Email Template.
 
 	The Opportunity URL is built from this site's own address, so each environment links to
-	itself.
+	itself. A blank organization or program type reads "Not provided" in both messages.
 	"""
 	return {
 		"client_name": _client_name(deal),
-		"organization": deal.get("organization") or "",
-		"program_type": (deal.get("custom_program_type") or "").strip(),
+		"organization": (deal.get("organization") or "").strip() or NOT_PROVIDED,
+		"program_type": (deal.get("custom_program_type") or "").strip() or NOT_PROVIDED,
 		"status": deal.get("status") or "",
 		"assigned_by_name": _user_name(assigned_by),
 		"assigned_at": format_datetime(assigned_at),
