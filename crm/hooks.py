@@ -393,7 +393,11 @@ scheduler_events = {
 	"hourly_long": ["crm.lead_syncing.background_sync.sync_leads_from_sources_hourly"],
 	"monthly_long": ["crm.lead_syncing.background_sync.sync_leads_from_sources_monthly"],
 	"cron": {
-		"*/5 * * * *": ["crm.lead_syncing.background_sync.sync_leads_from_sources_5_minutes"],
+		"*/5 * * * *": [
+			"crm.lead_syncing.background_sync.sync_leads_from_sources_5_minutes",
+			# Re-queues Delivery Coach assignment notifications whose job was lost (TXB-290).
+			"crm.txb.delivery_coach_notification_recovery.sweep_stale_assignment_notifications",
+		],
 		"*/10 * * * *": [
 			"crm.lead_syncing.background_sync.sync_leads_from_sources_10_minutes",
 			# Re-queues Coaching Call recaps whose send job was lost (TXB-274).

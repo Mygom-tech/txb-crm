@@ -102,23 +102,35 @@ def _record_assignment(deal, coach: str, assigned_by: str) -> None:
 
 	if mode == MODE_DISABLED:
 		return
+	enqueue_assignment_notification(event_key)
+
+
+def enqueue_assignment_notification(event_key: str, channel: str | None = None) -> None:
+	"""Queue the worker for `event_key` -- every channel, or only `channel` -- after commit.
+
+	The job id is deterministic per event and channel, so a request for work whose job is
+	still waiting is absorbed by that job instead of queueing a second one.
+	"""
 	frappe.enqueue(
 		"crm.txb.delivery_coach_assignment.process_assignment_notification",
 		queue="short",
-		job_id=f"delivery-coach-assignment-{event_key}",
+		job_id=f"delivery-coach-assignment-{event_key}" + (f"-{channel}" if channel else ""),
 		deduplicate=True,
 		enqueue_after_commit=True,
 		event_key=event_key,
+		channel=channel,
 	)
 
 
-def process_assignment_notification(event_key: str) -> None:
+def process_assignment_notification(event_key: str, channel: str | None = None) -> None:
 	"""Deliver every channel of `event_key` that is still Pending or Failed. Safe to re-run.
 
-	Each channel is its own unit: a failure while preparing, sending or recording one is
-	undone to that channel's savepoint and logged, and the other channel still runs.
+	A `channel` limits the run to that one channel, so recovering or retrying it never
+	re-attempts the other. Each channel is its own unit: a failure while preparing, sending or
+	recording one is undone to that channel's savepoint and logged, and the other still runs.
 	"""
-	for channel in CHANNELS:
+	channels = CHANNELS if channel is None else [c for c in CHANNELS if c == channel]
+	for channel in channels:
 		savepoint = f"coach_assignment_{channel}"
 		frappe.db.savepoint(savepoint)
 		try:
