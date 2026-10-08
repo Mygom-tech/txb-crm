@@ -8,6 +8,7 @@
   "event_key",
   "deal",
   "mode",
+  "assignment_generation",
   "column_break_assignment",
   "intended_user",
   "effective_user",
@@ -17,10 +18,16 @@
   "email_status",
   "email_sent_at",
   "email_error",
+  "email_attempts",
+  "email_claimed_at",
+  "email_recovered_at",
   "column_break_slack",
   "slack_status",
   "slack_sent_at",
-  "slack_error"
+  "slack_error",
+  "slack_attempts",
+  "slack_claimed_at",
+  "slack_recovered_at"
  ],
  "fields": [
   {
@@ -30,6 +37,7 @@
    "label": "Event Key",
    "read_only": 1,
    "reqd": 1,
+   "set_only_once": 1,
    "unique": 1
   },
   {
@@ -40,7 +48,8 @@
    "label": "Opportunity",
    "options": "CRM Deal",
    "read_only": 1,
-   "reqd": 1
+   "reqd": 1,
+   "set_only_once": 1
   },
   {
    "fieldname": "mode",
@@ -48,7 +57,17 @@
    "label": "Mode",
    "options": "Disabled\nTest redirect\nLive",
    "read_only": 1,
-   "reqd": 1
+   "reqd": 1,
+   "set_only_once": 1
+  },
+  {
+   "description": "Identifies the Delivery Coach assignment this event belongs to. Fixed when the event is recorded; blank on events recorded before this field existed.",
+   "fieldname": "assignment_generation",
+   "fieldtype": "Data",
+   "label": "Assignment Generation",
+   "read_only": 1,
+   "search_index": 1,
+   "set_only_once": 1
   },
   {
    "fieldname": "column_break_assignment",
@@ -61,7 +80,8 @@
    "label": "Intended Coach",
    "options": "User",
    "read_only": 1,
-   "reqd": 1
+   "reqd": 1,
+   "set_only_once": 1
   },
   {
    "fieldname": "effective_user",
@@ -69,21 +89,24 @@
    "label": "Effective Recipient",
    "options": "User",
    "read_only": 1,
-   "reqd": 1
+   "reqd": 1,
+   "set_only_once": 1
   },
   {
    "fieldname": "assigned_by",
    "fieldtype": "Link",
    "label": "Assigned By",
    "options": "User",
-   "read_only": 1
+   "read_only": 1,
+   "set_only_once": 1
   },
   {
    "fieldname": "assigned_at",
    "fieldtype": "Datetime",
    "label": "Assigned At",
    "read_only": 1,
-   "reqd": 1
+   "reqd": 1,
+   "set_only_once": 1
   },
   {
    "fieldname": "section_break_email",
@@ -97,7 +120,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Email Status",
-   "options": "Pending\nSent\nFailed\nSkipped",
+   "options": "Pending\nSent\nFailed\nSkipped\nUncertain",
    "read_only": 1,
    "reqd": 1
   },
@@ -114,6 +137,26 @@
    "read_only": 1
   },
   {
+   "default": "0",
+   "fieldname": "email_attempts",
+   "fieldtype": "Int",
+   "label": "Email Attempts",
+   "non_negative": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "email_claimed_at",
+   "fieldtype": "Datetime",
+   "label": "Email Claimed At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "email_recovered_at",
+   "fieldtype": "Datetime",
+   "label": "Email Recovered At",
+   "read_only": 1
+  },
+  {
    "fieldname": "column_break_slack",
    "fieldtype": "Column Break"
   },
@@ -124,7 +167,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Slack Status",
-   "options": "Pending\nSent\nFailed\nSkipped",
+   "options": "Pending\nSent\nFailed\nSkipped\nUncertain",
    "read_only": 1,
    "reqd": 1
   },
@@ -139,12 +182,32 @@
    "fieldtype": "Small Text",
    "label": "Slack Error",
    "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "slack_attempts",
+   "fieldtype": "Int",
+   "label": "Slack Attempts",
+   "non_negative": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "slack_claimed_at",
+   "fieldtype": "Datetime",
+   "label": "Slack Claimed At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "slack_recovered_at",
+   "fieldtype": "Datetime",
+   "label": "Slack Recovered At",
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-09-28 10:00:00.000000",
+ "modified": "2026-10-08 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "FCRM",
  "name": "CRM Coach Assignment Notification",
