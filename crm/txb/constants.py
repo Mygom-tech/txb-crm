@@ -195,6 +195,11 @@ DISCOVERY_TERMINAL_OUTCOMES = (LEAD_STATUS_NOT_INTERESTED, LEAD_STATUS_DISQUALIF
 FIELD_REGISTRATION_TOKEN = "custom_registration_token"
 FIELD_REGISTRATION_LINK = "custom_registration_link"
 
+# Raw query string of the public page a Lead/Deal registered from (?utm_campaign=…). Same
+# fieldname on both doctypes so Lead → Deal conversion carries it. Installed by
+# `crm.patches.v1_0.add_landing_query_field`; written by `crm.api.form._apply_landing_query`.
+FIELD_LANDING_QUERY = "custom_landing_query"
+
 # TXB-209 stable meeting identity on Frappe Event. Every TxB scheduling action upserts one
 # canonical Event carrying `<reference_doctype>:<reference_docname>:<flow>` here, so a repeated
 # submit, a reschedule or a cancel finds and mutates the same Event instead of spawning a
