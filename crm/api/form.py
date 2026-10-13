@@ -18,12 +18,17 @@ import frappe
 from frappe import _
 from frappe.utils.telemetry import capture
 
+from crm.txb.constants import FIELD_LANDING_QUERY
+
 ALLOWED_DOCTYPES = ("CRM Lead", "CRM Deal")
 FORM_SOURCE = "Web Form"
 FORM_MODULE = "FCRM"
 # URL query param the public form page posts next to the web-form payload so the
 # record's Source can be attributed (e.g. ?utm_source=facebook → Source = Facebook)
 UTM_SOURCE_PARAM = "utm_source"
+# The page's raw query string (?utm_campaign=…), kept verbatim for campaign filtering/export
+LANDING_QUERY_PARAM = "landing_query"
+LANDING_QUERY_MAX_LENGTH = 1000  # guest input: cap what a crafted URL can stuff in
 
 
 def ensure_lead_source(name: str = FORM_SOURCE) -> str:
@@ -446,6 +451,7 @@ def enrich_form_submission(doc):
 	_apply_hidden_defaults(doc)
 	# precedence: ?utm_source= (if it names a real source) > form hidden default > "Web Form"
 	_apply_utm_source(doc)
+	_apply_landing_query(doc)
 
 	# stamp the source so form records are identifiable/filterable
 	if doc.meta.has_field("source") and not doc.get("source"):
@@ -501,8 +507,21 @@ def _utm_source_from_request() -> str:
 	value = frappe.form_dict.get(UTM_SOURCE_PARAM)
 	if value:
 		return value
+	return parse_qs(_referer_query()).get(UTM_SOURCE_PARAM, [""])[0]
+
+
+def _apply_landing_query(doc):
+	"""Store the public page's query string as posted (or the Referer's), unless already set."""
+	if not doc.meta.has_field(FIELD_LANDING_QUERY) or doc.get(FIELD_LANDING_QUERY):
+		return
+	value = str(frappe.form_dict.get(LANDING_QUERY_PARAM) or _referer_query()).lstrip("?")
+	if value:
+		doc.set(FIELD_LANDING_QUERY, f"?{value}"[:LANDING_QUERY_MAX_LENGTH])
+
+
+def _referer_query() -> str:
 	referer = getattr(frappe.request, "headers", {}).get("Referer", "") if frappe.request else ""
-	return parse_qs(urlparse(referer).query).get(UTM_SOURCE_PARAM, [""])[0]
+	return urlparse(referer).query
 
 
 def _apply_hidden_defaults(doc):
