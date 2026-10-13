@@ -7,6 +7,7 @@ from crm.txb.api import registration as R
 from crm.txb.constants import (
 	FIELD_CONTACT_REGISTRATION_STATUS,
 	FIELD_CONTACT_SOURCE_WORKSHOP,
+	FIELD_LANDING_QUERY,
 	FIELD_REGISTRATION_LINK,
 	FIELD_REGISTRATION_TOKEN,
 	PIPELINE_DELIVERING_COACHING,
@@ -101,6 +102,7 @@ class TestWorkshopRegistration(FrappeTestCase):
 
 	def tearDown(self):
 		frappe.form_dict.pop("utm_source", None)
+		frappe.form_dict.pop("landing_query", None)
 		frappe.db.rollback()
 
 	# ---- link / QR ----
@@ -231,6 +233,16 @@ class TestWorkshopRegistration(FrappeTestCase):
 			self.token, frappe.as_json(values(WORKSHOP_INTEREST_IN, email="reg-utm@test.invalid"))
 		)
 		self.assertEqual(frappe.db.get_value("CRM Deal", result["deal"], "source"), "Social")
+
+	def test_landing_query_is_stored_on_the_created_deal(self):
+		frappe.form_dict["landing_query"] = "?utm_campaign=workshop_2026"
+		result = R.process_registration(
+			self.token, frappe.as_json(values(WORKSHOP_INTEREST_IN, email="reg-lq@test.invalid"))
+		)
+		self.assertEqual(
+			frappe.db.get_value("CRM Deal", result["deal"], FIELD_LANDING_QUERY),
+			"?utm_campaign=workshop_2026",
+		)
 
 	# ---- confirmation email ----
 

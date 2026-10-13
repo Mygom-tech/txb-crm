@@ -27,7 +27,7 @@ import frappe
 from frappe import _
 from frappe.utils import get_url
 
-from crm.api.form import _apply_utm_source
+from crm.api.form import _apply_landing_query, _apply_utm_source
 from crm.fcrm.doctype.crm_deal.crm_deal import contact_exists
 from crm.txb.constants import (
 	CONFIRMATION_TEMPLATE,
@@ -299,6 +299,7 @@ def create_registration_deal(values: dict, organization: str | None, contact, so
 	)
 	deal.append("contacts", {"contact": contact.name, "is_primary": 1})
 	_apply_utm_source(deal)  # ?utm_source= on the page URL, forwarded by the template
+	_apply_landing_query(deal)
 	deal.insert(ignore_permissions=True)
 	if values["comments"]:
 		add_note(deal, "Registration comments", values["comments"])
