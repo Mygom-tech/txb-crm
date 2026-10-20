@@ -19,20 +19,18 @@ def render_recap_email(snapshot: dict) -> tuple[str, str]:
 	# A header, not HTML: collapsed to one line so coach text can never add a header.
 	subject = " ".join(str(snapshot.get("subject") or _("Coaching call recap")).split())
 
-	rows = [
-		(_("Date"), snapshot.get("delivery_date")),
-		(_("Call status"), snapshot.get("call_status")),
-		(_("Topic"), snapshot.get("topic")),
-	]
-	parts = [f"<p><strong>{_escape(subject)}</strong></p>"]
-	parts += [f"<p>{_escape(label)}: {_escape(value)}</p>" for label, value in rows if value]
-	notes = _notes_html(snapshot.get("call_notes_html"))
-	if notes:
-		parts.append(f"<p>{notes}</p>")
-	if snapshot.get("next_call_date") and not snapshot.get("is_last_call"):
-		parts.append(f"<p>{_escape(_('Next call'))}: {_escape(snapshot['next_call_date'])}</p>")
+	# Order is the product's recap structure: intro, when, summary, action items, next call.
+	parts = [f"<p>{_escape(_('Here is a recap of your coaching call.'))}</p>"]
+	if snapshot.get("delivery_date"):
+		parts.append(f"<p>{_escape(_('Date'))}: {_escape(snapshot['delivery_date'])}</p>")
+	for label, key in ((_("Summary"), "call_notes_html"), (_("Action items"), "action_items_html")):
+		text = _notes_html(snapshot.get(key))
+		if text:
+			parts.append(f"<p><strong>{_escape(label)}</strong><br>{text}</p>")
 	if snapshot.get("is_last_call"):
 		parts.append(f"<p>{_escape(_('This was your last coaching call.'))}</p>")
+	elif snapshot.get("next_call_date"):
+		parts.append(f"<p>{_escape(_('Next call'))}: {_escape(snapshot['next_call_date'])}</p>")
 	return subject, "\n".join(parts)
 
 

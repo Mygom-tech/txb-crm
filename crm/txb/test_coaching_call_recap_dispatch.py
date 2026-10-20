@@ -219,7 +219,7 @@ class TestCoachingCallRecapDispatch(unittest.TestCase):
 	def test_the_email_keeps_lithuanian_text_escapes_coach_markup_and_has_no_attachments(self):
 		recap = self.make_recap(
 			self.make_deal(),
-			topic=f"<b>{LITHUANIAN}</b>",
+			action_items=f"<b>{LITHUANIAN}</b>",
 			call_notes=f"Pastabos {LITHUANIAN}\n<script>alert('x')</script><img src=x>",
 		)
 
@@ -252,6 +252,26 @@ class TestCoachingCallRecapDispatch(unittest.TestCase):
 		self.assertEqual(subject, f"Coaching Call #2 {LITHUANIAN} Bcc: x@example.com")
 		self.assertIn("Tom &amp; Jerry &lt;3", message)
 		self.assertNotIn("&amp;amp;", message)
+
+	def test_the_email_follows_the_recap_structure(self):
+		_subject, message = render_recap_email(
+			build_snapshot(
+				"Coaching Call #1",
+				{
+					"call_status": "Completed",
+					"delivery_date": "2026-10-05",
+					"topic": "Leadership styles",
+					"call_notes": "Reviewed DISC results",
+					"action_items": "Send DISC summary",
+					"next_call_date": "2026-10-12 10:00:00",
+				},
+			)
+		)
+
+		sections = ["recap of your coaching call", "2026-10-05", "Reviewed DISC", "Send DISC", "2026-10-12"]
+		positions = [message.index(section) for section in sections]
+		self.assertEqual(positions, sorted(positions))
+		self.assertNotIn("Completed", message)
 
 	# ac-5
 	def test_retry_requeues_only_a_failed_recap(self):
