@@ -63,3 +63,4 @@ crm.patches.v1_0.add_first_call_reminder_fields
 crm.patches.v1_0.add_delivery_coach_notification_foundation #08-10-2026 TXB-288
 crm.patches.v1_0.add_contact_inactivity_cycles
 crm.patches.v1_0.add_landing_query_field
+crm.patches.v1_0.coach_activation_notifications

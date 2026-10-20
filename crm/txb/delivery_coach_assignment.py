@@ -1,27 +1,39 @@
-"""Delivery Coach assignment notifications: detect the assignment, then email and Slack the coach.
+"""Delivery Coach notifications: activation and later reassignment, by email.
 
-Built on the TXB-269 foundation (settings, ledger, Email Template). Two halves:
+Built on the TXB-269 foundation (settings, ledger, Email Templates). Two triggers record one
+ledger row each and queue the worker after commit, so delivery can never delay, fail or roll
+back the save:
 
-* `queue_assignment_notification` (CRM Deal on_update) turns a real change of a Delivering
-  Coaching deal's Delivery Coach into one ledger row, keyed by the save that made it, and
-  queues the worker after commit -- so delivery can never delay, fail or roll back the save.
-* `process_assignment_notification` (the worker) delivers email and Slack independently. Before
-  each channel it rechecks that the event is still the Deal's current assignment generation in
-  Delivering Coaching and that notifications are not Disabled; otherwise the channel is Skipped
-  without contacting anyone. Each channel is claimed under a row lock and its outcome committed
-  on its own, so a re-run only retries Pending/Failed channels: Sent and Skipped are final, and
-  an Uncertain Slack DM (it may have been delivered) is held, never resent automatically.
+* `record_activation` -- called by the Set First Call Date action, a Delivering Coaching deal's
+  first move to Active -- emails the Delivery Coach the client's details and the client that a
+  coach was assigned, both promising contact within 48 hours. In the same transaction it gives
+  the coach a CRM Task due in 48 hours and tells the sales Opportunity's owner, in the CRM, that
+  their sold client has a coach. Keyed per deal, so it happens once however often it is called.
+* `queue_assignment_notification` (CRM Deal on_update) emails a coach assigned to a deal that is
+  already Active. The client is not emailed again. Before activation a coach change sends
+  nothing: activation is when the coach hears about the client.
 
-The previous coach is never notified, and nothing is backfilled: only a save that changes the
-coach creates an event.
+`process_assignment_notification` (the worker) delivers each channel independently. Before each
+it rechecks that the event is still the Deal's current assignment generation in Delivering
+Coaching and that notifications are not Disabled; otherwise the channel is Skipped without
+contacting anyone. Each channel is claimed under a row lock and its outcome committed on its
+own, so a re-run only retries Pending/Failed channels: Sent and Skipped are final.
 """
 
 import frappe
-from frappe.utils import get_datetime
+from frappe import _
+from frappe.utils import add_to_date, get_datetime, now_datetime
 
-from crm.txb.constants import FIELD_DELIVERY_COACH, PIPELINE_DELIVERING_COACHING
+from crm.fcrm.doctype.crm_notification.crm_notification import notify_user
+from crm.txb.constants import (
+	FIELD_DELIVERY_COACH,
+	FIELD_SALES_SOURCE_DEAL,
+	PIPELINE_DELIVERING_COACHING,
+	STATUS_ACTIVE,
+)
 from crm.txb.delivery_coach_notifications import (
 	CHANNELS,
+	CLIENT_EMAIL_TEMPLATE,
 	LEDGER_DOCTYPE,
 	MODE_DISABLED,
 	MODE_TEST_REDIRECT,
@@ -29,45 +41,69 @@ from crm.txb.delivery_coach_notifications import (
 	STATUS_PENDING,
 	STATUS_SENT,
 	STATUS_SKIPPED,
-	STATUS_UNCERTAIN,
 	build_assignment_email_context,
+	client_name,
 	get_notification_config,
-	get_slack_bot_token,
 	render_assignment_email,
 )
-from crm.txb.slack import SlackError, send_direct_message
 
 LOG_TITLE = "Delivery Coach assignment notification"
 SUPERSEDED = "Superseded: the Delivery Coach changed before delivery"
 LEFT_PIPELINE = "Skipped: the Deal left Delivering Coaching before delivery"
 STOPPED = "Skipped: notifications were Disabled before delivery"
-OUTCOME_NOT_RECORDED = "outcome_not_recorded"
+NOT_ACTIVATION = "Skipped: the client is only emailed when coaching is activated"
+REACH_OUT_HOURS = 48
+ACTIVATION_SAVEPOINT = "coach_activation"
 
 
-class SlackOutcomeNotRecorded(Exception):
-	"""A Slack DM may have been posted, but its outcome could not be saved."""
+def record_activation(deal) -> None:
+	"""Notify the coach, the client and the sales owner that coaching was activated.
+
+	Called by the activation action before it saves the deal, inside its transaction. Best
+	effort: a failure here is logged and never blocks the activation.
+	"""
+	event_key = f"{deal.name}-activation"
+	coach = deal.get(FIELD_DELIVERY_COACH)
+	if not coach or frappe.db.exists(LEDGER_DOCTYPE, event_key):
+		return
+	frappe.db.savepoint(ACTIVATION_SAVEPOINT)
+	try:
+		_add_reach_out_task(deal, coach)
+		_notify_sales_owner(deal, coach)
+		_record_event(deal, event_key, coach, now_datetime(), notify_client=True)
+	except Exception as e:
+		frappe.db.rollback(save_point=ACTIVATION_SAVEPOINT)
+		frappe.log_error(
+			title=LOG_TITLE,
+			message=f"deal={deal.name} intended_user={coach} error=activation_failed: {type(e).__name__}",
+		)
 
 
 def queue_assignment_notification(deal, method=None):
-	"""Record and queue one notification for a newly assigned Delivery Coach.
+	"""Record and queue one email to a coach newly assigned to an already Active deal.
 
-	Only a real change to a non-empty coach counts; unchanged saves, clearing the coach,
-	assigning yourself, imports and migrations create nothing. Best-effort: the deal save must
-	never fail because the notification could not be queued.
+	Only a real change to a non-empty coach on a deal that was Active before this save counts;
+	unchanged saves, clearing the coach, assigning yourself, imports and migrations create
+	nothing. Best-effort: the deal save must never fail because the notification could not be
+	queued.
 	"""
 	if deal.pipeline_type != PIPELINE_DELIVERING_COACHING:
 		return
 	coach = deal.get(FIELD_DELIVERY_COACH)
 	before = deal.get_doc_before_save()
-	if not coach or (before and before.get(FIELD_DELIVERY_COACH) == coach):
+	if not coach or not before or before.get(FIELD_DELIVERY_COACH) == coach:
+		return
+	if before.status != STATUS_ACTIVE or deal.status != STATUS_ACTIVE:
 		return
 	if coach == frappe.session.user:
 		return
 	if frappe.flags.in_import or frappe.flags.in_migrate or frappe.flags.in_patch:
 		return
 
+	# One save is one event: its modified timestamp keys the ledger row and the job.
+	assigned_at = get_datetime(deal.modified)
 	try:
-		_record_assignment(deal, coach, frappe.session.user)
+		_record_event(deal, f"{deal.name}-{assigned_at:%Y%m%d%H%M%S%f}", coach, assigned_at)
 	except Exception as e:
 		frappe.log_error(
 			title=LOG_TITLE,
@@ -75,10 +111,7 @@ def queue_assignment_notification(deal, method=None):
 		)
 
 
-def _record_assignment(deal, coach: str, assigned_by: str) -> None:
-	# One save is one event: its modified timestamp keys the ledger row and the job.
-	assigned_at = get_datetime(deal.modified)
-	event_key = f"{deal.name}-{assigned_at:%Y%m%d%H%M%S%f}"
+def _record_event(deal, event_key: str, coach: str, assigned_at, notify_client: bool = False) -> None:
 	if frappe.db.exists(LEDGER_DOCTYPE, event_key):
 		return
 
@@ -92,17 +125,56 @@ def _record_assignment(deal, coach: str, assigned_by: str) -> None:
 			"deal": deal.name,
 			"intended_user": coach,
 			"effective_user": config["test_user"] if mode == MODE_TEST_REDIRECT else coach,
-			"assigned_by": assigned_by,
+			"assigned_by": frappe.session.user,
 			"assigned_at": assigned_at,
 			"mode": mode,
 			"email_status": status,
-			"slack_status": status,
+			"client_email_status": status if notify_client else STATUS_SKIPPED,
+			"client_email_error": None if notify_client else NOT_ACTIVATION,
 		}
 	).insert(ignore_permissions=True)
 
 	if mode == MODE_DISABLED:
 		return
 	enqueue_assignment_notification(event_key)
+
+
+def _add_reach_out_task(deal, coach: str) -> None:
+	"""The coach's CRM Task to contact the client within 48 hours."""
+	# Imported here: the pipelines import this module.
+	from crm.txb.pipelines.common import add_task
+
+	add_task(
+		deal,
+		"Reach out to the client",
+		_("Coaching is active. Contact the client within {0} hours.").format(REACH_OUT_HOURS),
+		assigned_to=coach,
+		due_date=add_to_date(now_datetime(), hours=REACH_OUT_HOURS),
+		priority="High",
+	)
+
+
+def _notify_sales_owner(deal, coach: str) -> None:
+	"""Tell the owner of the sales Opportunity this deal was handed over from, in the CRM."""
+	source = deal.get(FIELD_SALES_SOURCE_DEAL)
+	owner = frappe.db.get_value("CRM Deal", source, "deal_owner") if source else None
+	if not owner:
+		return
+	coach_name = frappe.db.get_value("User", coach, "full_name") or coach
+	text = _("{0} is now coached by {1}.").format(client_name(deal), coach_name)
+	notify_user(
+		{
+			"owner": frappe.session.user,
+			"assigned_to": owner,
+			"notification_type": "Assignment",
+			"message": text,
+			"notification_text": f"<p>{frappe.utils.escape_html(text)}</p>",
+			"reference_doctype": "CRM Deal",
+			"reference_docname": deal.name,
+			"redirect_to_doctype": "CRM Deal",
+			"redirect_to_docname": deal.name,
+		}
+	)
 
 
 def enqueue_assignment_notification(event_key: str, channel: str | None = None) -> None:
@@ -141,15 +213,7 @@ def process_assignment_notification(event_key: str, channel: str | None = None) 
 				title=LOG_TITLE,
 				message=f"event={event_key} channel={channel} error=worker_failed: {type(e).__name__}",
 			)
-			if isinstance(e, SlackOutcomeNotRecorded):
-				# Slack may already show the message: hold it rather than leave it to be resent.
-				frappe.db.set_value(
-					LEDGER_DOCTYPE,
-					event_key,
-					{f"{channel}_status": STATUS_UNCERTAIN, f"{channel}_error": OUTCOME_NOT_RECORDED},
-					update_modified=False,
-				)
-			frappe.db.commit()  # nosemgrep -- keep the log and hold even if the other channel fails
+			frappe.db.commit()  # nosemgrep -- keep the log even if the other channel fails
 
 
 def _process_channel(event_key: str, channel: str) -> None:
@@ -172,20 +236,11 @@ def _process_channel(event_key: str, channel: str) -> None:
 	event.claim_channel(channel)
 	try:
 		SENDERS[channel](event)
-	except SlackError as e:
-		status, error = (STATUS_UNCERTAIN if e.uncertain else STATUS_FAILED), e.code
 	except Exception as e:
 		status, error = STATUS_FAILED, f"{type(e).__name__}: {e}"
 	else:
 		status, error = STATUS_SENT, None
-
-	try:
-		_record(event, channel, status, error)
-	except Exception as e:
-		# A queued email rolls back with its unrecorded attempt; a posted Slack message cannot.
-		if channel == "slack" and status in (STATUS_SENT, STATUS_UNCERTAIN):
-			raise SlackOutcomeNotRecorded(type(e).__name__) from None
-		raise
+	_record(event, channel, status, error)
 
 
 def _skip_reason(event) -> str | None:
@@ -202,7 +257,7 @@ def _skip_reason(event) -> str | None:
 	if deal.pipeline_type != PIPELINE_DELIVERING_COACHING:
 		return LEFT_PIPELINE
 	# Disabled now is an emergency stop. Any other mode leaves the captured routing alone, so a
-	# queued Test redirect event never reaches the coach and a Live one never the test user.
+	# queued Test redirect event never reaches the coach or client and a Live one never the test user.
 	if get_notification_config()["mode"] == MODE_DISABLED:
 		return STOPPED
 	return None
@@ -228,8 +283,8 @@ def _record(event, channel: str, status: str, error=None) -> None:
 	event.reload()
 	event.flags.ignore_links = True
 	event.mark_channel(channel, status, error)
-	if status in (STATUS_FAILED, STATUS_UNCERTAIN):
-		# Identifiers and the sanitized provider error only -- never tokens or response data.
+	if status == STATUS_FAILED:
+		# Identifiers and the sanitized error only -- never message content.
 		frappe.log_error(
 			title=LOG_TITLE,
 			message=(
@@ -241,8 +296,8 @@ def _record(event, channel: str, status: str, error=None) -> None:
 	frappe.db.commit()  # nosemgrep -- each channel's outcome must survive the other's failure
 
 
-def _recipient(event) -> str:
-	recipient = frappe.db.get_value("User", event.effective_user, "email")
+def _user_email(user: str) -> str:
+	recipient = frappe.db.get_value("User", user, "email")
 	if not recipient:
 		raise ValueError("recipient_has_no_email")
 	return recipient
@@ -258,48 +313,28 @@ def _context(event) -> dict:
 	)
 
 
+# Queued, not now=True: the immediate path swallows SMTP errors, which would read as Sent.
+# Frappe's outbox owns SMTP delivery and its retries from here.
+
+
 def _send_email(event) -> None:
-	# Queued, not now=True: the immediate path swallows SMTP errors, which would read as Sent.
-	# Frappe's outbox owns SMTP delivery and its retries from here.
-	recipient = _recipient(event)
 	subject, message = render_assignment_email(_context(event))
+	frappe.sendmail(recipients=[_user_email(event.effective_user)], subject=subject, message=message)
+
+
+def _send_client_email(event) -> None:
+	context = _context(event)
+	if event.mode == MODE_TEST_REDIRECT:
+		recipient = _user_email(event.effective_user)
+	else:
+		# Imported here: coaching_call_recap reaches the pipelines, which import this module.
+		from crm.txb.coaching_call_recap import primary_contact_email
+
+		recipient = primary_contact_email(frappe.get_doc("CRM Deal", event.deal))[1]
+		if not recipient:
+			raise ValueError("client_has_no_primary_email")
+	subject, message = render_assignment_email(context, CLIENT_EMAIL_TEMPLATE)
 	frappe.sendmail(recipients=[recipient], subject=subject, message=message)
 
 
-def _send_slack(event) -> None:
-	recipient = _recipient(event)
-	text = build_slack_message(_context(event))
-	token = get_slack_bot_token()
-	if not token:
-		raise SlackError("missing_bot_token")
-	send_direct_message(token, recipient, text)
-
-
-SENDERS = {"email": _send_email, "slack": _send_slack}
-
-
-def _escape(value) -> str:
-	return str(value or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
-def build_slack_message(context: dict) -> str:
-	"""The Slack DM: the assignment email's essential content and Deal link in Slack mrkdwn."""
-	values = {key: _escape(value) for key, value in context.items()}
-	lines = []
-	if context["is_test_redirect"]:
-		lines.append(
-			f":warning: *Test notification.* This assignment is intended for "
-			f"*{values['intended_coach_name']}*."
-		)
-	lines.append(
-		f"Hi {values['intended_coach_name']}, {values['assigned_by_name']} assigned a client to you "
-		f"as Delivery Coach on {values['assigned_at']}."
-	)
-	lines.append(f"*Client:* {values['client_name']}")
-	if context["organization"]:
-		lines.append(f"*Organization:* {values['organization']}")
-	if context["program_type"]:
-		lines.append(f"*Program:* {values['program_type']}")
-	lines.append(f"*Status:* {values['status']}")
-	lines.append(f"<{context['opportunity_url']}|Open the Opportunity in CRM>")
-	return "\n".join(lines)
+SENDERS = {"email": _send_email, "client_email": _send_client_email}

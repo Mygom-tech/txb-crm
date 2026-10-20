@@ -5,8 +5,8 @@
 
 Pins what the notification consumer builds on: the migration installs fail-closed, Disabled
 settings and is safe to re-run without replaying history or touching existing ledger rows; only
-a System Manager may change the settings and the Slack token stays encrypted and out of the
-ledger; one ledger row per assignment event with immutable routing and generation; each channel
+a System Manager may change the settings and error summaries carry no credentials; one ledger
+row per assignment event with immutable routing and generation; each channel
 moves independently, a Sent channel can never be sent again and an Uncertain one is never
 resent automatically; the editable template wraps the documented context in the TXB-116 wrapper
 and signature and reads "Not provided" for a blank organization or program type.
@@ -23,7 +23,6 @@ from crm.txb.constants import (
 	FIELD_DELIVERY_COACH,
 	PIPELINE_DELIVERING_COACHING,
 )
-from crm.txb.delivery_coach_assignment import build_slack_message
 from crm.txb.delivery_coach_notifications import (
 	ASSIGNMENT_EMAIL_TEMPLATE,
 	LEDGER_DOCTYPE,
@@ -32,7 +31,6 @@ from crm.txb.delivery_coach_notifications import (
 	MODE_TEST_REDIRECT,
 	NOT_PROVIDED,
 	SETTING_MODE,
-	SETTING_SLACK_BOT_TOKEN,
 	SETTING_TEST_USER,
 	SETTINGS_DOCTYPE,
 	STATUS_FAILED,
@@ -42,7 +40,6 @@ from crm.txb.delivery_coach_notifications import (
 	STATUS_UNCERTAIN,
 	build_assignment_email_context,
 	get_notification_config,
-	get_slack_bot_token,
 	render_assignment_email,
 	sanitize_error,
 )
@@ -52,12 +49,13 @@ COACH = "txb-notify-coach@example.com"
 TESTER = "txb-notify-tester@example.com"
 SALES_MANAGER = "txb-notify-sales-manager@example.com"
 SYSTEM_MANAGER = "txb-notify-system-manager@example.com"
-# Built at runtime so GitHub push protection does not flag a fake Slack token.
-TOKEN = "-".join(("xoxb", "123456789012", "abcdefghijklmnopQRSTUVWX"))
-OTHER_TOKEN = "-".join(("xoxb", "210987654321", "XWVUTSRQPONMLKJIhgfedcba"))
 
 CONTEXT_KEYS = {
 	"client_name",
+	"client_first_name",
+	"client_email",
+	"client_phone",
+	"client_program",
 	"organization",
 	"program_type",
 	"status",
@@ -219,7 +217,6 @@ class TestDeliveryCoachNotificationFoundation(FrappeTestCase):
 		self.assertEqual(mode.default, MODE_DISABLED)
 		test_user = meta.get_field(SETTING_TEST_USER)
 		self.assertEqual((test_user.fieldtype, test_user.options), ("Link", "User"))
-		self.assertEqual(meta.get_field(SETTING_SLACK_BOT_TOKEN).fieldtype, "Password")
 
 		self.assertEqual(frappe.db.get_single_value(SETTINGS_DOCTYPE, SETTING_MODE), MODE_DISABLED)
 		self.assertEqual(get_notification_config()["mode"], MODE_DISABLED)
@@ -228,7 +225,7 @@ class TestDeliveryCoachNotificationFoundation(FrappeTestCase):
 		meta = frappe.get_meta(LEDGER_DOCTYPE)
 		self.assertEqual(meta.autoname, "field:event_key")
 		self.assertTrue(meta.get_field("event_key").unique)
-		for channel in ("email", "slack"):
+		for channel in ("email", "client_email"):
 			status = meta.get_field(f"{channel}_status")
 			self.assertEqual(
 				status.options.split("\n"), ["Pending", "Sent", "Failed", "Skipped", "Uncertain"]
@@ -253,7 +250,7 @@ class TestDeliveryCoachNotificationFoundation(FrappeTestCase):
 
 		self.assertEqual(frappe.db.get_single_value(SETTINGS_DOCTYPE, SETTING_MODE), MODE_LIVE)
 		self.assertEqual(self.assignment_body(), "<p>edited</p>")
-		for fieldname in (SETTING_MODE, SETTING_TEST_USER, SETTING_SLACK_BOT_TOKEN):
+		for fieldname in (SETTING_MODE, SETTING_TEST_USER):
 			self.assertEqual(
 				frappe.db.count("Custom Field", {"dt": SETTINGS_DOCTYPE, "fieldname": fieldname}), 1
 			)
@@ -267,11 +264,11 @@ class TestDeliveryCoachNotificationFoundation(FrappeTestCase):
 
 	def test_migration_preserves_existing_rows_without_backfill(self):
 		event = self.make_event("deal-1:legacy")
-		# A row recorded before TXB-288: no generation, never claimed, Slack already Failed.
+		# A row recorded before TXB-288: no generation, never claimed, a channel already Failed.
 		frappe.db.set_value(
 			LEDGER_DOCTYPE,
 			event.name,
-			{"assignment_generation": None, "slack_status": STATUS_FAILED},
+			{"assignment_generation": None, "client_email_status": STATUS_FAILED},
 			update_modified=False,
 		)
 		before = frappe.db.get_value(LEDGER_DOCTYPE, event.name, "*", as_dict=True)
@@ -283,12 +280,12 @@ class TestDeliveryCoachNotificationFoundation(FrappeTestCase):
 		after = frappe.db.get_value(LEDGER_DOCTYPE, event.name, "*", as_dict=True)
 		self.assertEqual(after, before)
 		self.assertIsNone(after.assignment_generation)
-		self.assertEqual((after.email_attempts, after.slack_attempts), (0, 0))
-		self.assertIsNone(after.slack_claimed_at)
+		self.assertEqual((after.email_attempts, after.client_email_attempts), (0, 0))
+		self.assertIsNone(after.client_email_claimed_at)
 
 		# The legacy row still works and its blank generation is never filled in.
 		legacy = frappe.get_doc(LEDGER_DOCTYPE, event.name)
-		legacy.mark_channel("slack", STATUS_SENT)
+		legacy.mark_channel("client_email", STATUS_SENT)
 		self.assertIsNone(frappe.db.get_value(LEDGER_DOCTYPE, event.name, "assignment_generation"))
 
 	# -- configuration ---------------------------------------------------------------------
@@ -303,28 +300,16 @@ class TestDeliveryCoachNotificationFoundation(FrappeTestCase):
 
 		frappe.db.set_single_value(SETTINGS_DOCTYPE, SETTING_MODE, MODE_TEST_REDIRECT)
 		frappe.db.set_single_value(SETTINGS_DOCTYPE, SETTING_TEST_USER, TESTER)
-		self.assertEqual(
-			get_notification_config(), {"mode": MODE_TEST_REDIRECT, "test_user": TESTER}
-		)
+		self.assertEqual(get_notification_config(), {"mode": MODE_TEST_REDIRECT, "test_user": TESTER})
 
-	def test_slack_token_is_encrypted_and_never_exposed(self):
-		settings = frappe.get_single(SETTINGS_DOCTYPE)
-		settings.set(SETTING_SLACK_BOT_TOKEN, TOKEN)
-		settings.save(ignore_permissions=True)
-
-		stored = frappe.db.get_value(
-			"Singles", {"doctype": SETTINGS_DOCTYPE, "field": SETTING_SLACK_BOT_TOKEN}, "value"
-		)
-		self.assertNotEqual(stored, TOKEN)
-		self.assertNotIn(TOKEN, frappe.get_single(SETTINGS_DOCTYPE).as_json())
-		self.assertEqual(get_slack_bot_token(), TOKEN)
-
-		self.assertNotIn(TOKEN, sanitize_error(f"invalid_auth using {TOKEN}"))
+	def test_error_summaries_carry_no_credentials(self):
 		self.assertNotIn("xoxp-999", sanitize_error("Authorization: Bearer xoxp-999-abc"))
 		self.assertLessEqual(len(sanitize_error("x" * 5000)), 500)
 
-		event = self.make_event(slack_status=STATUS_FAILED, slack_error=f"token {TOKEN} rejected")
-		self.assertNotIn(TOKEN, frappe.db.get_value(LEDGER_DOCTYPE, event.name, "slack_error"))
+		event = self.make_event(
+			client_email_status=STATUS_FAILED, client_email_error="Authorization: Bearer abc123 rejected"
+		)
+		self.assertNotIn("abc123", frappe.db.get_value(LEDGER_DOCTYPE, event.name, "client_email_error"))
 		ledger_types = {df.fieldtype for df in frappe.get_meta(LEDGER_DOCTYPE).fields}
 		self.assertNotIn("Password", ledger_types)
 
@@ -333,56 +318,31 @@ class TestDeliveryCoachNotificationFoundation(FrappeTestCase):
 	def test_system_manager_and_administrator_can_change_notification_settings(self):
 		self.save_settings_as(
 			"Administrator",
-			**{SETTING_MODE: MODE_LIVE, SETTING_TEST_USER: TESTER, SETTING_SLACK_BOT_TOKEN: TOKEN},
+			**{SETTING_MODE: MODE_LIVE, SETTING_TEST_USER: TESTER},
 		)
 		self.assertEqual(frappe.db.get_single_value(SETTINGS_DOCTYPE, SETTING_MODE), MODE_LIVE)
-		self.assertEqual(get_slack_bot_token(), TOKEN)
 
-		self.save_settings_as(
-			SYSTEM_MANAGER,
-			**{SETTING_MODE: MODE_TEST_REDIRECT, SETTING_SLACK_BOT_TOKEN: OTHER_TOKEN},
-		)
+		self.save_settings_as(SYSTEM_MANAGER, **{SETTING_MODE: MODE_TEST_REDIRECT})
 		frappe.set_user("Administrator")
-		self.assertEqual(
-			get_notification_config(), {"mode": MODE_TEST_REDIRECT, "test_user": TESTER}
-		)
-		self.assertEqual(get_slack_bot_token(), OTHER_TOKEN)
+		self.assertEqual(get_notification_config(), {"mode": MODE_TEST_REDIRECT, "test_user": TESTER})
 
 	def test_other_roles_cannot_change_notification_settings(self):
 		self.save_settings_as(
 			"Administrator",
-			**{SETTING_MODE: MODE_DISABLED, SETTING_TEST_USER: TESTER, SETTING_SLACK_BOT_TOKEN: TOKEN},
+			**{SETTING_MODE: MODE_DISABLED, SETTING_TEST_USER: TESTER},
 		)
 		for user in (SALES_MANAGER, TESTER):
 			for change in (
 				{SETTING_MODE: MODE_LIVE},
 				{SETTING_TEST_USER: COACH},
 				{SETTING_TEST_USER: None},
-				{SETTING_SLACK_BOT_TOKEN: OTHER_TOKEN},
-				{SETTING_SLACK_BOT_TOKEN: ""},
 			):
 				with self.subTest(user=user, change=change):
-					with self.assertRaises(frappe.PermissionError) as raised:
+					with self.assertRaises(frappe.PermissionError):
 						self.save_settings_as(user, **change)
-					self.assertNotIn(TOKEN, str(raised.exception))
-					self.assertNotIn(OTHER_TOKEN, str(raised.exception))
 
 		frappe.set_user("Administrator")
-		self.assertEqual(
-			get_notification_config(), {"mode": MODE_DISABLED, "test_user": TESTER}
-		)
-		self.assertEqual(get_slack_bot_token(), TOKEN)
-
-	def test_unchanged_masked_token_is_not_a_change(self):
-		self.save_settings_as("Administrator", **{SETTING_SLACK_BOT_TOKEN: TOKEN})
-
-		# What the settings form posts back for an untouched token: asterisks, of any length.
-		self.save_settings_as(SALES_MANAGER)
-		self.save_settings_as(SALES_MANAGER, **{SETTING_SLACK_BOT_TOKEN: "*****"})
-
-		frappe.set_user("Administrator")
-		self.assertEqual(get_slack_bot_token(), TOKEN)
-		self.assertNotIn(TOKEN, frappe.get_single(SETTINGS_DOCTYPE).as_json())
+		self.assertEqual(get_notification_config(), {"mode": MODE_DISABLED, "test_user": TESTER})
 
 	# -- ledger ----------------------------------------------------------------------------
 
@@ -393,19 +353,19 @@ class TestDeliveryCoachNotificationFoundation(FrappeTestCase):
 
 	def test_channels_move_independently_and_sent_is_final(self):
 		event = self.make_event()
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_PENDING, STATUS_PENDING))
+		self.assertEqual((event.email_status, event.client_email_status), (STATUS_PENDING, STATUS_PENDING))
 
-		event.mark_channel("slack", STATUS_FAILED, f"channel_not_found {TOKEN}")
+		event.mark_channel("client_email", STATUS_FAILED, "Authorization: Bearer abc123 rejected")
 		self.assertEqual(event.email_status, STATUS_PENDING)
-		self.assertNotIn(TOKEN, event.slack_error)
-		self.assertTrue(event.is_channel_pending("slack"))
+		self.assertNotIn("abc123", event.client_email_error)
+		self.assertTrue(event.is_channel_pending("client_email"))
 
 		event.mark_channel("email", STATUS_SENT)
 		self.assertIsNotNone(event.email_sent_at)
 		self.assertFalse(event.is_channel_pending("email"))
 
-		event.mark_channel("slack", STATUS_SENT)
-		self.assertIsNotNone(event.slack_sent_at)
+		event.mark_channel("client_email", STATUS_SENT)
+		self.assertIsNotNone(event.client_email_sent_at)
 
 		for status in (STATUS_PENDING, STATUS_FAILED, STATUS_SKIPPED, STATUS_UNCERTAIN):
 			event.reload()
@@ -414,26 +374,28 @@ class TestDeliveryCoachNotificationFoundation(FrappeTestCase):
 
 	def test_skipped_channel_is_final(self):
 		event = self.make_event()
-		event.mark_channel("slack", STATUS_SKIPPED, "No Slack user for coach")
-		self.assertFalse(event.is_channel_pending("slack"))
+		event.mark_channel("client_email", STATUS_SKIPPED, "No primary email")
+		self.assertFalse(event.is_channel_pending("client_email"))
 		with self.assertRaises(frappe.ValidationError):
-			event.mark_channel("slack", STATUS_SENT)
+			event.mark_channel("client_email", STATUS_SENT)
 
 	def test_uncertain_channel_is_held_for_reconciliation(self):
 		event = self.make_event()
-		event.mark_channel("slack", STATUS_UNCERTAIN, "timeout after chat.postMessage")
+		event.mark_channel(
+			"client_email", STATUS_UNCERTAIN, "timeout after the provider accepted the request"
+		)
 		self.assertEqual(event.email_status, STATUS_PENDING)
-		self.assertFalse(event.is_channel_pending("slack"))
-		self.assertFalse(event.claim_channel("slack"))
+		self.assertFalse(event.is_channel_pending("client_email"))
+		self.assertFalse(event.claim_channel("client_email"))
 
 		event.reload()
 		with self.assertRaises(frappe.ValidationError):
-			event.mark_channel("slack", STATUS_PENDING)
+			event.mark_channel("client_email", STATUS_PENDING)
 
 		# Reconciliation settles it either way; confirmed-not-delivered becomes retryable.
 		event.reload()
-		event.mark_channel("slack", STATUS_FAILED, "not delivered")
-		self.assertTrue(event.is_channel_pending("slack"))
+		event.mark_channel("client_email", STATUS_FAILED, "not delivered")
+		self.assertTrue(event.is_channel_pending("client_email"))
 
 		other = self.make_event("deal-1:assign-2")
 		other.mark_channel("email", STATUS_UNCERTAIN)
@@ -442,25 +404,25 @@ class TestDeliveryCoachNotificationFoundation(FrappeTestCase):
 
 	def test_claims_count_attempts_and_stamp_recovery(self):
 		event = self.make_event()
-		self.assertEqual((event.email_attempts, event.slack_attempts), (0, 0))
+		self.assertEqual((event.email_attempts, event.client_email_attempts), (0, 0))
 
-		self.assertTrue(event.claim_channel("slack"))
-		self.assertEqual(event.slack_attempts, 1)
-		self.assertIsNotNone(event.slack_claimed_at)
-		self.assertIsNone(event.slack_recovered_at)
+		self.assertTrue(event.claim_channel("client_email"))
+		self.assertEqual(event.client_email_attempts, 1)
+		self.assertIsNotNone(event.client_email_claimed_at)
+		self.assertIsNone(event.client_email_recovered_at)
 		self.assertEqual((event.email_attempts, event.email_claimed_at), (0, None))
 
-		event.mark_channel("slack", STATUS_FAILED, "ratelimited")
-		self.assertTrue(event.claim_channel("slack", recovery=True))
-		self.assertEqual(event.slack_attempts, 2)
-		self.assertIsNotNone(event.slack_recovered_at)
+		event.mark_channel("client_email", STATUS_FAILED, "ratelimited")
+		self.assertTrue(event.claim_channel("client_email", recovery=True))
+		self.assertEqual(event.client_email_attempts, 2)
+		self.assertIsNotNone(event.client_email_recovered_at)
 
-		event.mark_channel("slack", STATUS_SENT)
-		self.assertFalse(event.claim_channel("slack"))
-		self.assertEqual(frappe.db.get_value(LEDGER_DOCTYPE, event.name, "slack_attempts"), 2)
+		event.mark_channel("client_email", STATUS_SENT)
+		self.assertFalse(event.claim_channel("client_email"))
+		self.assertEqual(frappe.db.get_value(LEDGER_DOCTYPE, event.name, "client_email_attempts"), 2)
 
 		event.reload()
-		event.slack_attempts = 0
+		event.client_email_attempts = 0
 		with self.assertRaises(frappe.ValidationError):
 			event.save(ignore_permissions=True)
 
@@ -519,10 +481,6 @@ class TestDeliveryCoachNotificationFoundation(FrappeTestCase):
 		self.assertIn(f"<td>Organization:</td><td>{NOT_PROVIDED}</td>", body)
 		self.assertIn(f"<td>Program:</td><td>{NOT_PROVIDED}</td>", body)
 
-		text = build_slack_message(context)
-		self.assertIn(f"*Organization:* {NOT_PROVIDED}", text)
-		self.assertIn(f"*Program:* {NOT_PROVIDED}", text)
-
 	def test_template_escapes_client_supplied_values(self):
 		context = self.context(first_name="<script>x</script>", last_name="", organization="A & B")
 		_subject, body = render_assignment_email(context)
@@ -553,9 +511,7 @@ class TestDeliveryCoachNotificationFoundation(FrappeTestCase):
 
 	def test_unedited_seed_is_reconciled_and_operator_edits_survive(self):
 		self.set_confirmation_body(FULL_CONFIRMATION_HTML)
-		frappe.db.set_value(
-			"Email Template", ASSIGNMENT_EMAIL_TEMPLATE, "response_html", TXB269_SEED_BODY
-		)
+		frappe.db.set_value("Email Template", ASSIGNMENT_EMAIL_TEMPLATE, "response_html", TXB269_SEED_BODY)
 
 		migrate()
 

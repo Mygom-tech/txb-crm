@@ -1,22 +1,21 @@
-"""Delivery Coach assignment notifications: configuration, ledger contract and email template.
+"""Delivery Coach notifications: configuration, ledger contract and email templates.
 
-The foundation only (TXB-269). Nothing here detects an assignment, calls Slack or sends mail;
-it gives the notification consumer three things to build on:
+The foundation only (TXB-269). Nothing here detects an assignment or sends mail; it gives the
+notification consumer three things to build on:
 
-* Site-specific settings on FCRM Settings -- a delivery mode (Disabled / Test redirect / Live),
-  the Test redirect recipient, and the Slack bot token as an encrypted Password. Every site
-  starts Disabled; Live is only ever reached by an operator switching it on.
-* The `CRM Coach Assignment Notification` ledger: one row per committed assignment event,
-  unique on `event_key`, with independent email and Slack states so a channel can be retried
-  without resending the other or one already Sent. Its captured routing and assignment
+* Site-specific settings on FCRM Settings -- a delivery mode (Disabled / Test redirect / Live)
+  and the Test redirect recipient. Every site starts Disabled; Live is only ever reached by an
+  operator switching it on.
+* The `CRM Coach Assignment Notification` ledger: one row per committed event, unique on
+  `event_key`, with independent coach email and client email states so a channel can be
+  retried without resending the other or one already Sent. Its captured routing and assignment
   generation never change after insert; each channel counts its attempts and stamps its
   latest claim and recovery (TXB-288).
-* An editable Email Template in the TXB-116 wrapper and signature, rendered from
+* Two editable Email Templates in the TXB-116 wrapper and signature: the coach's, with the
+  client's details, and the client's (Lithuanian), both rendered from
   `build_assignment_email_context`.
 
 Only a System Manager may change the settings (`crm.txb.permissions.guard_notification_settings`).
-The decrypted Slack token is never stored outside Frappe's encrypted password store and is
-redacted from every error summary written to the ledger.
 """
 
 import hashlib
@@ -26,7 +25,6 @@ import frappe
 from bs4 import BeautifulSoup
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 from frappe.utils import format_datetime, get_url
-from frappe.utils.password import get_decrypted_password
 
 from crm.txb.constants import CONFIRMATION_TEMPLATE, SETTING_FIRST_CALL_REMINDER_MINUTES
 
@@ -35,19 +33,20 @@ LEDGER_DOCTYPE = "CRM Coach Assignment Notification"
 
 SETTING_MODE = "delivery_coach_notification_mode"
 SETTING_TEST_USER = "delivery_coach_notification_test_user"
-SETTING_SLACK_BOT_TOKEN = "slack_bot_token"
 
 MODE_DISABLED = "Disabled"
 MODE_TEST_REDIRECT = "Test redirect"
 MODE_LIVE = "Live"
 MODES = (MODE_DISABLED, MODE_TEST_REDIRECT, MODE_LIVE)
 
-CHANNELS = ("email", "slack")
+# The coach's email and the client's email; both go to the Test Recipient in Test redirect.
+CHANNELS = ("email", "client_email")
 STATUS_PENDING = "Pending"
 STATUS_SENT = "Sent"
 STATUS_FAILED = "Failed"
 STATUS_SKIPPED = "Skipped"
-# The provider may or may not have accepted the message (a timeout after the request left).
+# The provider may or may not have accepted the message. Kept for rows recorded while a Slack
+# channel existed; no current sender reports it.
 STATUS_UNCERTAIN = "Uncertain"
 
 # Which channel state may follow which. Sent and Skipped are final, so a retry can never
@@ -65,6 +64,7 @@ CHANNEL_TRANSITIONS = {
 CLAIMABLE_STATUSES = (STATUS_PENDING, STATUS_FAILED)
 
 ASSIGNMENT_EMAIL_TEMPLATE = "TxB Delivery Coach Assignment"
+CLIENT_EMAIL_TEMPLATE = "TxB Coach Assigned to Client"
 ERROR_SUMMARY_MAX_LENGTH = 500
 # Shown for a blank organization or program type, so every row of the message is present.
 NOT_PROVIDED = "Not provided"
@@ -88,16 +88,8 @@ SETTINGS_FIELDS = [
 		"fieldtype": "Link",
 		"options": "User",
 		"label": "Delivery Coach Notification Test Recipient",
-		"description": "Receives both email and Slack notifications while the mode is Test redirect.",
+		"description": "Receives both the coach's and the client's email while the mode is Test redirect.",
 		"insert_after": SETTING_MODE,
-	},
-	{
-		"fieldname": SETTING_SLACK_BOT_TOKEN,
-		"fieldtype": "Password",
-		"label": "Slack Bot Token",
-		"description": "Bot token used to send private Slack notifications. Stored encrypted.",
-		"length": 255,
-		"insert_after": SETTING_TEST_USER,
 	},
 ]
 
@@ -107,9 +99,31 @@ _SUBJECT = (
 )
 
 # The assignment content only. The branded wrapper and signature around it are not kept here:
-# they are TXB-116's, taken from the site's confirmation template by `build_assignment_email_body`.
+# they are TXB-116's, taken from the site's confirmation template by `build_email_body`.
 # Values are escaped, since a guest registration names the client.
 _CONTENT = (
+	"{% if is_test_redirect %}"
+	'<p style="background: #fff4e5; padding: 10px; border: 1px solid #f5a623;">'
+	"<strong>Test notification.</strong> This assignment is intended for "
+	"<strong>{{ intended_coach_name | e }}</strong>.</p>"
+	"{% endif %}"
+	"<p>Hi {{ intended_coach_name | e }},</p>"
+	"<p>{{ assigned_by_name | e }} assigned a client to you as Delivery Coach on "
+	"{{ assigned_at | e }}. Please reach out to them within the next 48 hours.</p>"
+	"<table>"
+	"<tr><td>Client:</td><td>{{ client_name | e }}</td></tr>"
+	"<tr><td>Organization:</td><td>{{ organization | e }}</td></tr>"
+	"<tr><td>Email:</td><td>{{ client_email | e }}</td></tr>"
+	"<tr><td>Phone:</td><td>{{ client_phone | e }}</td></tr>"
+	"<tr><td>Program:</td><td>{{ program_type | e }}</td></tr>"
+	"<tr><td>Status:</td><td>{{ status | e }}</td></tr>"
+	"</table>"
+	'<p><a href="{{ opportunity_url | e }}">Open the Opportunity in CRM</a></p>'
+)
+
+# The TXB-288 content before the client's email, phone and the 48-hour line were added. A
+# template still holding it (bare or wrapped) was never edited and may be re-seeded.
+_PREVIOUS_CONTENT = (
 	"{% if is_test_redirect %}"
 	'<p style="background: #fff4e5; padding: 10px; border: 1px solid #f5a623;">'
 	"<strong>Test notification.</strong> This assignment is intended for "
@@ -127,6 +141,21 @@ _CONTENT = (
 	'<p><a href="{{ opportunity_url | e }}">Open the Opportunity in CRM</a></p>'
 )
 
+_CLIENT_SUBJECT = "{% if is_test_redirect %}[TEST for {{ client_name }}] {% endif %}Jums paskirtas koučeris"
+
+# The client's message, in Lithuanian like the registration confirmation it is wrapped in.
+_CLIENT_CONTENT = (
+	"{% if is_test_redirect %}"
+	'<p style="background: #fff4e5; padding: 10px; border: 1px solid #f5a623;">'
+	"<strong>Test notification.</strong> This email is intended for "
+	"<strong>{{ client_name | e }}</strong> ({{ client_email | e }}).</p>"
+	"{% endif %}"
+	"<p>Sveiki, {{ client_first_name | e }},</p>"
+	"<p>Jums paskirtas koučeris <strong>{{ intended_coach_name | e }}</strong>"
+	"{% if client_program %} programai „{{ client_program | e }}“{% endif %}.</p>"
+	"<p>Koučeris susisieks su Jumis per artimiausias 48 valandas.</p>"
+)
+
 # SHA-256 of the body TXB-269 seeded with its own navy header and English signature. A template
 # still holding exactly that -- or the bare `_CONTENT` -- was never edited and may be re-seeded.
 _UNEDITED_SEED_SHA256 = "0be7b47f2a590a8b7de3ca4d6bf56a962c95c161e43d8e8224fc43764e222aed"
@@ -135,6 +164,7 @@ _UNEDITED_SEED_SHA256 = "0be7b47f2a590a8b7de3ca4d6bf56a962c95c161e43d8e8224fc437
 _GREETING_RE = re.compile(r"\{\{\s*first_name\s*\}\}")
 _CONTENT_SLOT = "txb-assignment-content-slot"
 
+# Credential-shaped strings scrubbed from every stored error summary (the coaching recap uses it too).
 _TOKEN_PATTERNS = (
 	re.compile(r"xox[a-z]-[A-Za-z0-9-]+"),
 	re.compile(r"xapp-[A-Za-z0-9-]+"),
@@ -157,13 +187,13 @@ def ensure_notification_settings() -> None:
 		frappe.db.set_single_value(SETTINGS_DOCTYPE, SETTING_MODE, MODE_DISABLED)
 
 
-def build_assignment_email_body() -> str:
-	"""The assignment content inside this site's TXB-116 wrapper and signature.
+def build_email_body(content: str = _CONTENT) -> str:
+	"""`content` inside this site's TXB-116 wrapper and signature.
 
 	The TXB-116 wrapper is not code: it is the operator-authored registration confirmation
 	Email Template (`CONFIRMATION_TEMPLATE`) -- branded header, padded content container ending
 	in the signature, footer. Its content container (the element holding the greeting) gets
-	the assignment content in place of the registration text; the header, footer and the
+	`content` in place of the registration text; the header, footer and the
 	container's closing signature paragraph are reused as they are. A confirmation with no
 	recognisable container gives the bare content, never a second, independent brand.
 	"""
@@ -173,43 +203,50 @@ def build_assignment_email_body() -> str:
 	container = greeting.find_parent(["div", "td"]) if greeting else None
 	# A container holding all the text is the whole email, not the content between header and footer.
 	if container is None or container.get_text(strip=True) == soup.get_text(strip=True):
-		return _CONTENT
+		return content
 
 	children = container.find_all(True, recursive=False)
 	last = children[-1] if children else None
 	signature = str(last) if last is not None and last.name == "p" and "{" not in str(last) else ""
 	container.clear()
 	container.append(_CONTENT_SLOT)
-	return str(soup).replace(_CONTENT_SLOT, _CONTENT + signature, 1)
+	return str(soup).replace(_CONTENT_SLOT, content + signature, 1)
 
 
 def _is_unedited_seed(body: str | None) -> bool:
-	return body == _CONTENT or hashlib.sha256((body or "").encode()).hexdigest() == _UNEDITED_SEED_SHA256
+	return (
+		body in (_CONTENT, _PREVIOUS_CONTENT, build_email_body(_PREVIOUS_CONTENT))
+		or hashlib.sha256((body or "").encode()).hexdigest() == _UNEDITED_SEED_SHA256
+	)
 
 
 def ensure_assignment_email_template() -> None:
-	"""Seed the assignment Email Template, or bring a never-edited seed to the TXB-116 body.
+	"""Seed the coach's Email Template, or bring a never-edited seed to the current body.
 
 	Any other body is the operator's and is left exactly as it is, so re-running the migration
 	keeps their edits.
 	"""
-	body = build_assignment_email_body()
-	if not frappe.db.exists("Email Template", ASSIGNMENT_EMAIL_TEMPLATE):
-		frappe.get_doc(
-			{
-				"doctype": "Email Template",
-				"name": ASSIGNMENT_EMAIL_TEMPLATE,
-				"subject": _SUBJECT,
-				"use_html": 1,
-				"response_html": body,
-			}
-		).insert(ignore_permissions=True)
-		return
+	body = build_email_body()
+	if not _seed_template(ASSIGNMENT_EMAIL_TEMPLATE, _SUBJECT, body):
+		template = frappe.get_doc("Email Template", ASSIGNMENT_EMAIL_TEMPLATE)
+		if template.response_html != body and _is_unedited_seed(template.response_html):
+			template.response_html = body
+			template.save(ignore_permissions=True)
 
-	template = frappe.get_doc("Email Template", ASSIGNMENT_EMAIL_TEMPLATE)
-	if template.response_html != body and _is_unedited_seed(template.response_html):
-		template.response_html = body
-		template.save(ignore_permissions=True)
+
+def ensure_client_email_template() -> None:
+	"""Seed the client's Email Template once; an existing one is the operator's to edit."""
+	_seed_template(CLIENT_EMAIL_TEMPLATE, _CLIENT_SUBJECT, build_email_body(_CLIENT_CONTENT))
+
+
+def _seed_template(name: str, subject: str, body: str) -> bool:
+	"""Insert the Email Template `name` if it is missing; True when it was inserted."""
+	if frappe.db.exists("Email Template", name):
+		return False
+	frappe.get_doc(
+		{"doctype": "Email Template", "name": name, "subject": subject, "use_html": 1, "response_html": body}
+	).insert(ignore_permissions=True)
+	return True
 
 
 def get_notification_config() -> dict:
@@ -229,21 +266,11 @@ def get_notification_config() -> dict:
 	return {"mode": mode, "test_user": test_user}
 
 
-def get_slack_bot_token() -> str | None:
-	"""The decrypted bot token for an outbound Slack call. Never log or persist the result."""
-	return get_decrypted_password(
-		SETTINGS_DOCTYPE, SETTINGS_DOCTYPE, SETTING_SLACK_BOT_TOKEN, raise_exception=False
-	)
-
-
 def sanitize_error(error) -> str | None:
 	"""A short, secret-free error summary safe to store on the ledger."""
 	if not error:
 		return None
 	text = str(error)
-	token = get_slack_bot_token()
-	if token:
-		text = text.replace(token, "[redacted]")
 	for pattern in _TOKEN_PATTERNS:
 		text = pattern.sub("[redacted]", text)
 	text = " ".join(text.split())
@@ -258,7 +285,8 @@ def _user_name(user: str | None) -> str:
 	return frappe.db.get_value("User", user, "full_name") or user
 
 
-def _client_name(deal) -> str:
+def client_name(deal) -> str:
+	"""The client's first and last name, else the best name the Deal has."""
 	parts = [deal.get("first_name"), deal.get("last_name")]
 	name = " ".join(part for part in parts if part)
 	return name or deal.get("lead_name") or deal.get("organization") or deal.name
@@ -267,15 +295,24 @@ def _client_name(deal) -> str:
 def build_assignment_email_context(
 	deal, intended_user: str, assigned_by: str, assigned_at, is_test_redirect: bool
 ) -> dict:
-	"""The documented context of the assignment Email Template.
+	"""The documented context of both Email Templates.
 
 	The Opportunity URL is built from this site's own address, so each environment links to
-	itself. A blank organization or program type reads "Not provided" in both messages.
+	itself. A blank organization, email, phone or program reads "Not provided" for the coach;
+	the client's message uses `client_program`, blank when there is none.
 	"""
+	# Imported here: coaching_call_recap reaches the pipelines, which import this module.
+	from crm.txb.coaching_call_recap import primary_contact_email
+
+	program = (deal.get("custom_program_type") or "").strip()
 	return {
-		"client_name": _client_name(deal),
+		"client_name": client_name(deal),
+		"client_first_name": deal.get("first_name") or client_name(deal),
+		"client_email": primary_contact_email(deal)[1] or deal.get("email") or NOT_PROVIDED,
+		"client_phone": deal.get("mobile_no") or deal.get("phone") or NOT_PROVIDED,
+		"client_program": program,
 		"organization": (deal.get("organization") or "").strip() or NOT_PROVIDED,
-		"program_type": (deal.get("custom_program_type") or "").strip() or NOT_PROVIDED,
+		"program_type": program or NOT_PROVIDED,
 		"status": deal.get("status") or "",
 		"assigned_by_name": _user_name(assigned_by),
 		"assigned_at": format_datetime(assigned_at),
@@ -285,9 +322,9 @@ def build_assignment_email_context(
 	}
 
 
-def render_assignment_email(context: dict) -> tuple[str, str]:
-	"""(subject, html body) of the assignment Email Template for `context`."""
-	template = frappe.get_doc("Email Template", ASSIGNMENT_EMAIL_TEMPLATE)
+def render_assignment_email(context: dict, template_name: str = ASSIGNMENT_EMAIL_TEMPLATE) -> tuple[str, str]:
+	"""(subject, html body) of the Email Template `template_name` for `context`."""
+	template = frappe.get_doc("Email Template", template_name)
 	body = template.response_html if template.use_html else template.response
 	return (
 		frappe.render_template(template.subject, context),

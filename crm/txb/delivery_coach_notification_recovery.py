@@ -1,7 +1,7 @@
 """Delivery Coach assignment notifications: recover lost jobs, retry definite failures (TXB-290).
 
 Both re-queue the hardened worker (`process_assignment_notification`) for one channel and never
-contact Slack or SMTP themselves:
+send mail themselves:
 
 * `sweep_stale_assignment_notifications` (every five minutes) takes a bounded batch of channels
   still Pending STALE_AFTER_MINUTES after the event was recorded, last claimed and last
