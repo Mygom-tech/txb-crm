@@ -310,6 +310,7 @@ class TestCalls(TeamActivityTestCase):
 		self.call(self.contact_a, "2031-03-10 10:00:00", status="No Answer")
 		self.call(self.contact_a, "2031-03-10 11:00:00", status="Busy")
 		self.call(self.contact_a, "2031-03-10 12:00:00")
+		self.call(self.contact_a, "2031-03-10 13:00:00", status="Other")
 
 		self.assertEqual(
 			values(api.summary(FROM, TO, self.caller)),

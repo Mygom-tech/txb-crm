@@ -61,6 +61,7 @@ if TYPE_CHECKING:
 
 PAGE_LENGTH = 20
 
+CALL_RESULT_OTHER = "Other"
 TYPE_COACHING = "Coaching"
 TYPE_REACH = "Reach"
 
@@ -180,7 +181,8 @@ def _source(scope: Scope, table, doctype: str, occurred_at, actor, type_: str, o
 def _call_logs(scope: Scope, completed_only: bool):
 	# Actor and time as `human_contact._actor`/`_occurred_at` read a Call Log, in SQL.
 	call = frappe.qb.DocType(CALL_LOG_DOCTYPE)
-	criterion = call.type == CALL_OUTGOING
+	# An "Other" result is kept on record but counts nowhere, not even as a dial.
+	criterion = (call.type == CALL_OUTGOING) & (call.status != CALL_RESULT_OTHER)
 	if completed_only:
 		criterion &= call.status == CALL_COMPLETED
 	return _source(

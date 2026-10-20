@@ -7,7 +7,7 @@ record's current owner. Periods are inclusive calendar dates in the site timezon
 
 | Metric | Counts | Credited to | Period |
 | --- | --- | --- | --- |
-| Dials | Outgoing CRM Call Logs (any outcome) + Coaching Call Notes (any call status) | caller / note owner | when the call happened |
+| Dials | Outgoing CRM Call Logs (any outcome except Other) + Coaching Call Notes (any call status) | caller / note owner | when the call happened |
 | Reaches | Dials whose outcome is Completed + every "Log a reach" Note | same | same |
 | Meetings set | Booked meeting Events in a stream, cancelled ones excluded | whoever booked it | the **booking** day, not the meeting day |
 | Meetings ahead | Open meeting Events in a stream that have not started yet | whoever booked it | ignores the period |
