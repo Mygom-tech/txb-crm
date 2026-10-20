@@ -58,6 +58,11 @@ def meeting_key(reference_doctype: str, reference_docname: str, flow: str) -> st
 	return f"{reference_doctype}:{reference_docname}:{flow}"
 
 
+def meeting_flow(key: str) -> str:
+	"""The flow segment of a meeting key, which may carry a trailing `:<submission>` (TXB-246)."""
+	return key.split(":")[2]
+
+
 def sync_meeting_event(
 	*,
 	reference_doctype: str,
@@ -509,23 +514,25 @@ def _compose_subject(subject: str, reference_doctype: str, reference_docname: st
 	never a dangling separator, an internal document id or placeholder text -- so the fallback is
 	exactly the flow's existing generic title.
 	"""
-	name = _customer_display_name(reference_doctype, reference_docname)
+	name = customer_display_name(reference_doctype, reference_docname)
 	if not name:
 		return subject
 	return f"{subject}{SUBJECT_NAME_SEPARATOR}{name}"
 
 
-def _customer_display_name(reference_doctype: str, reference_docname: str) -> str:
-	"""The customer person name for a generated meeting's owning record, or "" when none resolves.
+def customer_display_name(reference_doctype: str, reference_docname: str) -> str:
+	"""The customer person name for a Lead, Deal or Contact, or "" when none resolves.
 
 	A Lead resolves to its own display/full name; a Deal resolves to its primary linked Contact,
-	falling back to the first linked Contact that has a resolvable name. Any other source, or an
-	unresolvable name, yields "" so the caller keeps the generic title.
+	falling back to the first linked Contact that has a resolvable name; a Contact to its own
+	name. Any other source, or an unresolvable name, yields "" so the caller keeps its fallback.
 	"""
 	if reference_doctype == LEAD_DOCTYPE:
 		return _lead_display_name(reference_docname)
 	if reference_doctype == DEAL_DOCTYPE:
 		return _deal_contact_display_name(reference_docname)
+	if reference_doctype == CONTACT_DOCTYPE:
+		return _contact_display_name(reference_docname)
 	return ""
 
 
@@ -547,8 +554,13 @@ def _deal_contact_display_name(deal: str) -> str:
 	Contacts are considered primary-first, then in table order, and the first that resolves to a
 	real person name wins. Returns "" when the Deal has no linked Contact with a resolvable name.
 	"""
-	doc = frappe.get_doc(DEAL_DOCTYPE, deal)
-	for row in _primary_first(doc.get("contacts") or []):
+	rows = frappe.get_all(
+		"CRM Contacts",
+		filters={"parenttype": DEAL_DOCTYPE, "parent": deal},
+		fields=["contact", "is_primary"],
+		order_by="idx asc",
+	)
+	for row in _primary_first(rows):
 		contact = row.get("contact") if hasattr(row, "get") else getattr(row, "contact", None)
 		name = _contact_display_name(contact)
 		if name:
