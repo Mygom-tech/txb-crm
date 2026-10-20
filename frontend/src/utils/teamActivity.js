@@ -1,6 +1,8 @@
 // Team Activity (TXB-287): pure helpers behind pages/TeamActivity.vue. The page renders whatever
 // metrics `crm.txb.api.team_activity.summary` returns, so nothing here knows a metric key.
 
+import { taskReference } from '@/components/ContactInactivity/taskReference'
+
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
 /** Today's calendar date ('YYYY-MM-DD') in `timezone` (the site timezone). */
@@ -14,12 +16,42 @@ export function todayIn(timezone, now = new Date()) {
   }).format(now)
 }
 
+// Calendar-date arithmetic on 'YYYY-MM-DD' strings, done in UTC so no timezone shifts the day.
+function addDays(isoDate, days) {
+  const date = new Date(`${isoDate}T00:00:00Z`)
+  date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+
 /** The inclusive range of the last `days` calendar days, today included, in `timezone`. */
 export function lastDays(days, timezone, now = new Date()) {
   const to = todayIn(timezone, now)
-  const from = new Date(`${to}T00:00:00Z`)
-  from.setUTCDate(from.getUTCDate() - (days - 1))
-  return { from: from.toISOString().slice(0, 10), to }
+  return { from: addDays(to, -(days - 1)), to }
+}
+
+/** The Monday–Sunday week holding today, or `weeksAgo` weeks before it, in `timezone`. */
+export function weekRange(timezone, weeksAgo = 0, now = new Date()) {
+  const today = todayIn(timezone, now)
+  const weekday = (new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7
+  const from = addDays(today, -weekday - 7 * weeksAgo)
+  return { from, to: addDays(from, 6) }
+}
+
+/** The calendar month holding today, in `timezone`. */
+export function monthRange(timezone, now = new Date()) {
+  const from = `${todayIn(timezone, now).slice(0, 8)}01`
+  const next = new Date(`${from}T00:00:00Z`)
+  next.setUTCMonth(next.getUTCMonth() + 1)
+  return { from, to: addDays(next.toISOString().slice(0, 10), -1) }
+}
+
+// Period presets, by their English key (the label is translated where shown). The first is the
+// page default: Monday to Sunday, so a week's figures do not slide every day.
+export const PERIOD_PRESETS = {
+  'This Week': (timezone) => weekRange(timezone),
+  'Last Week': (timezone) => weekRange(timezone, 1),
+  'This Month': (timezone) => monthRange(timezone),
+  'Last 30 Days': (timezone) => lastDays(30, timezone),
 }
 
 /** Why a from/to pair can't be requested, or null when it can. */
@@ -39,32 +71,23 @@ export function summaryParams({ from, to, member }) {
   return params
 }
 
-/** records() params: the same period and member as the summary, plus metric and page. */
-export function recordsParams(metric, filters, page = 1) {
-  return { metric, ...summaryParams(filters), page }
+/** records() params: the same period and member as the summary, plus metric, page and group. */
+export function recordsParams(metric, filters, page = 1, group = null) {
+  const params = { metric, ...summaryParams(filters), page }
+  if (group) params.group = group
+  return params
 }
 
 /**
- * ListView columns from a metric's `record_columns`. A per-pair `activity_count` column renders
- * as an "N activities" badge (type 'repeat'), shown only when the pair has more than one.
+ * Records rows with a stable ListView key (rows carry no common unique field) and the page of
+ * the Lead, Deal or Contact they reference, if any.
  */
-export function recordsColumns(recordColumns = []) {
-  return recordColumns.map((column) => ({
-    key: column.key,
-    label: column.label,
-    type: column.key === 'activity_count' ? 'repeat' : column.type,
-  }))
-}
-
-/** The repeat count to badge for a row, or null when it would be 1 or less. */
-export function repeatCount(row) {
-  const count = Number(row?.activity_count)
-  return count > 1 ? count : null
-}
-
-/** Records rows with a stable ListView key: rows carry no common unique field. */
 export function recordRows(rows = [], page = 1) {
-  return rows.map((row, index) => ({ ...row, _key: `${page}:${index}` }))
+  return rows.map((row, index) => ({
+    ...row,
+    _key: `${page}:${index}`,
+    _reference: taskReference(row.reference_doctype, row.reference_name),
+  }))
 }
 
 /** The "{from}–{to} of {total}" window of a records page and whether a next page exists. */
