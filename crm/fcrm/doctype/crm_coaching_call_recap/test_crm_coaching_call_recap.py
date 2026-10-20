@@ -94,6 +94,7 @@ class TestCoachingCallRecap(FrappeTestCase):
 			"delivery_date": "2026-10-05",
 			"topic": "Leadership styles",
 			"call_notes": "Reviewed DISC results",
+			"action_items": "Send DISC summary",
 			"is_last_call": 0,
 			"next_call_date": "2026-10-12 10:00:00",
 		}

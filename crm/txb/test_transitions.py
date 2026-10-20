@@ -506,6 +506,26 @@ class TestLogCoachingCall(FrappeTestCase):
 		topic = next(f for f in self.log_call_fields(deal.name) if f["fieldname"] == "topic")
 		self.assertTrue(topic["reqd"])
 
+	def test_a_blank_action_items_is_rejected(self):
+		from crm.txb.api.actions import execute_action
+
+		deal = self.make_deal(owner=COACH)
+		frappe.set_user(COACH)
+
+		with self.assertRaises(frappe.MandatoryError):
+			execute_action(
+				deal.name,
+				"log_coaching_call",
+				{
+					"call_status": "Completed",
+					"delivery_date": "2026-08-17",
+					"topic": "Leadership styles",
+					"call_notes": "Discussed goals",
+					"action_items": "  ",
+				},
+			)
+		self.assertEqual(self.note_count(deal.name), 0)
+
 	def test_a_whitespace_only_topic_is_rejected_without_touching_the_deal(self):
 		"""A direct API call cannot slip a blank Topic past the form, and nothing persists."""
 		from crm.txb.api.actions import execute_action
@@ -522,6 +542,7 @@ class TestLogCoachingCall(FrappeTestCase):
 					"delivery_date": "2026-08-17",
 					"topic": "   ",
 					"call_notes": "Discussed goals",
+					"action_items": "Send DISC summary",
 				},
 			)
 
@@ -548,6 +569,7 @@ class TestLogCoachingCall(FrappeTestCase):
 				"delivery_date": "2026-08-17",
 				"topic": "Leadership styles",
 				"call_notes": "Reviewed DISC results",
+				"action_items": "Send DISC summary",
 			},
 		)
 
@@ -592,6 +614,7 @@ class TestLogCoachingCall(FrappeTestCase):
 				"delivery_date": "2026-08-17",
 				"topic": "Leadership styles",
 				"call_notes": "Reviewed DISC results",
+				"action_items": "Send DISC summary",
 				"is_last_call": 1,
 			},
 		)
@@ -620,6 +643,7 @@ class TestLogCoachingCall(FrappeTestCase):
 					"delivery_date": "2026-08-17",
 					"topic": topic,
 					"call_notes": "notes",
+					"action_items": "Send DISC summary",
 					"is_last_call": 1,
 				},
 			)
@@ -658,6 +682,7 @@ class TestLogCoachingCall(FrappeTestCase):
 				"delivery_date": "2026-08-17",
 				"topic": "Leadership styles",
 				"call_notes": "Reviewed DISC results",
+				"action_items": "Send DISC summary",
 				"is_last_call": 1,
 			},
 		)
@@ -705,6 +730,7 @@ class TestLogCoachingCall(FrappeTestCase):
 					"delivery_date": "2026-08-17",
 					"topic": "Leadership styles",
 					"call_notes": "Reviewed DISC results",
+					"action_items": "Send DISC summary",
 					"is_last_call": 0,
 				},
 			)
@@ -731,6 +757,7 @@ class TestLogCoachingCall(FrappeTestCase):
 				"delivery_date": "2026-08-17",
 				"topic": "Leadership styles",
 				"call_notes": "Reviewed DISC results",
+				"action_items": "Send DISC summary",
 				"is_last_call": 0,
 				"next_call_date": "2026-08-24 10:00:00",
 			},
@@ -760,6 +787,7 @@ class TestLogCoachingCall(FrappeTestCase):
 				"delivery_date": "2026-08-17",
 				"topic": "Wrap up",
 				"call_notes": "Final session",
+				"action_items": "Send DISC summary",
 				"is_last_call": 1,
 			},
 		)
