@@ -123,7 +123,7 @@ import {
 } from 'frappe-ui'
 import { computed, reactive, ref } from 'vue'
 
-const { crmUsers, getUser } = usersStore()
+const { getUser } = usersStore()
 
 const siteTimezone = window.timezone?.system
 
@@ -163,7 +163,8 @@ const scopeLine = computed(() => {
       [getUser(filters.member).full_name],
     )
   }
-  const count = (crmUsers.value || []).filter((u) => u.enabled).length
+  // members() lists exactly the enabled CRM users the figures cover.
+  const count = membersResource.data?.members?.length ?? 0
   return __(
     'Whole team · {0} enabled CRM users · activity credited to the user who recorded it',
     [count],

@@ -1,5 +1,5 @@
 <template>
-  <Dialog v-model:open="show" :title="metric?.label" size="4xl">
+  <Dialog v-model:open="show" :title="metric?.label" size="6xl">
     <div class="flex flex-col gap-3">
       <div class="flex flex-col gap-0.5 text-sm text-ink-gray-5">
         <span>{{ scope }}</span>
