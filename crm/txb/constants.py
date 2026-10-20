@@ -131,14 +131,15 @@ CALL_LOG_STATUS_OPTIONS = (
 	"No Answer",
 	"Queued",
 	"Canceled",
+	"Other",
 )
 
-# Final CRM Call Log statuses a user may select when manually logging a completed dial attempt.
-# Transient telephony states (Initiated, Ringing, In Progress, Queued) are intentionally excluded:
-# Log a dial records what happened after the attempt, not a live provider lifecycle state. Every
-# value is a member of CALL_LOG_STATUS_OPTIONS, so an approved dial result is always a valid
-# effective CRM Call Log status.
-DIAL_RESULTS = ("Completed", "Failed", "Busy", "No Answer", "Canceled")
+# The results a user may pick when manually logging a call, in display order. "In Progress" means
+# they were not reached and a retry is planned, so it requires a next call date; "Other" is kept
+# on record but counts nowhere -- every counter reads only "Completed". Older logs keep whatever
+# they were stored with. Every value is a member of CALL_LOG_STATUS_OPTIONS.
+DIAL_RESULT_RETRY = "In Progress"
+DIAL_RESULTS = ("No Answer", "Completed", DIAL_RESULT_RETRY, "Other")
 
 # The Lead status a booked discovery meeting rests at before it is run. "Run Discovery Meeting"
 # (crm.txb.lead_actions.run_discovery_meeting) is a guarded action available only from here:

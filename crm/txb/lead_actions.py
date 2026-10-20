@@ -28,11 +28,10 @@ import json
 
 import frappe
 from frappe import _
-from frappe.utils import escape_html, now_datetime
 
+from crm.txb.call_logging import CALL_FIELDS, parse_call, record_call
 from crm.txb.constants import (
 	CONVERSION_PIPELINE_INITIAL_STATUS,
-	DIAL_RESULTS,
 	DISCOVERY_STATUS_OUTCOMES,
 	DISCOVERY_TERMINAL_OUTCOMES,
 	LEAD_STATUS_CONTACT_ATTEMPTED,
@@ -42,76 +41,22 @@ from crm.txb.constants import (
 from crm.txb.permissions import is_admin
 
 LEAD_DOCTYPE = "CRM Lead"
-CALL_LOG_DOCTYPE = "CRM Call Log"
 NOTE_DOCTYPE = "FCRM Note"
-TASK_DOCTYPE = "CRM Task"
-
-# An outgoing dial. CRM Call Log `type` is Incoming/Outgoing.
-DIAL_CALL_TYPE = "Outgoing"
-
-# A hand-dialled attempt, not one placed through a telephony provider.
-DIAL_TELEPHONY_MEDIUM = "Manual"
 
 # Set by log_a_dial on the in-memory Lead so guard_contact_attempted knows this transition
 # arrived through the canonical action. A flag rather than a status comparison because the
 # guard must distinguish "reached here via a logged dial" from "someone wrote the status".
 DIAL_FLAG = "logged_dial"
 
-# The Lead action contract, kept in step with the browser's copy in
-# frontend/src/utils/leadActions.js. The result is required and constrained to final manual-call
-# outcomes; the server applies the same allow-list before writing the Call Log.
+# The Lead action contract: the shared manual-call fields (crm.txb.call_logging) plus the move to
+# Contact attempted.
 LOG_A_DIAL = {
 	"name": "log_a_dial",
 	"label": "Log a dial",
 	"to_state": LEAD_STATUS_CONTACT_ATTEMPTED,
 	"changes_status": True,
-	"fields": [
-		{
-			"fieldname": "dialed_at",
-			"label": "Dialed At",
-			"fieldtype": "Datetime",
-			"reqd": 1,
-			"default": "Now",
-		},
-		{
-			"fieldname": "dial_result",
-			"label": "Result",
-			"fieldtype": "Select",
-			"reqd": 1,
-			"options": "\n".join(DIAL_RESULTS),
-			"default": "No Answer",
-		},
-		{"fieldname": "notes", "label": "Notes", "fieldtype": "Small Text", "reqd": 1},
-		{
-			"fieldname": "follow_up_date",
-			"label": "Follow-up Date",
-			"fieldtype": "Datetime",
-		},
-	],
+	"fields": CALL_FIELDS,
 }
-
-
-def dial_results() -> tuple:
-	"""Approved final outcomes for a manually logged dial, in display order."""
-	return DIAL_RESULTS
-
-
-def require_dial_result(result: str | None) -> str:
-	"""Return an approved result or refuse the request before any write occurs."""
-	if result not in DIAL_RESULTS:
-		frappe.throw(
-			_("Choose one of the approved dial results."),
-			title=_("Result Required"),
-		)
-	return str(result)
-
-
-def require_dial_notes(notes: str | None) -> str:
-	"""Return trimmed dial notes or refuse the request before any artifact is written."""
-	text = (notes or "").strip()
-	if not text:
-		frappe.throw(_("Enter notes for this dial."), title=_("Notes Required"))
-	return text
 
 
 def discovery_outcomes() -> tuple:
@@ -221,37 +166,17 @@ def log_a_dial(
 	"""
 	frappe.has_permission(LEAD_DOCTYPE, "write", lead, throw=True)
 
-	payload = _coerce_payload(data)
-	dialed_at = dialed_at or payload.get("dialed_at") or now_datetime()
-	notes = notes if notes is not None else payload.get("notes")
-	follow_up_date = follow_up_date or payload.get("follow_up_date")
-	dial_result = require_dial_result(
-		dial_result if dial_result is not None else payload.get("dial_result")
-	)
-	notes = require_dial_notes(notes)
+	explicit = {
+		"dialed_at": dialed_at,
+		"notes": notes,
+		"follow_up_date": follow_up_date,
+		"dial_result": dial_result,
+	}
+	payload = {**_coerce_payload(data), **{k: v for k, v in explicit.items() if v is not None}}
+	call = parse_call(payload)
 
 	doc = frappe.get_doc(LEAD_DOCTYPE, lead)
-	actor = frappe.session.user
-
-	call = frappe.new_doc(CALL_LOG_DOCTYPE)
-	call.update(
-		{
-			# CRM Call Log is named by its `id` (autoname field:id). A telephony provider
-			# supplies a call SID; a hand-logged dial has none, so mint a unique one here or the
-			# insert has nothing to name the record by.
-			"id": f"dial-{frappe.generate_hash(length=12)}",
-			"type": DIAL_CALL_TYPE,
-			"status": dial_result,
-			"start_time": dialed_at,
-			"caller": actor,
-			"telephony_medium": DIAL_TELEPHONY_MEDIUM,
-			"reference_doctype": LEAD_DOCTYPE,
-			"reference_docname": doc.name,
-		}
-	)
-	note_name = _attach_dial_note(doc, notes, dialed_at, dial_result)
-	call.note = note_name
-	call.insert(ignore_permissions=True)
+	recorded = record_call(LEAD_DOCTYPE, doc.name, call)
 
 	# The flag authorises the one guarded status; the guard rejects the same write from any
 	# other caller. Saved through validate so SLA, ownership and status-log hooks still run.
@@ -259,14 +184,7 @@ def log_a_dial(
 	doc.status = LEAD_STATUS_CONTACT_ATTEMPTED
 	doc.save()
 
-	follow_up = _create_follow_up_task(doc, follow_up_date) if follow_up_date else None
-
-	return {
-		"call_log": call.name,
-		"status": doc.status,
-		"note": note_name,
-		"follow_up": follow_up,
-	}
+	return {**recorded, "status": doc.status}
 
 
 def guard_contact_attempted(doc, method=None):
@@ -462,46 +380,3 @@ def _coerce_payload(data) -> dict:
 	if not isinstance(data, dict):
 		return {}
 	return data
-
-
-def _attach_dial_note(lead, notes: str, dialed_at: str, dial_result: str) -> str:
-	"""Create one Lead-linked note containing the submitted dial details.
-
-	The Lead reference makes the note visible in its Notes/timeline. The returned name is also
-	stored on CRM Call Log.note so both records identify the same artifact.
-	"""
-	note = frappe.new_doc(NOTE_DOCTYPE)
-	note.update(
-		{
-			"title": _("Dial attempt - {0}").format(dial_result),
-			"content": (
-				f"<p><strong>{_('Dialed At')}:</strong> {escape_html(str(dialed_at))}</p>"
-				f"<p><strong>{_('Result')}:</strong> {escape_html(dial_result)}</p>"
-				f"<p><strong>{_('Notes')}:</strong><br>{escape_html(notes)}</p>"
-			),
-			"reference_doctype": LEAD_DOCTYPE,
-			"reference_docname": lead.name,
-		}
-	)
-	note.insert(ignore_permissions=True)
-	return note.name
-
-
-def _create_follow_up_task(lead, follow_up_date) -> str | None:
-	"""Create the optional follow-up as a CRM Task referencing the Lead.
-
-	Kept referencing the Lead (not copied onto anything) so it travels with the Lead's timeline
-	and, after conversion, aggregates into the Deal and Contact views by query.
-	"""
-	task = frappe.new_doc(TASK_DOCTYPE)
-	task.update(
-		{
-			"title": _("Follow up on dial"),
-			"due_date": follow_up_date,
-			"status": "Todo",
-			"reference_doctype": LEAD_DOCTYPE,
-			"reference_docname": lead.name,
-		}
-	)
-	task.insert(ignore_permissions=True)
-	return task.name
