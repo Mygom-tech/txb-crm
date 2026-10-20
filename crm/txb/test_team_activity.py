@@ -244,6 +244,8 @@ class TestAccess(TeamActivityTestCase):
 
 class TestReconciliation(TeamActivityTestCase):
 	def test_every_summary_value_and_group_equals_its_records_total(self):
+		# Meetings ahead ignores the period, so the site's own upcoming meetings count too.
+		ahead_before = values(api.summary(FROM, TO))["meetings_ahead"]
 		self.seed()
 		for member in (None, self.caller, self.coach):
 			for metric in api.summary(FROM, TO, member)["metrics"]:
@@ -255,7 +257,7 @@ class TestReconciliation(TeamActivityTestCase):
 
 		self.assertEqual(
 			values(api.summary(FROM, TO)),
-			{"dials": 5, "reaches": 4, "meetings_set": 2, "meetings_ahead": 2},
+			{"dials": 5, "reaches": 4, "meetings_set": 2, "meetings_ahead": ahead_before + 2},
 		)
 		self.assertEqual(
 			values(api.summary(FROM, TO, self.caller)),
@@ -296,9 +298,12 @@ class TestValidation(TeamActivityTestCase):
 				call()
 
 	def test_an_empty_period_is_zero_except_meetings_ahead(self):
+		ahead_before = values(api.summary("2031-01-01", "2031-01-01"))["meetings_ahead"]
 		self.seed()
 		empty = values(api.summary("2031-01-01", "2031-01-01"))
-		self.assertEqual(empty, {"dials": 0, "reaches": 0, "meetings_set": 0, "meetings_ahead": 2})
+		self.assertEqual(
+			empty, {"dials": 0, "reaches": 0, "meetings_set": 0, "meetings_ahead": ahead_before + 2}
+		)
 		for key in ("dials", "reaches", "meetings_set"):
 			records = api.records(key, "2031-01-01", "2031-01-01", self.caller, 1)
 			self.assertEqual((records["total"], records["rows"]), (0, []))
@@ -366,13 +371,15 @@ class TestMeetings(TeamActivityTestCase):
 		)
 
 	def test_meetings_ahead_are_upcoming_open_meetings_soonest_first(self):
+		# Scoped to this test's own user: the site's real upcoming meetings would sort first.
 		later = self.meeting(self.caller, "2031-03-10 12:00:00", self.contact_a, BAP, "2031-04-09 10:00:00")
-		sooner = self.meeting(self.coach, "2020-01-01 12:00:00", self.contact_b, VCS, "2031-04-08 10:00:00")
+		sooner = self.meeting(self.caller, "2020-01-01 12:00:00", self.contact_b, VCS, "2031-04-08 10:00:00")
 		self.meeting(
 			self.caller, "2031-03-10 12:00:00", self.contact_b, DISCOVERY_MEETING_FLOW, "2020-01-01 10:00:00"
 		)
+		self.meeting(self.coach, "2031-03-10 12:00:00", self.contact_a, VCS, "2031-04-07 10:00:00")
 
-		rows = api.records("meetings_ahead", "2031-01-01", "2031-01-01", None, 1)["rows"]
+		rows = api.records("meetings_ahead", "2031-01-01", "2031-01-01", self.caller, 1)["rows"]
 		self.assertEqual([r["name"] for r in rows], [sooner, later])
 		self.assertEqual(values(api.summary(FROM, TO, self.coach))["meetings_ahead"], 1)
 
