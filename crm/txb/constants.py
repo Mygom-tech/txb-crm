@@ -224,6 +224,9 @@ FIELD_COACHING_CALL_STATUS = "custom_txb_coaching_call_status"
 # it for historical notes from the ISO date in their titles.
 FIELD_COACHING_CALL_DELIVERY_DATE = "custom_txb_coaching_call_delivery_date"
 
+# The FCRM Note title a Log a reach writes; Team Activity counts those notes as Reaches.
+REACH_NOTE_TITLE = "Log a reach"
+
 # The Opportunity's editable First Coaching Call Date (Datetime). Seeded, never owned, by the
 # first Coaching Call Note; the legacy `custom_first_coaching_date` is a different field.
 FIELD_FIRST_CALL_DATE = "custom_first_call_date"
