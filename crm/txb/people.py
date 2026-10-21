@@ -34,6 +34,11 @@ def normalize_name(value: str | None) -> str:
 	return _WHITESPACE.sub(" ", (value or "").strip()).casefold()
 
 
+def format_person_name(*parts: str | None) -> str:
+	"""Join present, stripped name parts with a single space; "" when none resolve (TXB-213)."""
+	return " ".join(part.strip() for part in parts if part and part.strip())
+
+
 def normalize_email(value: str | None) -> str:
 	"""Case-insensitive form of an email, for comparison only."""
 	return (value or "").strip().casefold()
@@ -51,9 +56,7 @@ def normalize_phone(value: str | None) -> str:
 	return digits[-PHONE_SIGNIFICANT_DIGITS:]
 
 
-def find_exact_duplicate(
-	first_name: str | None, last_name: str | None, email: str | None
-) -> str | None:
+def find_exact_duplicate(first_name: str | None, last_name: str | None, email: str | None) -> str | None:
 	"""TXB-73's duplicate rule: same first name, last name and email.
 
 	Returns ``"Contact"``, ``"Lead"`` or ``None``. Records without a first name or

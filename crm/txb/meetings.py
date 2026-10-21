@@ -26,6 +26,7 @@ from frappe.utils import add_to_date, escape_html, get_datetime
 
 from crm.txb import human_contact
 from crm.txb.constants import FIELD_CONVERTED_CONTACT, FIELD_MEETING_KEY
+from crm.txb.people import format_person_name
 
 EVENT_DOCTYPE = "Event"
 LEAD_DOCTYPE = "CRM Lead"
@@ -543,7 +544,7 @@ def _lead_display_name(lead: str) -> str:
 	)
 	if not row:
 		return ""
-	return _format_person_name(row.get("lead_name")) or _format_person_name(
+	return format_person_name(row.get("lead_name")) or format_person_name(
 		row.get("first_name"), row.get("last_name")
 	)
 
@@ -591,12 +592,7 @@ def _contact_display_name(contact: str | None) -> str:
 	)
 	if not row:
 		return ""
-	return _format_person_name(row.get("first_name"), row.get("last_name"))
-
-
-def _format_person_name(*parts: str | None) -> str:
-	"""Join present, stripped name parts with a single space; "" when none resolve (TXB-213)."""
-	return " ".join(part.strip() for part in parts if part and part.strip())
+	return format_person_name(row.get("first_name"), row.get("last_name"))
 
 
 def _meeting_description(meeting_type: str | None, link: str | None, address: str | None) -> str:

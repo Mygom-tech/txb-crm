@@ -17,7 +17,7 @@ and it is strictly less than what TXB-73's error message already discloses.
 
 import frappe
 
-from crm.txb.people import normalize_email, normalize_name, normalize_phone
+from crm.txb.people import format_person_name, normalize_email, normalize_name, normalize_phone
 
 LEAD_DOCTYPE = "CRM Lead"
 CONTACT_DOCTYPE = "Contact"
@@ -79,7 +79,9 @@ _RESULT_FIELDS = {
 
 
 @frappe.whitelist()
-def search_people(name: str = "", email: str = "", phone: str = "", limit: int = DEFAULT_LIMIT) -> dict:
+def search_people(
+	name: str = "", email: str = "", phone: str = "", limit: int = DEFAULT_LIMIT
+) -> dict:
 	"""Find people matching any of `name`, `email` or `phone` across Leads and Contacts.
 
 	Returns ``{"matches": [...], "restricted": int}``. Each match carries its
@@ -117,7 +119,9 @@ def search_people(name: str = "", email: str = "", phone: str = "", limit: int =
 			matches.extend(_as_match(doctype, row, email, phone, tokens) for row in visible)
 		except Exception as error:
 			# A search that fails must never block the create flow it is helping.
-			frappe.log_error(f"[search_people] Failed to search {doctype}. {error}", "TXB People Search")
+			frappe.log_error(
+				f"[search_people] Failed to search {doctype}. {error}", "TXB People Search"
+			)
 
 	# Exact hits first, then whoever matched more of the typed name, then alphabetically.
 	# Without the token count, "Jonas Jonaitis" ranks below every other Jonas in the
@@ -304,22 +308,41 @@ def search_tokens(query: str) -> list[str]:
 
 def _referrer_candidates(doctype: str, tokens: list[str]) -> set[str]:
 	"""Names of records whose name columns contain every token, ignoring permissions."""
-	columns = _REFERRER_NAME_COLUMNS[doctype]
+	return match_candidates(doctype, _REFERRER_NAME_COLUMNS[doctype], tokens)
+
+
+def match_candidates(
+	doctype: str, text_columns, tokens: list[str], phone_columns=(), phone: str = ""
+) -> set[str]:
+	"""Names of records, ignoring permissions, newest first and at most CANDIDATE_CAP.
+
+	A record matches when every token appears in one of `text_columns`, or when `phone`
+	(see `normalize_phone`) matches one of `phone_columns` digits-only. Callers re-read the
+	result through `frappe.get_list`, which is where permissions apply.
+	"""
 	values: dict[str, object] = {"cap": CANDIDATE_CAP}
-	clauses = []
+	matches = []
 
-	for index, token in enumerate(tokens):
-		key = f"token_{index}"
-		values[key] = f"%{escape_like(token)}%"
-		clauses.append(
-			"(" + " OR ".join(f"LOWER(COALESCE(`{column}`, '')) LIKE %({key})s" for column in columns) + ")"
-		)
+	if tokens and text_columns:
+		clauses = []
+		for index, token in enumerate(tokens):
+			key = f"token_{index}"
+			values[key] = f"%{escape_like(token)}%"
+			clauses.append(
+				"(" + " OR ".join(f"LOWER(COALESCE(`{column}`, '')) LIKE %({key})s" for column in text_columns) + ")"
+			)
+		matches.append("(" + " AND ".join(clauses) + ")")
 
+	if phone and phone_columns:
+		values["phone"], values["phone_len"] = phone, len(phone)
+		matches.extend(f"{_PHONE_DIGITS.format(column=column)} = %(phone)s" for column in phone_columns)
+
+	if not matches:
+		return set()
 	rows = frappe.db.sql(
-		f"SELECT `name` FROM `tab{doctype}` WHERE {' AND '.join(clauses)} "
+		f"SELECT `name` FROM `tab{doctype}` WHERE {' OR '.join(matches)} "
 		"ORDER BY `modified` DESC LIMIT %(cap)s",
 		values,
-		as_dict=False,
 	)
 	return {row[0] for row in rows}
 
@@ -330,7 +353,7 @@ def escape_like(value: str) -> str:
 
 def _as_referrer(doctype: str, row: dict) -> dict:
 	is_lead = doctype == LEAD_DOCTYPE
-	parts = " ".join(part for part in (row.get("first_name"), row.get("last_name")) if part).strip()
+	parts = format_person_name(row.get("first_name"), row.get("last_name"))
 	full_name = (row.get("lead_name") if is_lead else row.get("full_name")) or parts or row["name"]
 
 	return {
