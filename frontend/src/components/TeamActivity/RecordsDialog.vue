@@ -10,6 +10,7 @@
 
       <div v-if="metric?.groups?.length" class="flex flex-col gap-2">
         <TabButtons
+          class="[&_button]:w-full [&_div]:w-full [&_button>span]:w-full"
           :buttons="groupTabs"
           :modelValue="group"
           @update:modelValue="selectGroup"

@@ -21,6 +21,8 @@
 // container form the backdrop; the actual modal is `.dialog-content`.
 const BACKDROP_SELECTOR = '.dialog-overlay, .dialog-scroll-container'
 const CONTENT_SELECTOR = '.dialog-content'
+// reka-ui marks every dismissable layer (dialog, dropdown, popover, select).
+const LAYER_SELECTOR = '[data-dismissable-layer]'
 
 /**
  * True when a pointer event originated on a dialog backdrop (the overlay or the
@@ -42,8 +44,18 @@ export function isBackdropPointerTarget(target) {
  * @param {Event} event
  */
 export function handleDialogBackdropPointerDown(event) {
-  if (isBackdropPointerTarget(event.target)) {
-    event.stopImmediatePropagation()
+  if (!isBackdropPointerTarget(event.target)) return
+  event.stopImmediatePropagation()
+  // Swallowing the pointerdown also hides it from a dropdown / popover open
+  // inside the modal. reka-ui dismisses only its topmost layer on Escape, so
+  // when that layer is not the modal itself, close it that way instead.
+  const doc = event.target.ownerDocument
+  const layers = doc.querySelectorAll(LAYER_SELECTOR)
+  const top = layers[layers.length - 1]
+  if (top && !top.matches(CONTENT_SELECTOR)) {
+    doc.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+    )
   }
 }
 

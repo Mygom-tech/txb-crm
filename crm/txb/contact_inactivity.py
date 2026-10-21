@@ -54,6 +54,7 @@ ROLLOUT_DEFAULT_KEY = "txb_contact_inactivity_rollout"
 
 # The insert rolls back to here when a concurrent writer already opened the Contact's cycle.
 INSERT_SAVEPOINT = "txb_contact_inactivity_cycle"
+SWEEP_SAVEPOINT = "txb_contact_inactivity_sweep"
 
 SETTINGS_FIELDS = [
 	{
@@ -148,6 +149,29 @@ def start_cycle(contact: str) -> str | None:
 			(created, ANCHOR_CREATION) if created > rollout else (rollout, ANCHOR_ROLLOUT)
 		)
 	return _open(contact, (latest.cycle_no if latest else 0) + 1, anchor_at, anchor_source)
+
+
+def start_missing_cycles() -> None:
+	"""Open a cycle for every Contact that has never had one (e.g. created after the rollout)."""
+	contact, cycle = frappe.qb.DocType(CONTACT_DOCTYPE), frappe.qb.DocType(CYCLE_DOCTYPE)
+	missing = (
+		frappe.qb.from_(contact)
+		.left_join(cycle)
+		.on(cycle.contact == contact.name)
+		.where(cycle.name.isnull())
+		.select(contact.name)
+	).run(pluck=True)
+	for name in missing:
+		# One bad Contact must not stop the sweep, nor the reminder pass that follows it.
+		frappe.db.savepoint(SWEEP_SAVEPOINT)
+		try:
+			start_cycle(name)
+		except Exception:
+			frappe.db.rollback(save_point=SWEEP_SAVEPOINT)
+			frappe.log_error(
+				title="start_missing_cycles",
+				message=f"Failed to start the inactivity cycle of {name}.\n{frappe.get_traceback()}",
+			)
 
 
 def on_qualifying_contact(contact: str, occurred_at) -> str | None:

@@ -28,6 +28,7 @@ from crm.txb.contact_inactivity import (
 	mark_reminded,
 	on_qualifying_contact,
 	settle,
+	start_missing_cycles,
 )
 from crm.txb.first_call_reminders import OPEN_TASK_STATUSES, TASK_CANCELED, TASK_DONE
 from crm.txb.pipelines.common import TASK_BACKLOG, TASK_DOCTYPE
@@ -49,8 +50,10 @@ def run_contact_inactivity_reminders(now=None) -> None:
 	"""The scheduled pass: mark overdue cycles Due, then remind about every Due cycle.
 
 	Every Due cycle, not only those this run marked: one left Due by an owner exception or a
-	failed run is retried until it is reminded.
+	failed run is retried until it is reminded. Contacts created since the rollout get their
+	first cycle here.
 	"""
+	start_missing_cycles()
 	evaluate_due(now)
 	for cycle in frappe.get_all(
 		CYCLE_DOCTYPE, filters={"status": STATUS_DUE}, pluck="name", order_by="due_at asc"
