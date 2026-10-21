@@ -17,8 +17,10 @@
   />
   <AboutModal v-model="showAboutModal" />
   <FieldLayoutDialogContainer />
+  <GlobalSearch />
 </template>
 <script setup>
+import GlobalSearch from '@/components/GlobalSearch.vue'
 import FieldLayoutDialogContainer from '@/components/Modals/FieldLayoutDialogContainer.vue'
 import ChangePasswordModal from '@/components/Modals/ChangePasswordModal.vue'
 import CreateDocumentModal from '@/components/Modals/CreateDocumentModal.vue'

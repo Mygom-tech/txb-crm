@@ -127,7 +127,7 @@ describe('taskReference', () => {
   })
 
   it('gives an unknown doctype or a missing name no route', () => {
-    expect(taskReference('CRM Organization', 'ORG-1').route).toBeNull()
+    expect(taskReference('Event', 'ORG-1').route).toBeNull()
     expect(taskReference('', 'X').route).toBeNull()
     expect(taskReference('Contact', '').route).toBeNull()
   })
