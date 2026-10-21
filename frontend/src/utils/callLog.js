@@ -83,3 +83,7 @@ export const statusColorMap = {
   'In Progress': 'blue',
   Other: 'gray',
 }
+
+export function callTypeLabel(call) {
+  return call.type == 'Incoming' ? __('Inbound Call') : __('Outbound Call')
+}

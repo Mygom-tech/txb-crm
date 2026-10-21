@@ -27,9 +27,7 @@
       <div class="flex items-center justify-between">
         <div class="inline-flex gap-2 items-center text-base-medium">
           <div>
-            {{
-              call.type == 'Incoming' ? __('Inbound Call') : __('Outbound Call')
-            }}
+            {{ callTypeLabel(call) }}
           </div>
         </div>
         <div>
@@ -105,7 +103,11 @@ import MultipleAvatar from '@/components/MultipleAvatar.vue'
 import AudioPlayer from '@/components/Activities/AudioPlayer.vue'
 import CallLogDetailModal from '@/components/Modals/CallLogDetailModal.vue'
 import TimelineTimestamp from '@/components/Activities/TimelineTimestamp.vue'
-import { statusLabelMap, statusColorMap } from '@/utils/callLog.js'
+import {
+  statusLabelMap,
+  statusColorMap,
+  callTypeLabel,
+} from '@/utils/callLog.js'
 import { formatDate } from '@/utils'
 import { Avatar, Badge, createResource } from 'frappe-ui'
 import { reactive, ref } from 'vue'

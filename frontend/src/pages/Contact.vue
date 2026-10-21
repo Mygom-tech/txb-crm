@@ -12,6 +12,7 @@
         v-if="contact._actions?.length"
         :actions="contact._actions"
       />
+      <Button :label="__('Log a Call')" icon-left="phone" @click="logCall" />
       <Button
         :label="__('Create Opportunity')"
         @click="showCreateDeal = true"
@@ -121,6 +122,7 @@
         </FileUploader>
       </div>
       <ContactInactivityStatus :contact="contactId" />
+      <ContactSourceLeads :contact="contactId" />
       <div
         v-if="sections.data"
         class="flex flex-1 flex-col justify-between overflow-hidden"
@@ -159,18 +161,11 @@
         </button>
       </template>
       <template #tab-panel="{ tab }">
-        <!-- The aggregate history stays read-only; Log a Call is the only Activity action. -->
+        <!-- The aggregate history stays read-only; calls are logged from the header. -->
         <div
           v-if="tab.name === 'Activity'"
           class="flex flex-1 flex-col overflow-hidden"
         >
-          <div class="flex justify-end px-3 pt-4 sm:px-10">
-            <Button
-              :label="__('Log a Call')"
-              icon-left="phone"
-              @click="logCall"
-            />
-          </div>
           <Activities
             readOnly
             doctype="Contact"
@@ -184,6 +179,7 @@
           :docname="contactId"
           @newNote="newNote"
         />
+        <ContactCalls v-else-if="tab.name === 'Calls'" :docname="contactId" />
         <template v-else>
           <DealsListView
             v-if="rows.length"
@@ -243,6 +239,9 @@ import NoteIcon from '@/components/Icons/NoteIcon.vue'
 import DealsListView from '@/components/ListViews/DealsListView.vue'
 import Activities from '@/components/Activities/Activities.vue'
 import ContactNotes from '@/components/ContactNotes.vue'
+import ContactCalls from '@/components/ContactCalls.vue'
+import { contactActivitiesResource } from '@/composables/contactActivityFeed'
+import ContactSourceLeads from '@/components/ContactSourceLeads.vue'
 import ContactInactivityStatus from '@/components/ContactInactivity/ContactInactivityStatus.vue'
 import CustomActions from '@/components/CustomActions.vue'
 import RequestOwnershipModal from '@/components/Modals/RequestOwnershipModal.vue'
@@ -394,7 +393,13 @@ const tabs = [
     name: 'Notes',
     label: 'Notes',
     icon: NoteIcon,
-    count: computed(() => contactNotesCount.value),
+    count: computed(() => contactActivities.data?.notes?.length),
+  },
+  {
+    name: 'Calls',
+    label: 'Calls',
+    icon: PhoneIcon,
+    count: computed(() => contactActivities.data?.calls?.length),
   },
   {
     name: 'Activity',
@@ -422,18 +427,8 @@ const deals = createResource({
   auto: true,
 })
 
-// Notes tab badge count. Shares the Contact aggregate activity resource url + cache key with
-// ContactNotes and the Activity timeline, so the count reflects the same deduplicated notes
-// stream without an extra fetch.
-const contactActivities = createResource({
-  url: 'crm.api.activities.get_activities',
-  params: { name: props.contactId },
-  cache: ['activity', props.contactId],
-  auto: true,
-  transform: ([versions, calls, notes, tasks, attachments]) => {
-    return { versions, calls, notes, tasks, attachments }
-  },
-})
+// Tab counts and the Log a Call / New Note reloads read the Contact's shared aggregate stream.
+const contactActivities = contactActivitiesResource(props.contactId)
 
 // Contact-scoped Log a Call / New Note (TXB-249): reload the shared ['activity', contactId]
 // resource only after a confirmed insert so the canonical record shows once in Activity/Notes.
@@ -442,10 +437,6 @@ const { logCall, newNote } = useContactActivityActions({
   deals,
   activities: contactActivities,
 })
-const contactNotesCount = computed(
-  () => contactActivities.data?.notes?.length,
-)
-
 const rows = computed(() => {
   if (!deals.data || deals.data == []) return []
 

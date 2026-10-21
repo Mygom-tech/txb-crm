@@ -147,7 +147,10 @@
       <template #body-content>
         <div v-if="activeNote" class="flex flex-col gap-4">
           <div class="flex flex-wrap items-center gap-2 text-sm">
-            <ContactSourceLink :activity="activeNote" :leadEmails="leadEmails" />
+            <ContactSourceLink
+              :activity="activeNote"
+              :leadEmails="leadEmails"
+            />
             <Badge
               v-if="phaseLabel(activeNote.phase)"
               :label="__(phaseLabel(activeNote.phase))"
@@ -186,12 +189,8 @@ import UserAvatar from '@/components/UserAvatar.vue'
 import NoteIcon from '@/components/Icons/NoteIcon.vue'
 import LoadingIndicator from '@/components/Icons/LoadingIndicator.vue'
 import FadedScrollableDiv from '@/components/FadedScrollableDiv.vue'
-import {
-  activitySource,
-  phaseLabel,
-  leadSourceNames,
-  PHASE_PRE_CONVERSION,
-} from '@/utils/contactActivity'
+import { phaseLabel, PHASE_PRE_CONVERSION } from '@/utils/contactActivity'
+import { useContactActivityFeed } from '@/composables/contactActivityFeed'
 import { usersStore } from '@/stores/users'
 import {
   Badge,
@@ -200,9 +199,8 @@ import {
   FeatherIcon,
   TextEditor,
   TextInput,
-  createResource,
 } from 'frappe-ui'
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 
 const props = defineProps({
   doctype: { type: String, default: 'Contact' },
@@ -213,55 +211,12 @@ const emit = defineEmits(['newNote'])
 
 const { getUser } = usersStore()
 
-// Shares the exact resource url + cache key with the Activity timeline, so the Notes tab reuses
-// the already-deduplicated, source-tagged Contact aggregate stream instead of a second model.
-const contactActivities = createResource({
-  url: 'crm.api.activities.get_activities',
-  params: { name: props.docname },
-  cache: ['activity', props.docname],
-  auto: true,
-  transform: ([versions, calls, notes, tasks, attachments]) => {
-    return { versions, calls, notes, tasks, attachments }
-  },
-})
-
-// Best-effort email labels for archived-Lead sources, mirroring the activity log: a Lead the
-// user cannot read simply keeps its docname label, so a partial lookup never breaks the table.
-const leadSourceDocnames = computed(() =>
-  leadSourceNames(contactActivities.data?.notes || []),
-)
-
-const leadEmailsResource = createResource({
-  url: 'frappe.client.get_list',
-  makeParams: () => ({
-    doctype: 'CRM Lead',
-    filters: [['name', 'in', leadSourceDocnames.value]],
-    fields: ['name', 'email'],
-    limit_page_length: 0,
-  }),
-})
-
-watch(
-  leadSourceDocnames,
-  (names) => {
-    if (names?.length) leadEmailsResource.reload()
-  },
-  { immediate: true },
-)
-
-const leadEmails = computed(() => {
-  const map = {}
-  for (const row of leadEmailsResource.data || []) {
-    if (row.email) map[row.name] = row.email
-  }
-  return map
-})
-
-// Newest first by last-updated timestamp.
-const notes = computed(() => {
-  const list = [...(contactActivities.data?.notes || [])]
-  return list.sort((a, b) => new Date(b.modified) - new Date(a.modified))
-})
+const {
+  activities: contactActivities,
+  items: notes,
+  leadEmails,
+  sourceLabel,
+} = useContactActivityFeed(props.docname, 'notes', 'modified')
 
 const search = ref('')
 
@@ -271,10 +226,6 @@ function notePreview(note) {
   const el = document.createElement('div')
   el.innerHTML = note.content
   return (el.textContent || el.innerText || '').replace(/\s+/g, ' ').trim()
-}
-
-function sourceLabel(note) {
-  return activitySource(note, leadEmails.value)?.label || ''
 }
 
 const filteredNotes = computed(() => {

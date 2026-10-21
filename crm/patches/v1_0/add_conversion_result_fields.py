@@ -36,6 +36,8 @@ FIELD_DEFINITIONS = [
 		"label": "Converted Contact",
 		"description": "The Contact this Lead's conversion created or reused.",
 		"read_only": 1,
+		# Every Contact page reads its source Leads by this field.
+		"search_index": 1,
 		"no_copy": 1,
 		"insert_after": "converted",
 	},

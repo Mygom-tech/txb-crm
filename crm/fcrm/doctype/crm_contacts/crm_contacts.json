@@ -18,6 +18,7 @@
  "fields": [
   {
    "fieldname": "contact",
+   "search_index": 1,
    "fieldtype": "Link",
    "in_list_view": 1,
    "label": "Contact",

@@ -128,6 +128,7 @@
       <template #tab-panel="{ tab }">
         <div v-if="tab.name == 'Details'">
           <ContactInactivityStatus :contact="contactId" />
+          <ContactSourceLeads :contact="contactId" />
           <div
             v-if="sections.data"
             class="flex flex-1 flex-col justify-between overflow-hidden"
@@ -165,6 +166,19 @@
           :docname="contactId"
           @newNote="newNote"
         />
+        <div
+          v-else-if="tab.name === 'Calls'"
+          class="flex flex-1 flex-col overflow-hidden"
+        >
+          <div class="flex justify-end px-3 pt-4">
+            <Button
+              :label="__('Log a Call')"
+              icon-left="phone"
+              @click="logCall"
+            />
+          </div>
+          <ContactCalls :docname="contactId" />
+        </div>
         <DealsListView
           v-else-if="tab.label === 'Deals' && rows.length"
           class="mt-4"
@@ -199,6 +213,9 @@ import NoteIcon from '@/components/Icons/NoteIcon.vue'
 import DealsListView from '@/components/ListViews/DealsListView.vue'
 import Activities from '@/components/Activities/Activities.vue'
 import ContactNotes from '@/components/ContactNotes.vue'
+import ContactCalls from '@/components/ContactCalls.vue'
+import { contactActivitiesResource } from '@/composables/contactActivityFeed'
+import ContactSourceLeads from '@/components/ContactSourceLeads.vue'
 import ContactInactivityStatus from '@/components/ContactInactivity/ContactInactivityStatus.vue'
 import { validateIsImageFile } from '@/utils'
 import { useContactFields } from '@/composables/useContactFields'
@@ -351,6 +368,12 @@ const tabs = [
     count: computed(() => contactActivities.data?.notes?.length),
   },
   {
+    name: 'Calls',
+    label: __('Calls'),
+    icon: h(PhoneIcon, { class: 'h-4 w-4' }),
+    count: computed(() => contactActivities.data?.calls?.length),
+  },
+  {
     name: 'Activity',
     label: __('Activity'),
     icon: h(ActivityIcon, { class: 'h-4 w-4' }),
@@ -374,17 +397,8 @@ const deals = createResource({
   auto: true,
 })
 
-// Notes tab badge count. Shares the Contact aggregate activity resource url + cache key with
-// ContactNotes and the Activity timeline, so mobile reflects the same deduplicated notes stream.
-const contactActivities = createResource({
-  url: 'crm.api.activities.get_activities',
-  params: { name: props.contactId },
-  cache: ['activity', props.contactId],
-  auto: true,
-  transform: ([versions, calls, notes, tasks, attachments]) => {
-    return { versions, calls, notes, tasks, attachments }
-  },
-})
+// Tab counts and the Log a Call / New Note reloads read the Contact's shared aggregate stream.
+const contactActivities = contactActivitiesResource(props.contactId)
 
 // Contact-scoped Log a Call / New Note (TXB-249): reload the shared ['activity', contactId]
 // resource only after a confirmed insert so the canonical record shows once in Activity/Notes.

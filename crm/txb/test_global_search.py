@@ -89,9 +89,10 @@ class TestGlobalSearch(FrappeTestCase):
 			rows = groups(typed)["Contact"]["rows"]
 			self.assertEqual([row["name"] for row in rows], [contact.name], typed)
 
-	def test_converted_leads_are_left_out(self):
-		self.lead(converted=1)
-		self.assertNotIn("CRM Lead", groups(SURNAME))
+	def test_converted_leads_are_found(self):
+		lead = self.lead(converted=1)
+		rows = groups(SURNAME)["CRM Lead"]["rows"]
+		self.assertEqual([row["name"] for row in rows], [lead.name])
 
 	def test_a_group_shows_its_newest_rows_and_the_full_total(self):
 		for index in range(ROWS_PER_GROUP + 2):

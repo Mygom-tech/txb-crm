@@ -6,7 +6,7 @@ Lead/Deal visibility decides what is returned and nothing is said about the rest
 
 A record matches when every typed word appears in one of its text columns (names, email,
 company code), or when the query's digits match one of its phone numbers whatever the
-formatting. Converted Leads are left out: the person lives on as a Contact and a Deal.
+formatting. Converted Leads stay findable; their "Converted" status shows as the badge.
 """
 
 import frappe
@@ -25,7 +25,6 @@ GROUPS = (
 		"text": ("first_name", "last_name", "lead_name", "organization", "email"),
 		"phone": ("mobile_no", "phone"),
 		"fields": ("name", "lead_name", "first_name", "last_name", "email", "mobile_no", "status"),
-		"filters": {"converted": 0},
 	},
 	{
 		"doctype": "Contact",
