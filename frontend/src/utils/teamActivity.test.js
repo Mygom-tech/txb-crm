@@ -3,15 +3,46 @@ import {
   allZero,
   lastDays,
   memberOptions,
+  monthRange,
   pageWindow,
   rangeError,
   recordRows,
-  recordsColumns,
   recordsParams,
-  repeatCount,
   summaryParams,
   todayIn,
+  weekRange,
 } from '@/utils/teamActivity'
+
+describe('weekRange / monthRange', () => {
+  // Sunday 2026-10-25 22:30 UTC is already Monday 00:30 in Vilnius (UTC+2 after DST ends).
+  const sundayNight = new Date('2026-10-25T22:30:00Z')
+
+  it('runs Monday to Sunday in the site timezone', () => {
+    expect(weekRange('UTC', 0, sundayNight)).toEqual({
+      from: '2026-10-19',
+      to: '2026-10-25',
+    })
+    expect(weekRange('Europe/Vilnius', 0, sundayNight)).toEqual({
+      from: '2026-10-26',
+      to: '2026-11-01',
+    })
+    expect(weekRange('UTC', 1, sundayNight)).toEqual({
+      from: '2026-10-12',
+      to: '2026-10-18',
+    })
+  })
+
+  it('covers the whole calendar month, leap February included', () => {
+    expect(monthRange('UTC', new Date('2028-02-10T12:00:00Z'))).toEqual({
+      from: '2028-02-01',
+      to: '2028-02-29',
+    })
+    expect(monthRange('UTC', new Date('2026-12-31T12:00:00Z'))).toEqual({
+      from: '2026-12-01',
+      to: '2026-12-31',
+    })
+  })
+})
 
 describe('todayIn / lastDays', () => {
   // 2026-10-07 22:30 UTC is already 2026-10-08 in Vilnius (UTC+3).
@@ -99,44 +130,23 @@ describe('request params', () => {
   })
 })
 
-describe('recordsColumns', () => {
-  it("passes any metric's record_columns through in order", () => {
-    const columns = [
-      { key: 'when', label: 'When', type: 'datetime' },
-      { key: 'who', label: 'Who', type: 'link' },
-      { key: 'score', label: 'Score', type: 'int' },
-    ]
-    expect(recordsColumns(columns)).toEqual(columns)
-  })
-
-  it('renders a pair activity_count column as a repeat badge', () => {
-    expect(
-      recordsColumns([
-        { key: 'activity_count', label: 'Activities', type: 'int' },
-      ]),
-    ).toEqual([{ key: 'activity_count', label: 'Activities', type: 'repeat' }])
-  })
-
-  it('handles a missing column list', () => {
-    expect(recordsColumns(undefined)).toEqual([])
-  })
-})
-
-describe('repeatCount', () => {
-  it('badges only counts above 1', () => {
-    expect(repeatCount({ activity_count: 3 })).toBe(3)
-    expect(repeatCount({ activity_count: 2 })).toBe(2)
-    expect(repeatCount({ activity_count: 1 })).toBeNull()
-    expect(repeatCount({ activity_count: 0 })).toBeNull()
-    expect(repeatCount({})).toBeNull()
-  })
-})
-
 describe('recordRows', () => {
   it('gives every row a key unique across pages', () => {
     const rows = recordRows([{ a: 1 }, { a: 2 }], 2)
     expect(rows.map((r) => r._key)).toEqual(['2:0', '2:1'])
     expect(rows[0].a).toBe(1)
+  })
+
+  it('links a row to the record it references', () => {
+    const [deal, meeting] = recordRows([
+      { reference_doctype: 'CRM Deal', reference_name: 'D-1' },
+      { reference_doctype: 'Event', reference_name: 'E-1' },
+    ])
+    expect(deal._reference.route).toEqual({
+      name: 'Deal',
+      params: { dealId: 'D-1' },
+    })
+    expect(meeting._reference.route).toBe(null)
   })
 
   it('handles no rows', () => {

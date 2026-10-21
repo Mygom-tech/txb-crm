@@ -14,7 +14,7 @@
           :label="__('Refresh')"
           :iconLeft="LucideRefreshCcw"
           :loading="summary.loading"
-          @click="load"
+          @click="load(true)"
         />
       </template>
     </LayoutHeader>
@@ -74,6 +74,12 @@
           >
             {{ __('No activity in this period') }}
           </span>
+          <MembersTable
+            v-if="filters.mode === 'team'"
+            :data="membersResource.data"
+            :loading="membersResource.loading"
+            @select="(member) => update({ mode: 'person', member })"
+          />
         </template>
       </template>
     </div>
@@ -82,7 +88,11 @@
       v-model="showRecords"
       :metric="recordsMetric"
       :filters="filters"
-      :scope="`${scopeLine} · ${period} · ${timezone}`"
+      :scope="
+        recordsMetric?.ignores_period
+          ? `${scopeLine} · ${__('All upcoming meetings')}`
+          : `${scopeLine} · ${period} · ${timezone}`
+      "
       :period="period"
     />
   </div>
@@ -92,13 +102,14 @@
 import LucideRefreshCcw from '~icons/lucide/refresh-ccw'
 import LayoutHeader from '@/components/LayoutHeader.vue'
 import FilterRow from '@/components/TeamActivity/FilterRow.vue'
+import MembersTable from '@/components/TeamActivity/MembersTable.vue'
 import MetricCards from '@/components/TeamActivity/MetricCards.vue'
 import RecordsDialog from '@/components/TeamActivity/RecordsDialog.vue'
 import { usersStore } from '@/stores/users'
 import {
   allZero,
-  lastDays,
   memberOptions,
+  PERIOD_PRESETS,
   rangeError,
   summaryParams,
 } from '@/utils/teamActivity'
@@ -112,14 +123,14 @@ import {
 } from 'frappe-ui'
 import { computed, reactive, ref } from 'vue'
 
-const { crmUsers, getUser } = usersStore()
+const { getUser } = usersStore()
 
 const siteTimezone = window.timezone?.system
 
 const filters = reactive({
   mode: 'team',
-  preset: 'Last 30 Days',
-  ...lastDays(30, siteTimezone),
+  preset: 'This Week',
+  ...PERIOD_PRESETS['This Week'](siteTimezone),
   member: null,
 })
 
@@ -152,7 +163,8 @@ const scopeLine = computed(() => {
       [getUser(filters.member).full_name],
     )
   }
-  const count = (crmUsers.value || []).filter((u) => u.enabled).length
+  // members() lists exactly the enabled CRM users the figures cover.
+  const count = membersResource.data?.members?.length ?? 0
   return __(
     'Whole team · {0} enabled CRM users · activity credited to the user who recorded it',
     [count],
@@ -160,10 +172,8 @@ const scopeLine = computed(() => {
 })
 
 function update(patch) {
-  if (patch.days) {
-    Object.assign(filters, lastDays(patch.days, siteTimezone))
-    delete patch.days
-  }
+  const range = PERIOD_PRESETS[patch.preset]
+  if (range) Object.assign(filters, range(siteTimezone))
   if (patch.mode === 'team') patch.member = null
   Object.assign(filters, patch)
   load()
@@ -171,14 +181,20 @@ function update(patch) {
 
 // Every filter change closes the dialog and refetches, unless the period is invalid (checked
 // here, before any request) or Person mode has no member yet.
-function load() {
+function load(refresh = false) {
   showRecords.value = false
   rangeProblem.value = rangeError(filters.from, filters.to)
   if (rangeProblem.value) return
-  if (filters.mode !== 'person') return summary.submit(summaryParams(filters))
-  if (!membersResource.data && !membersResource.loading) {
-    membersResource.submit({ from_date: filters.from, to_date: filters.to })
+  // The team table and the member picker both read members(); refetched when the period
+  // changes or on Refresh, not on every switch between team and person mode.
+  const period = summaryParams({ from: filters.from, to: filters.to })
+  if (
+    refresh ||
+    JSON.stringify(membersResource.params) !== JSON.stringify(period)
+  ) {
+    membersResource.submit(period)
   }
+  if (filters.mode !== 'person') return summary.submit(summaryParams(filters))
   if (filters.member) summary.submit(summaryParams(filters))
 }
 

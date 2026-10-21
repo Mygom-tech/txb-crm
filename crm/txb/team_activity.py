@@ -6,6 +6,9 @@ passed to every registered metric (`crm.txb.team_activity_metrics`), so the summ
 per-member breakdown and the records drill-down always count the same thing.
 
 Callers must check access first: `crm.txb.api.team_activity` admits Admins only.
+
+Every record row that references a Lead, Deal or Contact also carries that customer's `person`
+name, so a drill-down reads as people rather than document ids.
 """
 
 from dataclasses import dataclass, replace
@@ -17,6 +20,7 @@ from frappe import _
 from frappe.utils import cint, get_system_timezone
 
 from crm.api.session import CRM_ALLOWED_ROLES
+from crm.txb.meetings import customer_display_name
 from crm.txb.team_activity_metrics import PAGE_LENGTH, MetricDescriptor, get_metric, list_metrics
 
 UTC = ZoneInfo("UTC")
@@ -24,19 +28,20 @@ UTC = ZoneInfo("UTC")
 
 @dataclass(frozen=True)
 class Scope:
-	"""What every metric counts over: [from_utc, to_utc_exclusive), for one member or the team."""
+	"""What every metric counts over: [from_utc, to_utc_exclusive), for one member or the team,
+	optionally narrowed to one of the metric's groups."""
 
 	from_utc: datetime
 	to_utc_exclusive: datetime
 	member: str | None
 	timezone: str
+	group: str | None = None
 
 	def stored_bounds(self) -> tuple[datetime, datetime]:
 		"""The bounds as Frappe stores Datetime values: naive, in the site timezone."""
 		site_tz = ZoneInfo(self.timezone)
 		return tuple(
-			bound.astimezone(site_tz).replace(tzinfo=None)
-			for bound in (self.from_utc, self.to_utc_exclusive)
+			bound.astimezone(site_tz).replace(tzinfo=None) for bound in (self.from_utc, self.to_utc_exclusive)
 		)
 
 
@@ -87,9 +92,7 @@ def summary(from_date, to_date, member: str | None = None) -> dict:
 	scope = build_scope(from_date, to_date, member)
 	return {
 		**_period(scope),
-		"metrics": [
-			{**_describe(descriptor), "value": descriptor.total(scope)} for descriptor in list_metrics()
-		],
+		"metrics": [_summarize(descriptor, scope) for descriptor in list_metrics()],
 	}
 
 
@@ -114,24 +117,44 @@ def members(from_date, to_date) -> dict:
 	}
 
 
-def records(metric: str, from_date, to_date, member: str | None = None, page=1) -> dict:
-	"""One page of a metric's source records, newest first, with the metric's full total."""
+def records(
+	metric: str, from_date, to_date, member: str | None = None, page=1, group: str | None = None
+) -> dict:
+	"""One page of a metric's source records, in the metric's order, with its full total."""
 	descriptor = get_metric(metric)
 	page = cint(page)
 	if page < 1:
 		frappe.throw(_("Page must be 1 or more."), frappe.ValidationError)
-	scope = build_scope(from_date, to_date, member)
+	if group and group not in {g["key"] for g in descriptor.groups}:
+		frappe.throw(_("Unknown group {0} for {1}.").format(group, metric), frappe.ValidationError)
+	scope = replace(build_scope(from_date, to_date, member), group=group or None)
 	return {
 		**_period(scope),
 		**_describe(descriptor),
 		"total": descriptor.total(scope),
 		"page": page,
 		"page_length": PAGE_LENGTH,
+		"group": scope.group,
 		"rows": [
-			{**row, "source_link": descriptor.source_link(row)}
+			{**row, **_person(row), "source_link": descriptor.source_link(row)}
 			for row in descriptor.rows(scope, page, PAGE_LENGTH)
 		],
 	}
+
+
+def _summarize(descriptor: MetricDescriptor, scope: Scope) -> dict:
+	summary = {**_describe(descriptor), "value": descriptor.total(scope)}
+	for group in summary["groups"]:
+		group["value"] = descriptor.total(replace(scope, group=group["key"]))
+	return summary
+
+
+def _person(row: dict) -> dict:
+	"""The customer a row references, by name; falls back to the document id."""
+	doctype, name = row.get("reference_doctype"), row.get("reference_name")
+	if not (doctype and name):
+		return {}
+	return {"person": customer_display_name(doctype, name) or name}
 
 
 def _parse_date(value) -> date:
@@ -162,5 +185,11 @@ def _describe(descriptor: MetricDescriptor) -> dict:
 		"key": descriptor.key,
 		"label": _(descriptor.label),
 		"order": descriptor.order,
+		"description": _(descriptor.description),
+		"ignores_period": descriptor.ignores_period,
+		"groups": [
+			{**group, "label": _(group["label"]), "description": _(group["description"])}
+			for group in descriptor.groups
+		],
 		"record_columns": [{**column, "label": _(column["label"])} for column in descriptor.columns],
 	}

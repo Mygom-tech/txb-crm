@@ -73,6 +73,7 @@
 import LucideGlobe from '~icons/lucide/globe'
 import LucideUser from '~icons/lucide/user'
 import UserAvatar from '@/components/UserAvatar.vue'
+import { PERIOD_PRESETS } from '@/utils/teamActivity'
 import { dayjs, DatePicker, Dropdown, Select, TabButtons } from 'frappe-ui'
 
 defineProps({
@@ -83,14 +84,14 @@ defineProps({
 
 const emit = defineEmits(['update'])
 
-// Same presets as the Dashboard; the label stays the English key, like Dashboard's `preset`.
+// The label stays the English key, like Dashboard's `preset`; the page resolves its range.
 const presets = [
   {
     group: 'Presets',
     hideLabel: true,
-    items: [7, 30, 60, 90].map((days) => ({
-      label: __('Last {0} Days', [days]),
-      onClick: () => emit('update', { preset: `Last ${days} Days`, days }),
+    items: Object.keys(PERIOD_PRESETS).map((preset) => ({
+      label: __(preset),
+      onClick: () => emit('update', { preset }),
     })),
   },
   {

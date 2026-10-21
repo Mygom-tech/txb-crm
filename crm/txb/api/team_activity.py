@@ -25,9 +25,16 @@ def members(from_date: str, to_date: str) -> dict:
 
 
 @frappe.whitelist()
-def records(metric: str, from_date: str, to_date: str, member: str | None = None, page: int = 1) -> dict:
+def records(
+	metric: str,
+	from_date: str,
+	to_date: str,
+	member: str | None = None,
+	page: int = 1,
+	group: str | None = None,
+) -> dict:
 	_only_admins()
-	return team_activity.records(metric, from_date, to_date, member, page)
+	return team_activity.records(metric, from_date, to_date, member, page, group)
 
 
 def _only_admins():

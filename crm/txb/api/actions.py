@@ -15,6 +15,7 @@ from crm.txb.constants import (
 	LEAD_STATUS_FOLLOW_UP,
 	LEAD_STATUS_NURTURE,
 	PIPELINE_DELIVERING_COACHING,
+	REACH_NOTE_TITLE,
 	STATUS_ACTIVE,
 )
 from crm.txb import meetings
@@ -436,7 +437,8 @@ def log_reach(lead: str, status: str | None = None, activity: str | dict | None 
 			note = frappe.get_doc(
 				{
 					"doctype": "FCRM Note",
-					"title": _("Log a reach"),
+					# Untranslated: Team Activity counts reaches by this exact title.
+					"title": REACH_NOTE_TITLE,
 					"content": reach_note_html(values),
 					"reference_doctype": LEAD_DOCTYPE,
 					"reference_docname": doc.name,

@@ -1,5 +1,5 @@
 <template>
-  <Dialog v-model:open="show" :title="metric?.label" size="4xl">
+  <Dialog v-model:open="show" :title="metric?.label" size="6xl">
     <div class="flex flex-col gap-3">
       <div class="flex flex-col gap-0.5 text-sm text-ink-gray-5">
         <span>{{ scope }}</span>
@@ -7,6 +7,18 @@
           {{ __('{0} records', [records.data.total]) }}
         </span>
       </div>
+
+      <div v-if="metric?.groups?.length" class="flex flex-col gap-2">
+        <TabButtons
+          :buttons="groupTabs"
+          :modelValue="group"
+          @update:modelValue="selectGroup"
+        />
+        <span class="text-sm text-ink-gray-6">{{ explainer }}</span>
+      </div>
+      <span v-else-if="metric?.description" class="text-sm text-ink-gray-6">
+        {{ metric.description }}
+      </span>
 
       <div v-if="records.error" class="flex flex-col items-start gap-2 py-6">
         <span class="text-base font-medium text-ink-gray-9">
@@ -49,15 +61,17 @@
           }"
         >
           <template #cell="{ item, column, row }">
-            <template v-if="column.type === 'repeat'">
-              <Badge
-                v-if="repeatCount(row)"
-                theme="gray"
-                variant="subtle"
-                size="sm"
-                :label="__('{0} activities', [repeatCount(row)])"
-              />
-            </template>
+            <router-link
+              v-if="column.type === 'person' && row._reference.route"
+              :to="row._reference.route"
+              class="flex flex-col truncate hover:underline"
+              @click.stop
+            >
+              <span class="truncate text-base text-ink-gray-9">{{ item }}</span>
+              <span class="text-xs text-ink-gray-5">
+                {{ row._reference.label }}
+              </span>
+            </router-link>
             <Badge
               v-else-if="column.type === 'badge' && item"
               theme="gray"
@@ -118,13 +132,7 @@
 import UserAvatar from '@/components/UserAvatar.vue'
 import { usersStore } from '@/stores/users'
 import { formatDate } from '@/utils'
-import {
-  pageWindow,
-  recordRows,
-  recordsColumns,
-  recordsParams,
-  repeatCount,
-} from '@/utils/teamActivity'
+import { pageWindow, recordRows, recordsParams } from '@/utils/teamActivity'
 import {
   Badge,
   Button,
@@ -133,6 +141,7 @@ import {
   ErrorMessage,
   ListView,
   Skeleton,
+  TabButtons,
 } from 'frappe-ui'
 import { computed, ref, watch } from 'vue'
 
@@ -148,12 +157,27 @@ const show = defineModel({ type: Boolean, default: false })
 const { getUser, isCrmUser } = usersStore()
 
 const page = ref(1)
+const group = ref('')
+
+// "All" plus one tab per group, each with its summary count.
+const groupTabs = computed(() => [
+  { label: __('All · {0}', [props.metric?.value ?? 0]), value: '' },
+  ...(props.metric?.groups || []).map((g) => ({
+    label: `${g.label} · ${g.value}`,
+    value: g.key,
+  })),
+])
+const explainer = computed(
+  () =>
+    props.metric?.groups?.find((g) => g.key === group.value)?.description ||
+    props.metric?.description,
+)
 
 const records = createResource({
   url: 'crm.txb.api.team_activity.records',
 })
 
-const columns = computed(() => recordsColumns(props.metric?.record_columns))
+const columns = computed(() => props.metric?.record_columns || [])
 const rows = computed(() =>
   recordRows(records.data?.rows, records.data?.page || page.value),
 )
@@ -167,11 +191,19 @@ const pageInfo = computed(() =>
 
 function load(next) {
   page.value = next
-  records.submit(recordsParams(props.metric.key, props.filters, next))
+  records.submit(
+    recordsParams(props.metric.key, props.filters, next, group.value),
+  )
+}
+
+function selectGroup(value) {
+  group.value = value
+  load(1)
 }
 
 watch(show, (open) => {
   if (!open) return
+  group.value = ''
   records.reset()
   load(1)
 })
