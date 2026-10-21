@@ -33,6 +33,7 @@ from crm.txb.contact_inactivity import (
 	recompute_unreminded,
 	settle,
 	start_cycle,
+	start_missing_cycles,
 )
 from crm.txb.test_ownership import ensure_user
 
@@ -117,6 +118,15 @@ class TestContactInactivity(FrappeTestCase):
 		[cycle] = cycles(contact)
 		self.assertEqual(cycle.anchor_source, "Creation")
 		self.assertEqual(cycle.anchor_at, frappe.db.get_value("Contact", contact, "creation"))
+
+	def test_a_contact_without_any_cycle_gets_one_from_the_sweep(self):
+		contact = new_contact()
+
+		start_missing_cycles()
+		start_missing_cycles()
+
+		[cycle] = cycles(contact)
+		self.assertEqual((cycle.anchor_source, cycle.status, cycle.live_key), ("Creation", "Open", contact))
 
 	# -- ac-2 -----------------------------------------------------------------------------------
 
