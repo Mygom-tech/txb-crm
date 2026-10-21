@@ -29,7 +29,6 @@ from crm.txb.constants import FIELD_MEETING_KEY
 from crm.txb.meetings import (
 	SUBJECT_NAME_SEPARATOR,
 	_compose_subject,
-	_format_person_name,
 	_normalize_email,
 	_primary_first,
 	_reconcile_participants,
@@ -39,6 +38,7 @@ from crm.txb.meetings import (
 	meeting_key,
 	sync_meeting_event,
 )
+from crm.txb.people import format_person_name
 from crm.txb.pipelines.individual_session import (
 	MEETING_FLOW_BAP,
 	bap_address,
@@ -232,12 +232,12 @@ class TestMeetingIdentity(FrappeTestCase):
 	# -- TXB-213: customer-name subject composition (pure) ------------------------------
 
 	def test_format_person_name_joins_present_parts(self):
-		self.assertEqual(_format_person_name("  Ada  ", "Lovelace"), "Ada Lovelace")
-		self.assertEqual(_format_person_name("Ada", None, ""), "Ada")
+		self.assertEqual(format_person_name("  Ada  ", "Lovelace"), "Ada Lovelace")
+		self.assertEqual(format_person_name("Ada", None, ""), "Ada")
 
 	def test_format_person_name_empty_when_nothing_resolves(self):
 		"""No blank separators or stray whitespace when every part is absent."""
-		self.assertEqual(_format_person_name(None, "", "   "), "")
+		self.assertEqual(format_person_name(None, "", "   "), "")
 
 	def test_primary_first_prefers_primary_then_keeps_table_order(self):
 		"""The primary Contact sorts first; the rest keep their original listed order."""

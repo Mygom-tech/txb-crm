@@ -22,6 +22,14 @@
              active row's shadow. Widen the scroll box to the sidebar edges and
              pad the content back in so the shadow has room. -->
         <div class="-mx-2 mt-2 flex flex-1 flex-col gap-1 overflow-y-auto px-2">
+          <SidebarItem :label="__('Search')" @click="showGlobalSearch = true">
+            <template #prefix>
+              <LucideSearch class="size-4 text-ink-gray-7" />
+            </template>
+            <template v-if="!mobile" #suffix>
+              <span class="mr-2 text-xs text-ink-gray-5">Ctrl K</span>
+            </template>
+          </SidebarItem>
           <SidebarItem
             id="notifications-btn"
             :label="__('Notifications')"
@@ -175,6 +183,7 @@
 import BrushCleaningIcon from '~icons/lucide/brush-cleaning'
 import LucideLayoutDashboard from '~icons/lucide/layout-dashboard'
 import LucideActivity from '~icons/lucide/activity'
+import LucideSearch from '~icons/lucide/search'
 import CRMLogo from '@/components/Icons/CRMLogo.vue'
 import InviteIcon from '@/components/Icons/InviteIcon.vue'
 import ConvertIcon from '@/components/Icons/ConvertIcon.vue'
@@ -211,7 +220,7 @@ import {
   activeSettingsPage,
   mobileSidebarOpened,
 } from '@/composables/settings'
-import { showChangePasswordModal } from '@/composables/modals'
+import { showChangePasswordModal, showGlobalSearch } from '@/composables/modals'
 import { useBroadcast } from '@/composables/useBroadcast.js'
 import { call, Sidebar, SidebarItem, SidebarLabel, Tooltip } from 'frappe-ui'
 import {
