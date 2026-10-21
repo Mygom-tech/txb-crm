@@ -49,6 +49,8 @@ def after_install(force=False):
 	ensure_notification_settings()
 	ensure_assignment_email_template()
 	ensure_client_email_template()
+	# The site email shell has its own footer; drop Frappe's "Sent via" line from it.
+	frappe.db.set_default("disable_standard_email_footer", 1)
 	frappe.db.commit()
 
 

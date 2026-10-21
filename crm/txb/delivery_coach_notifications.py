@@ -11,9 +11,9 @@ notification consumer three things to build on:
   retried without resending the other or one already Sent. Its captured routing and assignment
   generation never change after insert; each channel counts its attempts and stamps its
   latest claim and recovery (TXB-288).
-* Two editable Email Templates in the TXB-116 wrapper and signature: the coach's, with the
-  client's details, and the client's (Lithuanian), both rendered from
-  `build_assignment_email_context`.
+* Two editable Email Templates holding content only -- the site email shell
+  (`crm/templates/emails/standard.html`) brands every email: the coach's, with the client's
+  details, and the client's (Lithuanian), both rendered from `build_assignment_email_context`.
 
 Only a System Manager may change the settings (`crm.txb.permissions.guard_notification_settings`).
 """
@@ -22,7 +22,6 @@ import hashlib
 import re
 
 import frappe
-from bs4 import BeautifulSoup
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 from frappe.utils import format_datetime, get_url
 
@@ -98,9 +97,8 @@ _SUBJECT = (
 	"New client assigned: {{ client_name }}"
 )
 
-# The assignment content only. The branded wrapper and signature around it are not kept here:
-# they are TXB-116's, taken from the site's confirmation template by `build_email_body`.
-# Values are escaped, since a guest registration names the client.
+# The assignment content only; the site email shell brands it. Values are escaped, since a guest
+# registration names the client.
 _CONTENT = (
 	"{% if is_test_redirect %}"
 	'<p style="background: #fff4e5; padding: 10px; border: 1px solid #f5a623;">'
@@ -154,15 +152,12 @@ _CLIENT_CONTENT = (
 	"<p>Jums paskirtas koučeris <strong>{{ intended_coach_name | e }}</strong>"
 	"{% if client_program %} programai „{{ client_program | e }}“{% endif %}.</p>"
 	"<p>Koučeris susisieks su Jumis per artimiausias 48 valandas.</p>"
+	"<p>Pagarbiai,<br>TXB komanda</p>"
 )
 
 # SHA-256 of the body TXB-269 seeded with its own navy header and English signature. A template
 # still holding exactly that -- or the bare `_CONTENT` -- was never edited and may be re-seeded.
 _UNEDITED_SEED_SHA256 = "0be7b47f2a590a8b7de3ca4d6bf56a962c95c161e43d8e8224fc43764e222aed"
-
-# The confirmation's greeting, which sits in the TXB-116 padded content container.
-_GREETING_RE = re.compile(r"\{\{\s*first_name\s*\}\}")
-_CONTENT_SLOT = "txb-assignment-content-slot"
 
 # Credential-shaped strings scrubbed from every stored error summary (the coaching recap uses it too).
 _TOKEN_PATTERNS = (
@@ -187,35 +182,9 @@ def ensure_notification_settings() -> None:
 		frappe.db.set_single_value(SETTINGS_DOCTYPE, SETTING_MODE, MODE_DISABLED)
 
 
-def build_email_body(content: str = _CONTENT) -> str:
-	"""`content` inside this site's TXB-116 wrapper and signature.
-
-	The TXB-116 wrapper is not code: it is the operator-authored registration confirmation
-	Email Template (`CONFIRMATION_TEMPLATE`) -- branded header, padded content container ending
-	in the signature, footer. Its content container (the element holding the greeting) gets
-	`content` in place of the registration text; the header, footer and the
-	container's closing signature paragraph are reused as they are. A confirmation with no
-	recognisable container gives the bare content, never a second, independent brand.
-	"""
-	html = frappe.db.get_value("Email Template", CONFIRMATION_TEMPLATE, "response_html")
-	soup = BeautifulSoup(html or "", "html.parser")
-	greeting = soup.find(string=_GREETING_RE)
-	container = greeting.find_parent(["div", "td"]) if greeting else None
-	# A container holding all the text is the whole email, not the content between header and footer.
-	if container is None or container.get_text(strip=True) == soup.get_text(strip=True):
-		return content
-
-	children = container.find_all(True, recursive=False)
-	last = children[-1] if children else None
-	signature = str(last) if last is not None and last.name == "p" and "{" not in str(last) else ""
-	container.clear()
-	container.append(_CONTENT_SLOT)
-	return str(soup).replace(_CONTENT_SLOT, content + signature, 1)
-
-
 def _is_unedited_seed(body: str | None) -> bool:
 	return (
-		body in (_CONTENT, _PREVIOUS_CONTENT, build_email_body(_PREVIOUS_CONTENT))
+		body in (_CONTENT, _PREVIOUS_CONTENT)
 		or hashlib.sha256((body or "").encode()).hexdigest() == _UNEDITED_SEED_SHA256
 	)
 
@@ -226,17 +195,16 @@ def ensure_assignment_email_template() -> None:
 	Any other body is the operator's and is left exactly as it is, so re-running the migration
 	keeps their edits.
 	"""
-	body = build_email_body()
-	if not _seed_template(ASSIGNMENT_EMAIL_TEMPLATE, _SUBJECT, body):
+	if not _seed_template(ASSIGNMENT_EMAIL_TEMPLATE, _SUBJECT, _CONTENT):
 		template = frappe.get_doc("Email Template", ASSIGNMENT_EMAIL_TEMPLATE)
-		if template.response_html != body and _is_unedited_seed(template.response_html):
-			template.response_html = body
+		if template.response_html != _CONTENT and _is_unedited_seed(template.response_html):
+			template.response_html = _CONTENT
 			template.save(ignore_permissions=True)
 
 
 def ensure_client_email_template() -> None:
 	"""Seed the client's Email Template once; an existing one is the operator's to edit."""
-	_seed_template(CLIENT_EMAIL_TEMPLATE, _CLIENT_SUBJECT, build_email_body(_CLIENT_CONTENT))
+	_seed_template(CLIENT_EMAIL_TEMPLATE, _CLIENT_SUBJECT, _CLIENT_CONTENT)
 
 
 def _seed_template(name: str, subject: str, body: str) -> bool:

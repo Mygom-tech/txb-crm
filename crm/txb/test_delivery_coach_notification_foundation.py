@@ -8,8 +8,8 @@ settings and is safe to re-run without replaying history or touching existing le
 a System Manager may change the settings and error summaries carry no credentials; one ledger
 row per assignment event with immutable routing and generation; each channel
 moves independently, a Sent channel can never be sent again and an Uncertain one is never
-resent automatically; the editable template wraps the documented context in the TXB-116 wrapper
-and signature and reads "Not provided" for a blank organization or program type.
+resent automatically; the editable template holds the documented context as content only (the
+site email shell brands it) and reads "Not provided" for a blank organization or program type.
 """
 
 import frappe
@@ -17,6 +17,7 @@ from frappe.tests.utils import FrappeTestCase
 from frappe.utils import get_url, now_datetime
 
 from crm.patches.v1_0.add_delivery_coach_notification_foundation import execute as migrate
+from crm.patches.v1_0.unwrap_email_templates import execute as unwrap
 from crm.txb.constants import (
 	ADMIN_ROLE,
 	CONFIRMATION_TEMPLATE,
@@ -488,35 +489,44 @@ class TestDeliveryCoachNotificationFoundation(FrappeTestCase):
 		self.assertIn("&lt;script&gt;x&lt;/script&gt;", body)
 		self.assertIn("A &amp; B", body)
 
-	def test_template_reuses_txb116_wrapper_and_signature(self):
+	def test_seed_is_content_only_even_beside_a_txb116_wrapper(self):
 		self.set_confirmation_body(FULL_CONFIRMATION_HTML)
 		frappe.delete_doc("Email Template", ASSIGNMENT_EMAIL_TEMPLATE, ignore_permissions=True)
 
 		migrate()
 
 		body = self.assignment_body()
-		# TXB-116's header, signature and footer, as the confirmation template has them.
-		for wrapper in ("#002d5b", "https://txb.example/logo.png", "Pagarbiai, TxB komanda", "© TxB"):
-			self.assertIn(wrapper, body)
-		# Its registration content is replaced, and no second brand is invented.
-		for registration in ("Jūsų registracija", "{{ first_name }}", "{{ workshop_name }}"):
-			self.assertNotIn(registration, body)
-		self.assertNotIn("Best regards", body)
+		self.assertTrue(body.startswith("{% if is_test_redirect %}"))
+		for wrapper in ("#002d5b", "https://txb.example/logo.png", "© TxB"):
+			self.assertNotIn(wrapper, body)
 
-		_subject, rendered = render_assignment_email(self.context())
-		for value in ("Ona Jonaitė", "Acme UAB", "TxB Executive", "Pagarbiai, TxB komanda"):
-			self.assertIn(value, rendered)
-		self.assertLess(rendered.index("Ona Jonaitė"), rendered.index("Pagarbiai, TxB komanda"))
-		self.assertLess(rendered.index("Pagarbiai, TxB komanda"), rendered.index("© TxB"))
+	def test_unwrap_keeps_greeting_to_signature_and_is_idempotent(self):
+		self.set_confirmation_body(FULL_CONFIRMATION_HTML)
+		wrapped = FULL_CONFIRMATION_HTML.replace(
+			"Sveiki, {{ first_name }}", "Hi {{ intended_coach_name | e }}"
+		)
+		frappe.db.set_value("Email Template", ASSIGNMENT_EMAIL_TEMPLATE, "response_html", wrapped)
+
+		unwrap()
+
+		for body in (
+			self.assignment_body(),
+			frappe.db.get_value("Email Template", CONFIRMATION_TEMPLATE, "response_html"),
+		):
+			for wrapper in ("#002d5b", "https://txb.example/logo.png", "© TxB"):
+				self.assertNotIn(wrapper, body)
+			self.assertIn("Pagarbiai, TxB komanda", body)
+		unwrapped = self.assignment_body()
+		unwrap()
+		self.assertEqual(self.assignment_body(), unwrapped)
 
 	def test_unedited_seed_is_reconciled_and_operator_edits_survive(self):
-		self.set_confirmation_body(FULL_CONFIRMATION_HTML)
 		frappe.db.set_value("Email Template", ASSIGNMENT_EMAIL_TEMPLATE, "response_html", TXB269_SEED_BODY)
 
 		migrate()
 
 		reseeded = self.assignment_body()
-		self.assertIn("Pagarbiai, TxB komanda", reseeded)
+		self.assertTrue(reseeded.startswith("{% if is_test_redirect %}"))
 		self.assertNotIn("Best regards", reseeded)
 		migrate()
 		self.assertEqual(self.assignment_body(), reseeded)
@@ -526,17 +536,3 @@ class TestDeliveryCoachNotificationFoundation(FrappeTestCase):
 		migrate()
 		migrate()
 		self.assertEqual(self.assignment_body(), edited)
-
-	def test_site_without_txb116_wrapper_gets_bare_content_until_it_has_one(self):
-		self.set_confirmation_body("<p>Sveiki, {{ first_name }},</p>")
-		frappe.delete_doc("Email Template", ASSIGNMENT_EMAIL_TEMPLATE, ignore_permissions=True)
-
-		migrate()
-
-		bare = self.assignment_body()
-		self.assertTrue(bare.startswith("{% if is_test_redirect %}"))
-		self.assertNotIn("#002d5b", bare)
-
-		self.set_confirmation_body(FULL_CONFIRMATION_HTML)
-		migrate()
-		self.assertIn("Pagarbiai, TxB komanda", self.assignment_body())
