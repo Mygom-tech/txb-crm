@@ -79,9 +79,7 @@ _RESULT_FIELDS = {
 
 
 @frappe.whitelist()
-def search_people(
-	name: str = "", email: str = "", phone: str = "", limit: int = DEFAULT_LIMIT
-) -> dict:
+def search_people(name: str = "", email: str = "", phone: str = "", limit: int = DEFAULT_LIMIT) -> dict:
 	"""Find people matching any of `name`, `email` or `phone` across Leads and Contacts.
 
 	Returns ``{"matches": [...], "restricted": int}``. Each match carries its
@@ -119,9 +117,7 @@ def search_people(
 			matches.extend(_as_match(doctype, row, email, phone, tokens) for row in visible)
 		except Exception as error:
 			# A search that fails must never block the create flow it is helping.
-			frappe.log_error(
-				f"[search_people] Failed to search {doctype}. {error}", "TXB People Search"
-			)
+			frappe.log_error(f"[search_people] Failed to search {doctype}. {error}", "TXB People Search")
 
 	# Exact hits first, then whoever matched more of the typed name, then alphabetically.
 	# Without the token count, "Jonas Jonaitis" ranks below every other Jonas in the
@@ -265,7 +261,7 @@ def search_referrers(
 	Each row is ``{"doctype", "name", "full_name", "email", "mobile_no", "converted"}``;
 	``doctype`` + ``name`` is exactly the typed reference to store.
 	"""
-	tokens = _referrer_tokens(query)
+	tokens = search_tokens(query)
 	if not tokens:
 		return []
 
@@ -301,7 +297,7 @@ def search_referrers(
 	return results[:limit]
 
 
-def _referrer_tokens(query: str) -> list[str]:
+def search_tokens(query: str) -> list[str]:
 	tokens = [t for t in normalize_name(query).split(" ") if len(t) >= REFERRER_MIN_TOKEN_LENGTH]
 	return sorted(set(tokens), key=len, reverse=True)[:MAX_NAME_TOKENS]
 
@@ -314,7 +310,7 @@ def _referrer_candidates(doctype: str, tokens: list[str]) -> set[str]:
 
 	for index, token in enumerate(tokens):
 		key = f"token_{index}"
-		values[key] = f"%{_escape_like(token)}%"
+		values[key] = f"%{escape_like(token)}%"
 		clauses.append(
 			"(" + " OR ".join(f"LOWER(COALESCE(`{column}`, '')) LIKE %({key})s" for column in columns) + ")"
 		)
@@ -328,7 +324,7 @@ def _referrer_candidates(doctype: str, tokens: list[str]) -> set[str]:
 	return {row[0] for row in rows}
 
 
-def _escape_like(value: str) -> str:
+def escape_like(value: str) -> str:
 	return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
