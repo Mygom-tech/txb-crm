@@ -10,13 +10,9 @@ from crm.txb.call_log_status import (
 	STATUS_OPTIONS_PROPERTY_SETTER,
 	reconcile_call_log_status_options,
 )
+from crm.txb.call_logging import log_a_call, require_dial_notes, require_dial_result
 from crm.txb.constants import CALL_LOG_STATUS_OPTIONS, DIAL_RESULTS
-from crm.txb.lead_actions import (
-	dial_results,
-	log_a_dial,
-	require_dial_notes,
-	require_dial_result,
-)
+from crm.txb.lead_actions import log_a_dial
 
 # The foreign option set a runtime Property Setter had drifted CRM Call Log `status` onto: none of
 # these are approved dial results, and it omits "No Answer", so Frappe's Select validation refused
@@ -48,17 +44,15 @@ def _delete_status_property_setter():
 
 
 class TestDialResults(FrappeTestCase):
-	def test_only_final_manual_dial_results_are_allowed(self):
-		self.assertEqual(
-			dial_results(),
-			("Completed", "Failed", "Busy", "No Answer", "Canceled"),
-		)
+	def test_only_the_manual_call_results_are_allowed(self):
+		self.assertEqual(DIAL_RESULTS, ("No Answer", "Completed", "In Progress", "Other"))
 
 	def test_selected_result_is_preserved(self):
-		self.assertEqual(require_dial_result("Busy"), "Busy")
+		self.assertEqual(require_dial_result("Other"), "Other")
 
 	def test_missing_or_unsupported_result_is_rejected(self):
-		for result in (None, "", "Ringing", "Answered"):
+		# Busy/Failed/Canceled are retired for new logs; older logs keep them.
+		for result in (None, "", "Ringing", "Answered", "Busy", "Failed", "Canceled"):
 			with self.assertRaises(frappe.ValidationError):
 				require_dial_result(result)
 
@@ -77,8 +71,15 @@ class TestDialResults(FrappeTestCase):
 				log_a_dial(
 					"CRM-LEAD-0001",
 					dialed_at="2026-08-19 10:00:00",
-					dial_result="Busy",
+					dial_result="No Answer",
 					notes="   ",
+				)
+			# In Progress means a retry is planned, so it needs the next call date.
+			with self.assertRaises(frappe.MandatoryError):
+				log_a_dial(
+					"CRM-LEAD-0001",
+					dial_result="In Progress",
+					notes="Rang out, trying again Friday.",
 				)
 		get_doc.assert_not_called()
 		new_doc.assert_not_called()
@@ -97,27 +98,27 @@ class TestDialResults(FrappeTestCase):
 		with (
 			patch.object(frappe, "has_permission"),
 			patch.object(frappe, "get_doc", return_value=lead),
-			patch.object(frappe, "new_doc", side_effect=[call_log, note]),
+			patch.object(frappe, "new_doc", side_effect=[note, call_log]),
 			patch.object(frappe.db, "get_value", return_value=None),
 			patch.object(frappe, "generate_hash", return_value="fixedhash"),
 		):
 			result = log_a_dial(
 				lead.name,
 				dialed_at="2026-08-19 10:00:00",
-				dial_result="Busy",
+				dial_result="Other",
 				notes="Customer asked to call tomorrow.",
 			)
 
 		inserted = call_log.update.call_args.args[0]
 		note_values = note.update.call_args.args[0]
-		self.assertEqual(inserted["status"], "Busy")
+		self.assertEqual(inserted["status"], "Other")
 		self.assertEqual(note_values["reference_doctype"], "CRM Lead")
 		self.assertEqual(note_values["reference_docname"], lead.name)
 		self.assertIn("2026-08-19 10:00:00", note_values["content"])
-		self.assertIn("Busy", note_values["content"])
+		self.assertIn("Other", note_values["content"])
 		self.assertIn("Customer asked to call tomorrow.", note_values["content"])
 		note.insert.assert_called_once_with(ignore_permissions=True)
-		self.assertEqual(call_log.note, note.name)
+		self.assertEqual(inserted["note"], note.name)
 		self.assertEqual(lead.status, "Contact attempted")
 		call_log.insert.assert_called_once_with(ignore_permissions=True)
 		lead.save.assert_called_once_with()
@@ -208,7 +209,12 @@ class TestLogADialWithRealDocuments(FrappeTestCase):
 
 	def _make_lead(self):
 		return frappe.get_doc(
-			{"doctype": "CRM Lead", "first_name": "Dial", "status": "New"}
+			{
+				"doctype": "CRM Lead",
+				"first_name": "Dial",
+				"email": f"{frappe.generate_hash(length=8)}@example.com",
+				"status": "New",
+			}
 		).insert(ignore_permissions=True)
 
 	def _linked_call_logs(self, lead):
@@ -265,3 +271,50 @@ class TestLogADialWithRealDocuments(FrappeTestCase):
 		self.assertEqual(frappe.db.get_value("CRM Lead", lead.name, "status"), "New")
 		self.assertEqual(self._linked_call_logs(lead), [])
 		self.assertEqual(self._linked_notes(lead), [])
+
+	def test_in_progress_schedules_the_next_call_as_a_task_for_the_caller(self):
+		reconcile_call_log_status_options()
+		lead = self._make_lead()
+
+		result = log_a_dial(
+			lead.name,
+			dial_result="In Progress",
+			notes="Rang out, trying again Friday.",
+			follow_up_date="2026-08-21 10:00:00",
+		)
+
+		task = frappe.get_doc("CRM Task", result["follow_up"])
+		self.assertEqual((task.reference_docname, task.assigned_to), (lead.name, frappe.session.user))
+		self.assertEqual(str(task.due_date), "2026-08-21 10:00:00")
+		self.assertEqual(frappe.db.get_value("CRM Call Log", result["call_log"], "status"), "In Progress")
+
+
+class TestLogACall(FrappeTestCase):
+	"""Log a call on a Contact: the same contract as Log a dial, without any status move."""
+
+	def setUp(self):
+		reconcile_call_log_status_options()
+		self.contact = (
+			frappe.get_doc({"doctype": "Contact", "first_name": "Call", "last_name": "Target"})
+			.insert(ignore_permissions=True)
+			.name
+		)
+
+	def test_a_call_is_logged_with_its_notes_on_the_contact(self):
+		result = log_a_call(
+			"Contact",
+			self.contact,
+			{"dial_result": "Completed", "notes": "Booked the discovery call."},
+		)
+
+		call = frappe.get_doc("CRM Call Log", result["call_log"])
+		self.assertEqual(
+			(call.reference_doctype, call.reference_docname, call.status, call.telephony_medium),
+			("Contact", self.contact, "Completed", "Manual"),
+		)
+		self.assertIn("Booked the discovery call.", frappe.db.get_value("FCRM Note", call.note, "content"))
+		self.assertIsNone(result["follow_up"])
+
+	def test_only_leads_deals_and_contacts_take_calls(self):
+		with self.assertRaises(frappe.ValidationError):
+			log_a_call("User", "Administrator", {"dial_result": "Completed", "notes": "x"})

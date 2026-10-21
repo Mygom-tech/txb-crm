@@ -1,6 +1,8 @@
+// @vitest-environment node -- it reads component sources via import.meta.url (a file: URL only here).
 import { readFileSync } from 'node:fs'
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { findMissingMandatory } from '@/utils/fieldTransforms'
 
 // TXB-236: the Discovery scheduling regressions below drive the REAL logDiscovery and the shared
 // resolveLeadStatusTransition / requestKanbanTransition routing, mocking only the two outermost
@@ -41,6 +43,8 @@ import {
   LEAD_TRANSITION_SAVED,
   LEAD_TRANSITION_CANCELLED,
   LEAD_TRANSITION_FAILED,
+  CALL_FIELDS,
+  LOG_A_CALL,
   LOG_A_DIAL,
   reachFields,
   requiresDial,
@@ -98,16 +102,19 @@ describe('the dial payload the server receives', () => {
   it('preserves the result selected by the user', () => {
     const payload = dialPayload({
       dialed_at: '2026-08-18T09:00:00',
-      dial_result: 'Busy',
+      dial_result: 'Other',
       notes: 'ring ring',
     })
-    expect(payload.dial_result).toBe('Busy')
+    expect(payload.dial_result).toBe('Other')
     expect(payload.dialed_at).toBe('2026-08-18T09:00:00')
     expect(payload.notes).toBe('ring ring')
   })
 
   it('carries only the contract fields, dropping anything extraneous', () => {
-    const payload = dialPayload({ dialed_at: '2026-08-18T09:00:00', status: 'hacked' })
+    const payload = dialPayload({
+      dialed_at: '2026-08-18T09:00:00',
+      status: 'hacked',
+    })
     expect(payload).not.toHaveProperty('status')
   })
 
@@ -118,7 +125,7 @@ describe('the dial payload the server receives', () => {
     expect(result.fieldtype).toBe('Select')
     expect(result.read_only).toBeUndefined()
     expect(result.reqd).toBe(1)
-    expect(result.options).toBe('Completed\nFailed\nBusy\nNo Answer\nCanceled')
+    expect(result.options).toBe('No Answer\nCompleted\nIn Progress\nOther')
   })
 })
 
@@ -126,7 +133,9 @@ describe('dial dialog seeding and validation', () => {
   const now = '2026-08-18T09:00:00'
 
   it('resolves the "Now" default to the injected timestamp', () => {
-    const dialedAt = dialFields(LOG_A_DIAL, now).find((f) => f.fieldname === 'dialed_at')
+    const dialedAt = dialFields(LOG_A_DIAL, now).find(
+      (f) => f.fieldname === 'dialed_at',
+    )
     expect(dialedAt.default).toBe(now)
   })
 
@@ -140,10 +149,14 @@ describe('dial dialog seeding and validation', () => {
     expect(canLogDial({})).toBe(false)
     expect(canLogDial({ dialed_at: now })).toBe(false)
     expect(canLogDial({ dialed_at: '', dial_result: 'No Answer' })).toBe(false)
-    expect(canLogDial({ dialed_at: now, dial_result: 'Busy' })).toBe(false)
-    expect(canLogDial({ dialed_at: now, dial_result: 'Busy', notes: 'Call back tomorrow' })).toBe(
-      true,
-    )
+    expect(canLogDial({ dialed_at: now, dial_result: 'Other' })).toBe(false)
+    expect(
+      canLogDial({
+        dialed_at: now,
+        dial_result: 'Other',
+        notes: 'Call back tomorrow',
+      }),
+    ).toBe(true)
   })
 })
 
@@ -163,24 +176,40 @@ describe('Follow-up requires a datetime and context', () => {
     const date = fields.find((f) => f.fieldname === 'follow_up_date')
     expect(date.fieldtype).toBe('Datetime')
     expect(date.reqd).toBe(1)
-    expect(requiredFollowUpFields()).toEqual(['follow_up_date', 'follow_up_context'])
+    expect(requiredFollowUpFields()).toEqual([
+      'follow_up_date',
+      'follow_up_context',
+    ])
   })
 
   it('rejects a follow-up missing the datetime or the context', () => {
-    expect(validateFollowUp({})).toEqual(['follow_up_date', 'follow_up_context'])
+    expect(validateFollowUp({})).toEqual([
+      'follow_up_date',
+      'follow_up_context',
+    ])
     expect(isFollowUpValid({ follow_up_context: 'Send the deck' })).toBe(false)
-    expect(isFollowUpValid({ follow_up_date: '2026-09-01 09:00:00' })).toBe(false)
-    // Whitespace is not a value, matching the server's emptiness rule.
-    expect(isFollowUpValid({ follow_up_date: '   ', follow_up_context: 'x' })).toBe(false)
-    expect(isFollowUpValid({ follow_up_date: '2026-09-01 09:00:00', follow_up_context: 'x' })).toBe(
-      true,
+    expect(isFollowUpValid({ follow_up_date: '2026-09-01 09:00:00' })).toBe(
+      false,
     )
+    // Whitespace is not a value, matching the server's emptiness rule.
+    expect(
+      isFollowUpValid({ follow_up_date: '   ', follow_up_context: 'x' }),
+    ).toBe(false)
+    expect(
+      isFollowUpValid({
+        follow_up_date: '2026-09-01 09:00:00',
+        follow_up_context: 'x',
+      }),
+    ).toBe(true)
   })
 
   it('builds the atomic follow-up payload only when complete', () => {
     expect(buildFollowUpActivity({ follow_up_context: 'x' })).toBeNull()
     const payload = buildFollowUpActivity(
-      { follow_up_date: '2026-09-01 09:00:00', follow_up_context: 'Send the deck' },
+      {
+        follow_up_date: '2026-09-01 09:00:00',
+        follow_up_context: 'Send the deck',
+      },
       { actor: 'agent@txb', now: '2026-09-01T00:00:00' },
     )
     expect(payload.status).toBe(FOLLOW_UP_STATUS)
@@ -200,12 +229,32 @@ describe('Follow-up requires a datetime and context', () => {
 // changes its picker. These pin that field-level contract; dateTimeWithOptions.test.js exercises
 // the rendered control the contract selects.
 describe('07:00 datetime option-start metadata (TXB-239)', () => {
-  it('marks Log a Dial Follow-up Date as a 07:00 Datetime without touching its requiredness', () => {
-    const followUp = LOG_A_DIAL.fields.find((f) => f.fieldname === 'follow_up_date')
+  it('marks the Next Call Date as a 07:00 Datetime, required only for In Progress', () => {
+    const followUp = LOG_A_DIAL.fields.find(
+      (f) => f.fieldname === 'follow_up_date',
+    )
     expect(followUp.fieldtype).toBe('Datetime')
     expect(followUp.time_options_start).toBe('07:00')
-    // Non-goal: requiredness is unchanged — the Follow-up Date stays optional on a dial.
     expect(followUp.reqd).toBeUndefined()
+    expect(followUp.mandatory_depends_on).toBe(
+      "eval:doc.dial_result=='In Progress'",
+    )
+  })
+
+  it('asks for the Next Call Date only when the call is still In Progress', () => {
+    const doc = { dialed_at: '2026-08-18 09:00:00', notes: 'Rang out' }
+    expect(
+      findMissingMandatory(CALL_FIELDS, { ...doc, dial_result: 'No Answer' }),
+    ).toEqual([])
+    expect(
+      findMissingMandatory(CALL_FIELDS, { ...doc, dial_result: 'In Progress' }),
+    ).toEqual(['Next Call Date'])
+  })
+
+  it('shares one call contract between Log a dial and Log a call', () => {
+    expect(LOG_A_CALL.fields).toBe(LOG_A_DIAL.fields)
+    const notes = LOG_A_CALL.fields.find((f) => f.fieldname === 'notes')
+    expect(notes.label).toBe('Call Notes')
   })
 
   it('marks the Follow-up transition date-time as a 07:00 Datetime, still required', () => {
@@ -215,13 +264,13 @@ describe('07:00 datetime option-start metadata (TXB-239)', () => {
     expect(date.reqd).toBe(1)
   })
 
-  it('leaves Log a Dial\'s dialed_at a plain Datetime on the shared DateTimePicker', () => {
+  it("leaves Log a Dial's dialed_at a plain Datetime on the shared DateTimePicker", () => {
     const dialedAt = LOG_A_DIAL.fields.find((f) => f.fieldname === 'dialed_at')
     expect(dialedAt.fieldtype).toBe('Datetime')
     expect(dialedAt.time_options_start).toBeUndefined()
   })
 
-  it('keeps Log a Reach\'s follow-up a date-only field with no time options', () => {
+  it("keeps Log a Reach's follow-up a date-only field with no time options", () => {
     const followUp = reachFields().find((f) => f.fieldname === 'follow_up_date')
     expect(followUp.fieldtype).toBe('Date')
     expect(followUp.time_options_start).toBeUndefined()
@@ -244,8 +293,12 @@ describe('Nurture requires context and next action, with an optional date', () =
   })
 
   it('accepts a nurture plan with no next-action date but rejects a missing next action', () => {
-    expect(validateNurture({ nurture_context: 'Warm', next_action: '' })).toEqual(['next_action'])
-    expect(isNurtureValid({ nurture_context: 'Warm', next_action: 'Email in Q4' })).toBe(true)
+    expect(
+      validateNurture({ nurture_context: 'Warm', next_action: '' }),
+    ).toEqual(['next_action'])
+    expect(
+      isNurtureValid({ nurture_context: 'Warm', next_action: 'Email in Q4' }),
+    ).toBe(true)
     expect(
       isNurtureValid({
         nurture_context: 'Warm',
@@ -264,7 +317,10 @@ describe('Nurture requires context and next action, with an optional date', () =
     expect(withDate.status).toBe(NURTURE_STATUS)
     expect(withDate.activity.next_action_date).toBe('2026-12-01 09:00:00')
 
-    const withoutDate = buildNurtureActivity({ nurture_context: 'Warm', next_action: 'Email in Q4' })
+    const withoutDate = buildNurtureActivity({
+      nurture_context: 'Warm',
+      next_action: 'Email in Q4',
+    })
     expect(withoutDate.activity.next_action_date).toBeNull()
   })
 })
@@ -351,16 +407,24 @@ function lastSchedulePayload() {
 describe('TXB-236 ac-1 — a selected/typed meeting time survives to the canonical payload', () => {
   beforeEach(() => {
     discoveryMocks.call.mockReset()
-    discoveryMocks.call.mockResolvedValue({ lead: DISCOVERY_LEAD, status: DISCOVERY_STATUS })
+    discoveryMocks.call.mockResolvedValue({
+      lead: DISCOVERY_LEAD,
+      status: DISCOVERY_STATUS,
+    })
     discoveryMocks.dialogDoc.current = null
   })
 
   it('carries a typed Virtual time and link verbatim from the Lead-detail/Take Action path', async () => {
     discoveryMocks.dialogDoc.current = { ...TYPED_VIRTUAL }
 
-    const routed = await resolveLeadStatusTransition('Contacted', DISCOVERY_STATUS, DISCOVERY_LEAD, {
-      now: DISCOVERY_NOW,
-    })
+    const routed = await resolveLeadStatusTransition(
+      'Contacted',
+      DISCOVERY_STATUS,
+      DISCOVERY_LEAD,
+      {
+        now: DISCOVERY_NOW,
+      },
+    )
 
     expect(routed.outcome).toBe(LEAD_TRANSITION_SAVED)
     expect(routed.status).toBe(DISCOVERY_STATUS)
@@ -396,9 +460,14 @@ describe('TXB-236 ac-1 — a selected/typed meeting time survives to the canonic
 
   it('routes both surfaces to the identical payload for the same committed time', async () => {
     discoveryMocks.dialogDoc.current = { ...TYPED_VIRTUAL }
-    await resolveLeadStatusTransition('Contacted', DISCOVERY_STATUS, DISCOVERY_LEAD, {
-      now: DISCOVERY_NOW,
-    })
+    await resolveLeadStatusTransition(
+      'Contacted',
+      DISCOVERY_STATUS,
+      DISCOVERY_LEAD,
+      {
+        now: DISCOVERY_NOW,
+      },
+    )
     const detail = lastSchedulePayload().activity
 
     discoveryMocks.call.mockClear()
@@ -416,16 +485,24 @@ describe('TXB-236 ac-1 — a selected/typed meeting time survives to the canonic
 describe('TXB-236 ac-2 — fail closed before the status transition, no partial write', () => {
   beforeEach(() => {
     discoveryMocks.call.mockReset()
-    discoveryMocks.call.mockResolvedValue({ lead: DISCOVERY_LEAD, status: DISCOVERY_STATUS })
+    discoveryMocks.call.mockResolvedValue({
+      lead: DISCOVERY_LEAD,
+      status: DISCOVERY_STATUS,
+    })
     discoveryMocks.dialogDoc.current = null
   })
 
   it('leaves the prior status unchanged and posts nothing on cancel', async () => {
     discoveryMocks.dialogDoc.current = null // dismissed
 
-    const routed = await resolveLeadStatusTransition('Contacted', DISCOVERY_STATUS, DISCOVERY_LEAD, {
-      now: DISCOVERY_NOW,
-    })
+    const routed = await resolveLeadStatusTransition(
+      'Contacted',
+      DISCOVERY_STATUS,
+      DISCOVERY_LEAD,
+      {
+        now: DISCOVERY_NOW,
+      },
+    )
 
     expect(routed.outcome).toBe(LEAD_TRANSITION_CANCELLED)
     expect(routed.status).toBe('Contacted')
@@ -442,9 +519,14 @@ describe('TXB-236 ac-2 — fail closed before the status transition, no partial 
       meeting_link: 'https://meet.example/xyz',
     }
 
-    const routed = await resolveLeadStatusTransition('Contacted', DISCOVERY_STATUS, DISCOVERY_LEAD, {
-      now: DISCOVERY_NOW,
-    })
+    const routed = await resolveLeadStatusTransition(
+      'Contacted',
+      DISCOVERY_STATUS,
+      DISCOVERY_LEAD,
+      {
+        now: DISCOVERY_NOW,
+      },
+    )
 
     expect(routed.outcome).toBe(LEAD_TRANSITION_CANCELLED)
     expect(routed.status).toBe('Contacted')
@@ -456,9 +538,14 @@ describe('TXB-236 ac-2 — fail closed before the status transition, no partial 
     const failure = new Error('schedule_discovery failed')
     discoveryMocks.call.mockRejectedValueOnce(failure)
 
-    const routed = await resolveLeadStatusTransition('Contacted', DISCOVERY_STATUS, DISCOVERY_LEAD, {
-      now: DISCOVERY_NOW,
-    })
+    const routed = await resolveLeadStatusTransition(
+      'Contacted',
+      DISCOVERY_STATUS,
+      DISCOVERY_LEAD,
+      {
+        now: DISCOVERY_NOW,
+      },
+    )
 
     expect(routed.outcome).toBe(LEAD_TRANSITION_FAILED)
     expect(routed.status).toBe('Contacted')
@@ -469,7 +556,9 @@ describe('TXB-236 ac-2 — fail closed before the status transition, no partial 
 
   it('re-throws a Kanban persistence failure so the caller reverts the card', async () => {
     discoveryMocks.dialogDoc.current = { ...SELECTED_ONSITE }
-    discoveryMocks.call.mockRejectedValueOnce(new Error('schedule_discovery failed'))
+    discoveryMocks.call.mockRejectedValueOnce(
+      new Error('schedule_discovery failed'),
+    )
 
     await expect(requestKanbanTransition(discoveryKanbanCtx())).rejects.toThrow(
       'schedule_discovery failed',
@@ -489,7 +578,10 @@ describe('TXB-236 ac-2 — fail closed before the status transition, no partial 
 describe('TXB-245 — optional type-specific location detail', () => {
   beforeEach(() => {
     discoveryMocks.call.mockReset()
-    discoveryMocks.call.mockResolvedValue({ lead: DISCOVERY_LEAD, status: DISCOVERY_STATUS })
+    discoveryMocks.call.mockResolvedValue({
+      lead: DISCOVERY_LEAD,
+      status: DISCOVERY_STATUS,
+    })
     discoveryMocks.dialogDoc.current = null
   })
 
@@ -500,9 +592,14 @@ describe('TXB-245 — optional type-specific location detail', () => {
       meeting_type: 'Virtual',
     }
 
-    const routed = await resolveLeadStatusTransition('Contacted', DISCOVERY_STATUS, DISCOVERY_LEAD, {
-      now: DISCOVERY_NOW,
-    })
+    const routed = await resolveLeadStatusTransition(
+      'Contacted',
+      DISCOVERY_STATUS,
+      DISCOVERY_LEAD,
+      {
+        now: DISCOVERY_NOW,
+      },
+    )
 
     expect(routed.outcome).toBe(LEAD_TRANSITION_SAVED)
     expect(routed.status).toBe(DISCOVERY_STATUS)
@@ -544,7 +641,10 @@ describe('TXB-245 — optional type-specific location detail', () => {
 describe('TXB-236 ac-3 — retry routes through the single canonical endpoint, never a parallel create', () => {
   beforeEach(() => {
     discoveryMocks.call.mockReset()
-    discoveryMocks.call.mockResolvedValue({ lead: DISCOVERY_LEAD, status: DISCOVERY_STATUS })
+    discoveryMocks.call.mockResolvedValue({
+      lead: DISCOVERY_LEAD,
+      status: DISCOVERY_STATUS,
+    })
     discoveryMocks.dialogDoc.current = null
   })
 
@@ -561,7 +661,9 @@ describe('TXB-236 ac-3 — retry routes through the single canonical endpoint, n
       'crm.txb.api.actions.schedule_discovery',
       'crm.txb.api.actions.schedule_discovery',
     ])
-    const [first, second] = discoveryMocks.call.mock.calls.map((args) => args[1].activity)
+    const [first, second] = discoveryMocks.call.mock.calls.map(
+      (args) => args[1].activity,
+    )
     expect(second.meeting_time).toBe(first.meeting_time)
     expect(second.meeting_date).toBe(first.meeting_date)
     expect(second.meeting_type).toBe(first.meeting_type)
@@ -574,7 +676,10 @@ describe('TXB-236 ac-3 — retry routes through the single canonical endpoint, n
     expect(lastSchedulePayload().activity.meeting_time).toBe('14:37:00')
 
     discoveryMocks.call.mockClear()
-    discoveryMocks.dialogDoc.current = { ...TYPED_VIRTUAL, meeting_time: '16:05:00' }
+    discoveryMocks.dialogDoc.current = {
+      ...TYPED_VIRTUAL,
+      meeting_time: '16:05:00',
+    }
     await requestKanbanTransition(discoveryKanbanCtx())
 
     const payload = lastSchedulePayload()
@@ -591,7 +696,10 @@ describe('TXB-236 ac-1/ac-3 — the shared FieldLayout Time control commits befo
     'utf-8',
   )
   const dialogSource = readFileSync(
-    new URL('../../src/components/Modals/FieldLayoutDialog.vue', import.meta.url),
+    new URL(
+      '../../src/components/Modals/FieldLayoutDialog.vue',
+      import.meta.url,
+    ),
     'utf-8',
   )
 
@@ -606,7 +714,9 @@ describe('TXB-236 ac-1/ac-3 — the shared FieldLayout Time control commits befo
     // The installed frappe-ui TimePicker only emits update:modelValue, so this is the sole
     // contract that commits a selected/typed time into the FieldLayout data.
     expect(timePickerBlock).toMatch(/:model-value="data\[field\.fieldname\]"/)
-    expect(timePickerBlock).toMatch(/@update:model-value="\(v\) => fieldChange\(v, field\)"/)
+    expect(timePickerBlock).toMatch(
+      /@update:model-value="\(v\) => fieldChange\(v, field\)"/,
+    )
   })
 
   it('no longer relies on the deprecated :value/@change contract the picker stopped emitting', () => {
@@ -679,7 +789,9 @@ describe('TXB-241 — the standalone Time control offers a field-scoped option l
   it('keeps the TXB-236 modelValue/update:modelValue persistence contract intact (AC-3)', () => {
     // The option list is additive — the commit route the picker actually emits is unchanged.
     expect(timePickerBlock).toMatch(/:model-value="data\[field\.fieldname\]"/)
-    expect(timePickerBlock).toMatch(/@update:model-value="\(v\) => fieldChange\(v, field\)"/)
+    expect(timePickerBlock).toMatch(
+      /@update:model-value="\(v\) => fieldChange\(v, field\)"/,
+    )
     expect(timePickerBlock).not.toMatch(/@change=/)
   })
 
@@ -688,7 +800,9 @@ describe('TXB-241 — the standalone Time control offers a field-scoped option l
     // every other Time field is untouched; the declared start seeds the generated list.
     expect(fieldSource).toMatch(/const timeFieldOptions = \(field\) => \{/)
     expect(fieldSource).toMatch(/if \(!field\.time_options_start\) return null/)
-    expect(fieldSource).toMatch(/generateTimeOptions\(field\.time_options_start\)/)
+    expect(fieldSource).toMatch(
+      /generateTimeOptions\(field\.time_options_start\)/,
+    )
   })
 
   it('renders no plain/manual-only replacement for the Time field (AC-3)', () => {
@@ -712,7 +826,10 @@ describe('TXB-241 ac-2 — an earlier manual time exception persists through bot
 
   beforeEach(() => {
     discoveryMocks.call.mockReset()
-    discoveryMocks.call.mockResolvedValue({ lead: DISCOVERY_LEAD, status: DISCOVERY_STATUS })
+    discoveryMocks.call.mockResolvedValue({
+      lead: DISCOVERY_LEAD,
+      status: DISCOVERY_STATUS,
+    })
     discoveryMocks.dialogDoc.current = null
   })
 

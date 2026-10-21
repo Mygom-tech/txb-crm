@@ -68,6 +68,7 @@ export const statusLabelMap = {
   Ringing: __('Ringing'),
   'No Answer': __('Missed Call'),
   'In Progress': __('In Progress'),
+  Other: __('Other'),
 }
 
 export const statusColorMap = {
@@ -80,4 +81,5 @@ export const statusColorMap = {
   Ringing: 'gray',
   'No Answer': 'red',
   'In Progress': 'blue',
+  Other: 'gray',
 }

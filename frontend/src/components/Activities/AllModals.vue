@@ -11,6 +11,7 @@
 import EventModal from '@/components/Modals/EventModal.vue'
 import { showEventModal, activeEvent } from '@/composables/event'
 import { useDoctypeModal } from '@/composables/doctypeModal'
+import { logACall } from '@/utils/leadActions'
 import { useOnboarding, useTelemetry } from 'frappe-ui/frappe'
 import { call } from 'frappe-ui'
 import { useRoute, useRouter } from 'vue-router'
@@ -120,21 +121,10 @@ function afterDoctype(d, isInsert = false) {
   redirect(redirectHash)
 }
 
-// Call Logs
-function createCallLog() {
-  showModal({
-    doctype: 'CRM Call Log',
-    title: 'Call Log',
-    defaults: {
-      reference_doctype: props.doctype,
-      reference_docname: props.doc?.name,
-      reference_doc: { ...props.doc },
-    },
-    callbacks: {
-      afterInsert: (d) => afterDoctype(d, true),
-      afterUpdate: afterDoctype,
-    },
-  })
+// Call Logs: the server-checked Log a call dialog (result, Call Notes, next call date).
+async function createCallLog() {
+  const logged = await logACall(props.doctype, props.doc?.name)
+  if (logged) afterDoctype({ doctype: 'CRM Call Log' }, true)
 }
 
 // common

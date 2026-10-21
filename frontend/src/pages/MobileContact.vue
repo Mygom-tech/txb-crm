@@ -390,7 +390,6 @@ const contactActivities = createResource({
 // resource only after a confirmed insert so the canonical record shows once in Activity/Notes.
 const { logCall, newNote } = useContactActivityActions({
   contactId: props.contactId,
-  contact,
   deals,
   activities: contactActivities,
 })

@@ -199,47 +199,65 @@ export const DISCOVERY_MEETING_RUN_STATUS = 'Discovery meeting run'
  * "Not interested" and "Disqualified" are terminal -- Admin-reopenable only, enforced by the
  * server; "Nurture" is a warm resting state that stays freely movable.
  */
-export const DISCOVERY_STATUS_OUTCOMES = ['Nurture', 'Not interested', 'Disqualified']
+export const DISCOVERY_STATUS_OUTCOMES = [
+  'Nurture',
+  'Not interested',
+  'Disqualified',
+]
 
 /** The terminal discovery outcomes: once a lead rests here, only an Admin may reopen it. */
 export const DISCOVERY_TERMINAL_OUTCOMES = ['Not interested', 'Disqualified']
 
+/** The result that means "not reached, retry planned": it requires the next call date. */
+export const CALL_RESULT_RETRY = 'In Progress'
+
 /**
- * The dial contract. Result is an explicit final manual-call outcome; transient provider states
- * are excluded. Every approved result still completes the requested Contact attempted move.
+ * The manual-call contract every call dialog renders, kept in step with
+ * crm.txb.call_logging.CALL_FIELDS. "Other" is recorded but counts nowhere.
  */
+export const CALL_FIELDS = [
+  {
+    fieldname: 'dialed_at',
+    label: 'Dialed At',
+    fieldtype: 'Datetime',
+    reqd: 1,
+    default: 'Now',
+  },
+  {
+    fieldname: 'dial_result',
+    label: 'Result',
+    fieldtype: 'Select',
+    reqd: 1,
+    options: `No Answer\nCompleted\n${CALL_RESULT_RETRY}\nOther`,
+    default: 'No Answer',
+  },
+  { fieldname: 'notes', label: 'Call Notes', fieldtype: 'Small Text', reqd: 1 },
+  {
+    fieldname: 'follow_up_date',
+    label: 'Next Call Date',
+    fieldtype: 'Datetime',
+    mandatory_depends_on: `eval:doc.dial_result=='${CALL_RESULT_RETRY}'`,
+    // TXB-239: render the combined date + time picker with a business-hour
+    // (07:00) option list, matching the coaching call-date fields. Earlier
+    // times can still be typed and saved.
+    time_options_start: '07:00',
+  },
+]
+
+/** Log a dial: the call contract plus the Lead's move to Contact attempted. */
 export const LOG_A_DIAL = {
   name: 'log_a_dial',
   label: 'Log a dial',
   to_state: CONTACT_ATTEMPTED_STATUS,
   changes_status: true,
-  fields: [
-    {
-      fieldname: 'dialed_at',
-      label: 'Dialed At',
-      fieldtype: 'Datetime',
-      reqd: 1,
-      default: 'Now',
-    },
-    {
-      fieldname: 'dial_result',
-      label: 'Result',
-      fieldtype: 'Select',
-      reqd: 1,
-      options: 'Completed\nFailed\nBusy\nNo Answer\nCanceled',
-      default: 'No Answer',
-    },
-    { fieldname: 'notes', label: 'Notes', fieldtype: 'Small Text', reqd: 1 },
-    {
-      fieldname: 'follow_up_date',
-      label: 'Follow-up Date',
-      fieldtype: 'Datetime',
-      // TXB-239: render the combined date + time picker with a business-hour
-      // (07:00) option list, matching the coaching call-date fields. Earlier
-      // times can still be typed and saved.
-      time_options_start: '07:00',
-    },
-  ],
+  fields: CALL_FIELDS,
+}
+
+/** Log a call on a Lead, Deal or Contact: the same contract, no status move. */
+export const LOG_A_CALL = {
+  name: 'log_a_call',
+  label: 'Log a call',
+  fields: CALL_FIELDS,
 }
 
 /**
@@ -348,6 +366,50 @@ export async function logADial(lead, { now, defaults } = {}) {
   })
 }
 
+/**
+ * Open the Log a call form for a Lead, Deal or Contact and record it server-side.
+ * `opportunities` ({label, value}) adds an optional Opportunity picker (a Contact's deals).
+ * Resolves with the server's response, or null when the user cancels.
+ */
+export async function logACall(
+  referenceDoctype,
+  referenceName,
+  { now, opportunities = [] } = {},
+) {
+  const isoNow = now || new Date().toISOString().slice(0, 19)
+  const action = opportunities.length
+    ? {
+        ...LOG_A_CALL,
+        fields: [
+          ...CALL_FIELDS,
+          {
+            fieldname: 'opportunity',
+            label: 'Opportunity',
+            fieldtype: 'Select',
+            options: [{ label: '', value: '' }, ...opportunities],
+          },
+        ],
+      }
+    : LOG_A_CALL
+
+  const data = await renderFieldLayoutDialog({
+    title: __(LOG_A_CALL.label),
+    fields: dialFields(action, isoNow),
+    required: requiredDialFields(action),
+    defaults: dialDefaults(action, isoNow),
+    submitLabel: __('Log a call'),
+    cancelLabel: __('Cancel'),
+  })
+  if (!data) return null
+
+  const { call } = await import('frappe-ui')
+  return await call('crm.txb.call_logging.log_a_call', {
+    reference_doctype: referenceDoctype,
+    reference_name: referenceName,
+    data: dialPayload(data, action),
+  })
+}
+
 // -----------------------------------------------------------------------------------------
 // Disqualify a Lead (TXB-196): entering "Disqualified" from the Kanban board
 // -----------------------------------------------------------------------------------------
@@ -447,7 +509,12 @@ export const RUN_DISCOVERY_MEETING = {
   from_state: DISCOVERY_MEETING_SET_STATUS,
   changes_status: true,
   fields: [
-    { fieldname: 'notes', label: 'Meeting Notes', fieldtype: 'Small Text', reqd: 1 },
+    {
+      fieldname: 'notes',
+      label: 'Meeting Notes',
+      fieldtype: 'Small Text',
+      reqd: 1,
+    },
     { fieldname: 'outcome', label: 'Outcome', fieldtype: 'Select', reqd: 1 },
   ],
 }
@@ -702,7 +769,12 @@ export async function resolveLeadStatusTransition(
 
   // Unguarded: the caller owns the ordinary status save (including the Lost-reason path).
   if (!invoke) {
-    return { outcome: LEAD_TRANSITION_PLAIN, guarded: false, status: toStatus, result: null }
+    return {
+      outcome: LEAD_TRANSITION_PLAIN,
+      guarded: false,
+      status: toStatus,
+      result: null,
+    }
   }
 
   try {
@@ -719,11 +791,21 @@ export async function resolveLeadStatusTransition(
     }
     // The server atomically recorded the activity and moved the status; the caller must not
     // issue a second write.
-    return { outcome: LEAD_TRANSITION_SAVED, guarded: true, status: toStatus, result }
+    return {
+      outcome: LEAD_TRANSITION_SAVED,
+      guarded: true,
+      status: toStatus,
+      result,
+    }
   } catch (error) {
     // The action's server call threw: nothing landed, the prior status is preserved, and the
     // caller decides whether to surface or re-throw the error.
-    return { outcome: LEAD_TRANSITION_FAILED, guarded: true, status: fromStatus, error }
+    return {
+      outcome: LEAD_TRANSITION_FAILED,
+      guarded: true,
+      status: fromStatus,
+      error,
+    }
   }
 }
 
@@ -801,7 +883,9 @@ export function requiredDiscoveryScheduleFields(data) {
  */
 export function validateDiscovery(data) {
   const doc = data || {}
-  return requiredDiscoveryScheduleFields(doc).filter((fieldname) => !isFilled(doc[fieldname]))
+  return requiredDiscoveryScheduleFields(doc).filter(
+    (fieldname) => !isFilled(doc[fieldname]),
+  )
 }
 
 /** True when the discovery payload has every required field for its type. */
@@ -832,8 +916,10 @@ export function buildDiscoveryActivity(data, { actor, now } = {}) {
       meeting_date: String(doc.meeting_date).trim(),
       meeting_time: String(doc.meeting_time).trim(),
       meeting_type: type,
-      meeting_link: type === DISCOVERY_TYPE_VIRTUAL ? detail(doc.meeting_link) : null,
-      meeting_address: type === DISCOVERY_TYPE_ONSITE ? detail(doc.meeting_address) : null,
+      meeting_link:
+        type === DISCOVERY_TYPE_VIRTUAL ? detail(doc.meeting_link) : null,
+      meeting_address:
+        type === DISCOVERY_TYPE_ONSITE ? detail(doc.meeting_address) : null,
     },
   }
 }
@@ -940,7 +1026,9 @@ export function requiredFollowUpFields() {
  */
 export function validateFollowUp(data) {
   const doc = data || {}
-  return requiredFollowUpFields().filter((fieldname) => !isFilled(doc[fieldname]))
+  return requiredFollowUpFields().filter(
+    (fieldname) => !isFilled(doc[fieldname]),
+  )
 }
 
 /** True when the Follow-up payload has every required field. */
@@ -1063,7 +1151,9 @@ export function requiredNurtureFields() {
  */
 export function validateNurture(data) {
   const doc = data || {}
-  return requiredNurtureFields().filter((fieldname) => !isFilled(doc[fieldname]))
+  return requiredNurtureFields().filter(
+    (fieldname) => !isFilled(doc[fieldname]),
+  )
 }
 
 /** True when the Nurture payload has both required fields; the date may stay empty. */
