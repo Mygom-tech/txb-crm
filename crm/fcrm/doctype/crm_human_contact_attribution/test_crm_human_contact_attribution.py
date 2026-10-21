@@ -14,6 +14,7 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from crm.api import activities as activities_api
+from crm.api.contact import get_source_leads
 from crm.fcrm.doctype.crm_deal.crm_deal import add_contact
 from crm.fcrm.doctype.crm_lead.test_crm_lead import (
 	add_activity_note,
@@ -199,6 +200,11 @@ class TestCRMHumanContactAttribution(FrappeTestCase):
 		self.assertIsNone(latest_contact(self.contact_b))
 
 	# -- ac-6 -----------------------------------------------------------------------------------
+
+	def test_source_leads_are_the_contacts_archived_leads(self):
+		self.assertEqual([row.name for row in get_source_leads(self.contact_a)], [self.lead.name])
+		# contact_b is only a secondary contact on the Opportunity: the Lead is not where it came from.
+		self.assertEqual(get_source_leads(self.contact_b), [])
 
 	def test_contact_activities_read_the_same_sources_through_the_public_resolver(self):
 		add_activity_note("CRM Lead", self.lead.name, "Lead note")

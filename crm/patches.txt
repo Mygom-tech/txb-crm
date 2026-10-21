@@ -65,3 +65,4 @@ crm.patches.v1_0.add_contact_inactivity_cycles
 crm.patches.v1_0.add_landing_query_field
 crm.patches.v1_0.coach_activation_notifications
 crm.patches.v1_0.unwrap_email_templates
+crm.patches.v1_0.index_lead_converted_contact

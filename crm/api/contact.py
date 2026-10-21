@@ -1,6 +1,8 @@
 import frappe
 from frappe import _
 
+from crm.api.activities import resolve_contact_sources
+
 
 def on_update(doc, method=None):
 	# Runs after the Contact is written, in the same transaction, so its computed primary
@@ -127,3 +129,21 @@ def search_emails(txt: str):
 	)
 
 	return results
+
+
+@frappe.whitelist()
+def get_source_leads(contact: str):
+	"""The archived Leads this Contact came from, newest first, as far as the user may read them:
+	those whose conversion recorded it, or behind an Opportunity it is the primary contact of."""
+	if not frappe.has_permission("Contact", "read", contact):
+		frappe.throw(_("Not permitted"), frappe.PermissionError)
+
+	lead_names, _deals = resolve_contact_sources(contact, primary_only=True)
+	if not lead_names:
+		return []
+	return frappe.get_list(
+		"CRM Lead",
+		filters={"name": ("in", lead_names)},
+		fields=["name", "lead_name", "status"],
+		order_by="creation desc",
+	)

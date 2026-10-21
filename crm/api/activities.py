@@ -860,7 +860,7 @@ def _authorize_contact_activities(contact: str):
 		frappe.throw(_("Not permitted"), frappe.PermissionError)
 
 
-def resolve_contact_sources(contact: str):
+def resolve_contact_sources(contact: str, primary_only: bool = False):
 	"""Resolve the distinct archived Leads and linked Opportunities for a Contact.
 
 	Opportunities are the Contact's linked CRM Deals. Leads are the union of (a) every Lead
@@ -870,12 +870,17 @@ def resolve_contact_sources(contact: str):
 	ordering is deterministic.
 
 	Public because contact attribution (TXB-279) uses the same definition of "linked".
+	`primary_only` keeps only Opportunities the Contact is the primary contact of: a secondary
+	contact on someone else's Opportunity did not come from its Lead (Contact page Source Lead).
 	"""
+	deal_filters = {"contact": contact, "parenttype": "CRM Deal"}
+	if primary_only:
+		deal_filters["is_primary"] = 1
 	deal_names = sorted(
 		set(
 			frappe.get_all(
 				"CRM Contacts",
-				filters={"contact": contact, "parenttype": "CRM Deal"},
+				filters=deal_filters,
 				pluck="parent",
 				distinct=True,
 			)
