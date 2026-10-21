@@ -100,18 +100,23 @@ def build_snapshot(subject: str, data: dict) -> dict:
 
 	Escaping only touches markup characters, so Lithuanian letters (ąčęėįšųūž) pass unchanged.
 	"""
-	notes = (data.get("call_notes") or "").replace("\r\n", "\n")
 	return {
 		"subject": subject,
 		"call_status": data.get("call_status"),
 		"delivery_date": str(getdate(data["delivery_date"])) if data.get("delivery_date") else None,
 		"topic": data.get("topic") or None,
-		"call_notes_html": escape_html(notes).replace("\n", "<br>"),
+		"call_notes_html": _text_html(data.get("call_notes")),
+		"action_items_html": _text_html(data.get("action_items")),
 		"next_call_date": (
 			str(getdate(data["next_call_date"])) if data.get("next_call_date") else None
 		),
 		"is_last_call": 1 if data.get("is_last_call") else 0,
 	}
+
+
+def _text_html(text: str | None) -> str:
+	"""Coach-written multi-line text, escaped, with `<br>` line breaks."""
+	return escape_html((text or "").replace("\r\n", "\n")).replace("\n", "<br>")
 
 
 def create_recap(deal, note, data: dict, recipient: tuple[str | None, str | None], subject: str):

@@ -332,6 +332,7 @@ def log_coaching_call(deal, data):
 		f"Call Status: {data.get('call_status')}",
 		f"Topic: {data['topic']}" if data.get("topic") else None,
 		data.get("call_notes"),
+		f"Action Items:\n{data['action_items']}" if data.get("action_items") else None,
 		f"Next call: {data['next_call_date']}" if data.get("next_call_date") else None,
 		"--- LAST COACHING CALL ---" if data.get("is_last_call") else None,
 	)
@@ -534,6 +535,7 @@ DELIVERING_COACHING_ACTIONS = (
 			{"fieldname": "completed_calls", "label": "Total Completed Calls", "fieldtype": "Int", "read_only": 1, "default": 0},
 			{"fieldname": "topic", "label": "Topic", "fieldtype": "Data", "reqd": 1},
 			{"fieldname": "call_notes", "label": "Coaching Call Notes", "fieldtype": "Small Text", "reqd": 1},
+			{"fieldname": "action_items", "label": "Action Items", "fieldtype": "Small Text", "reqd": 1},
 			{"fieldname": "is_last_call", "label": "This is the last coaching call", "fieldtype": "Check"},
 			# Next call date only applies while coaching continues: it is shown and required
 			# until "last call" is ticked, and hidden/optional once it is. The dialog reads
