@@ -102,5 +102,5 @@ class TestGlobalSearch(FrappeTestCase):
 
 	def test_too_short_queries_return_nothing(self):
 		self.lead()
-		for query in ("", " ", "s", "12345"):
+		for query in ("", " ", "s"):
 			self.assertEqual(search(query), {"groups": []}, query)

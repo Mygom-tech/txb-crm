@@ -12,13 +12,10 @@ formatting. Converted Leads are left out: the person lives on as a Contact and a
 import frappe
 from frappe import _
 
-from crm.txb.api.people_search import CANDIDATE_CAP, escape_like, search_tokens
-from crm.txb.people import PHONE_MIN_DIGITS, normalize_phone
+from crm.txb.api.people_search import match_candidates, search_tokens
+from crm.txb.people import format_person_name, normalize_phone
 
 ROWS_PER_GROUP = 5
-
-# Digits-only form of a phone column, compared on its trailing digits (crm.txb.people).
-_PHONE_DIGITS = "RIGHT(REGEXP_REPLACE(COALESCE(`{column}`, ''), '[^0-9]', ''), %(phone_len)s)"
 
 # Per DocType, in display order: what is matched, what is read back and any standing filter.
 GROUPS = (
@@ -62,7 +59,7 @@ def search(query: str = "") -> dict:
 	and the total the user may see. Fewer than two meaningful characters returns no groups.
 	"""
 	tokens = search_tokens(query)
-	phone = normalize_phone(query) if sum(c.isdigit() for c in query or "") >= PHONE_MIN_DIGITS else ""
+	phone = normalize_phone(query)
 	if not tokens and not phone:
 		return {"groups": []}
 
@@ -81,15 +78,13 @@ def search(query: str = "") -> dict:
 
 def _search_group(group: dict, tokens: list[str], phone: str) -> dict | None:
 	doctype = group["doctype"]
-	candidates = _candidates(
-		doctype, _columns(doctype, group["text"]), _columns(doctype, group["phone"]), tokens, phone
-	)
+	candidates = match_candidates(doctype, group["text"], tokens, group["phone"], phone)
 	if not candidates:
 		return None
 	visible = frappe.get_list(
 		doctype,
 		filters={"name": ("in", list(candidates)), **group.get("filters", {})},
-		fields=_columns(doctype, group["fields"]),
+		fields=list(group["fields"]),
 		order_by="modified desc",
 		limit_page_length=0,
 	)
@@ -103,42 +98,8 @@ def _search_group(group: dict, tokens: list[str], phone: str) -> dict | None:
 	}
 
 
-def _columns(doctype: str, columns) -> list[str]:
-	"""The columns this site actually has (TxB custom fields are not on every site)."""
-	return [column for column in columns if column == "name" or frappe.db.has_column(doctype, column)]
-
-
-def _candidates(doctype: str, text: list[str], phones: list[str], tokens: list[str], phone: str) -> set[str]:
-	"""Names of records matching the query, ignoring permissions; at most CANDIDATE_CAP."""
-	values: dict[str, object] = {"cap": CANDIDATE_CAP}
-	matches = []
-
-	if tokens and text:
-		clauses = []
-		for index, token in enumerate(tokens):
-			key = f"token_{index}"
-			values[key] = f"%{escape_like(token)}%"
-			clauses.append(
-				"(" + " OR ".join(f"LOWER(COALESCE(`{column}`, '')) LIKE %({key})s" for column in text) + ")"
-			)
-		matches.append("(" + " AND ".join(clauses) + ")")
-
-	if phone and phones:
-		values["phone"], values["phone_len"] = phone, len(phone)
-		matches.extend(f"{_PHONE_DIGITS.format(column=column)} = %(phone)s" for column in phones)
-
-	if not matches:
-		return set()
-	rows = frappe.db.sql(
-		f"SELECT `name` FROM `tab{doctype}` WHERE {' OR '.join(matches)} "
-		"ORDER BY `modified` DESC LIMIT %(cap)s",
-		values,
-	)
-	return {row[0] for row in rows}
-
-
 def _person(row: dict) -> str:
-	return " ".join(part for part in (row.get("first_name"), row.get("last_name")) if part).strip()
+	return format_person_name(row.get("first_name"), row.get("last_name"))
 
 
 def _row(doctype: str, row: dict) -> dict:

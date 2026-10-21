@@ -86,45 +86,43 @@
 import LucideSearch from '~icons/lucide/search'
 import { taskReference } from '@/components/ContactInactivity/taskReference'
 import { showGlobalSearch } from '@/composables/modals'
+import { useKeyboardShortcuts } from '@/composables/useKeyboardShortcuts'
 import { flatRows, isSearchShortcut, moveIndex } from '@/utils/globalSearch'
 import { watchDebounced } from '@vueuse/core'
 import { Badge, createResource, Dialog } from 'frappe-ui'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
-// Below this the server returns nothing, so no request is made.
+// Below this the server returns nothing (`search_tokens` in crm/txb/api/people_search.py keeps
+// words of 2+ characters), so no request is made.
 const MIN_QUERY_LENGTH = 2
 
 const router = useRouter()
 const input = ref(null)
 const query = ref('')
+const typed = computed(() => query.value.trim())
 const active = ref(-1)
 
 const results = createResource({ url: 'crm.txb.api.global_search.search' })
 
 const rows = computed(() =>
-  query.value.trim().length < MIN_QUERY_LENGTH
-    ? []
-    : flatRows(results.data?.groups),
+  typed.value.length < MIN_QUERY_LENGTH ? [] : flatRows(results.data?.groups),
 )
 
 const hint = computed(() => {
-  const typed = query.value.trim()
-  if (typed.length < MIN_QUERY_LENGTH) {
+  if (typed.value.length < MIN_QUERY_LENGTH) {
     return __('Type a name, email, phone or company code')
   }
   // Still waiting for this query's own results: say nothing rather than "no matches".
-  if (results.loading || results.params?.query !== typed) return ''
+  if (results.loading || results.params?.query !== typed.value) return ''
   if (rows.value.length) return ''
-  return __('No matches for “{0}”', [typed])
+  return __('No matches for “{0}”', [typed.value])
 })
 
 watchDebounced(
-  query,
+  typed,
   (value) => {
-    if (value.trim().length >= MIN_QUERY_LENGTH) {
-      results.submit({ query: value.trim() })
-    }
+    if (value.length >= MIN_QUERY_LENGTH) results.submit({ query: value })
   },
   { debounce: 250 },
 )
@@ -153,13 +151,13 @@ function onKeydown(event) {
   }
 }
 
-// The one app-wide shortcut: mounted once with the other global modals.
-function onShortcut(event) {
-  if (!isSearchShortcut(event)) return
-  event.preventDefault()
-  showGlobalSearch.value = true
-}
-
-onMounted(() => window.addEventListener('keydown', onShortcut))
-onBeforeUnmount(() => window.removeEventListener('keydown', onShortcut))
+// The one app-wide shortcut, mounted once with the other global modals. It works while typing
+// in a field and over other dialogs, so it is reachable from anywhere.
+useKeyboardShortcuts({
+  shortcuts: [
+    { match: isSearchShortcut, action: () => (showGlobalSearch.value = true) },
+  ],
+  ignoreTyping: false,
+  skipWhenDialogOpen: false,
+})
 </script>
