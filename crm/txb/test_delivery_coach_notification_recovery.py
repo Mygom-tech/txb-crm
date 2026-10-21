@@ -6,7 +6,7 @@
 Pins the scheduled sweep (only stale Pending channels, once under concurrent sweeps, bounded)
 and the System Manager retry of one definite Failed channel (every other state and every other
 user refused without a provider call), both through the hardened worker with the captured
-routing and generation. SMTP, the queue and the Slack Web API are mocked at their boundaries.
+routing and generation. SMTP and the queue are mocked at their boundaries.
 """
 
 from contextlib import contextmanager
@@ -19,7 +19,11 @@ from frappe.utils import add_to_date, now_datetime
 from crm.patches.v1_0.add_delivery_coach_notification_foundation import execute as migrate
 from crm.txb import delivery_coach_notification_recovery as recovery
 from crm.txb.constants import ADMIN_ROLE, FIELD_DELIVERY_COACH, PIPELINE_DELIVERING_COACHING
-from crm.txb.delivery_coach_assignment import SUPERSEDED, process_assignment_notification
+from crm.txb.delivery_coach_assignment import (
+	SUPERSEDED,
+	process_assignment_notification,
+	record_activation,
+)
 from crm.txb.delivery_coach_notification_recovery import (
 	STALE_AFTER_MINUTES,
 	get_assignment_notification_status,
@@ -31,7 +35,6 @@ from crm.txb.delivery_coach_notifications import (
 	MODE_LIVE,
 	MODE_TEST_REDIRECT,
 	SETTING_MODE,
-	SETTING_SLACK_BOT_TOKEN,
 	SETTING_TEST_USER,
 	SETTINGS_DOCTYPE,
 	STATUS_FAILED,
@@ -46,19 +49,12 @@ COACH_B = "txb-recover-coach-b@example.com"
 TESTER = "txb-recover-tester@example.com"
 ASSIGNER = "txb-recover-admin@example.com"
 OPERATOR = "txb-recover-operator@example.com"
+CLIENT_EMAIL = "txb-recover-client@example.com"
 WORKER = "crm.txb.delivery_coach_assignment.process_assignment_notification"
-# Built at runtime so GitHub push protection does not flag a fake Slack token.
-TOKEN = "-".join(("xoxb", "123456789012", "abcdefghijklmnopQRSTUVWX"))
 
 
 class WorkerCrash(BaseException):
 	"""The worker process dying mid-run: nothing in the worker catches it."""
-
-
-def slack_response(payload):
-	response = MagicMock()
-	response.json.return_value = payload
-	return response
 
 
 class TestDeliveryCoachNotificationRecovery(FrappeTestCase):
@@ -85,23 +81,13 @@ class TestDeliveryCoachNotificationRecovery(FrappeTestCase):
 	def setUp(self):
 		migrate()
 		self.set_mode(MODE_LIVE)
-		settings = frappe.get_single(SETTINGS_DOCTYPE)
-		settings.set(SETTING_SLACK_BOT_TOKEN, TOKEN)
-		settings.save(ignore_permissions=True)
 
 		self.enqueued = []
 		self.enqueue_error = None
 		self.sendmail = MagicMock()
-		self.slack = {
-			"users.lookupByEmail": {"ok": True, "user": {"id": "U123"}},
-			"conversations.open": {"ok": True, "channel": {"id": "D123"}},
-			"chat.postMessage": {"ok": True},
-		}
-		self.slack_post = MagicMock(side_effect=self.fake_slack_post)
 		for patcher in (
 			patch("frappe.enqueue", side_effect=self.fake_enqueue),
 			patch("frappe.sendmail", self.sendmail),
-			patch("crm.txb.slack.requests.post", self.slack_post),
 			# The sweep and worker commit; keep every test inside its rollback.
 			patch.object(frappe.db, "commit"),
 		):
@@ -122,25 +108,28 @@ class TestDeliveryCoachNotificationRecovery(FrappeTestCase):
 		if method == WORKER:
 			self.enqueued.append(kwargs)
 
-	def fake_slack_post(self, url, headers=None, data=None, timeout=None):
-		return slack_response(self.slack[url.rsplit("/", 1)[-1]])
-
 	def set_mode(self, mode, test_user=None):
 		frappe.db.set_single_value(SETTINGS_DOCTYPE, SETTING_TEST_USER, test_user)
 		frappe.db.set_single_value(SETTINGS_DOCTYPE, SETTING_MODE, mode)
 
 	def record_assignment(self, coach=COACH_A):
-		"""A Deal assigned to `coach`, its one ledger row, and the queue left empty."""
+		"""A Deal whose coaching was activated with `coach`, and its one ledger row."""
+		contact = frappe.new_doc("Contact")
+		contact.first_name, contact.last_name = "Grace", "Client"
+		contact.append("email_ids", {"email_id": CLIENT_EMAIL, "is_primary": 1})
+		contact.insert(ignore_permissions=True)
 		deal = frappe.get_doc(
 			{
 				"doctype": "CRM Deal",
 				"pipeline_type": PIPELINE_DELIVERING_COACHING,
-				"status": "Submitted",
+				"status": "Active",
 				"first_name": "Grace",
 				"last_name": "Client",
+				"contacts": [{"contact": contact.name, "is_primary": 1}],
 				FIELD_DELIVERY_COACH: coach,
 			}
 		).insert(ignore_permissions=True)
+		record_activation(deal)
 		[name] = frappe.get_all(LEDGER_DOCTYPE, filters={"deal": deal.name}, pluck="name")
 		return deal, name
 
@@ -160,6 +149,9 @@ class TestDeliveryCoachNotificationRecovery(FrappeTestCase):
 	def sweep(self, name):
 		"""Run the sweep; the (event, channel) pairs it recovered for `name`."""
 		return sorted(pair for pair in sweep_stale_assignment_notifications() if pair[0] == name)
+
+	def recipients(self):
+		return [c.kwargs["recipients"] for c in self.sendmail.call_args_list]
 
 	def jobs(self, name):
 		return [job for job in self.enqueued if job["event_key"] == name]
@@ -188,23 +180,22 @@ class TestDeliveryCoachNotificationRecovery(FrappeTestCase):
 		# Fresh Pending work is left for its own job.
 		self.assertEqual(self.sweep(name), [])
 		with self.later():
-			self.assertEqual(self.sweep(name), [(name, "email"), (name, "slack")])
+			self.assertEqual(self.sweep(name), [(name, "client_email"), (name, "email")])
 
 		jobs = self.jobs(name)
-		self.assertEqual(sorted(job["channel"] for job in jobs), ["email", "slack"])
+		self.assertEqual(sorted(job["channel"] for job in jobs), ["client_email", "email"])
 		self.assertEqual(
 			sorted(job["job_id"] for job in jobs),
-			[f"delivery-coach-assignment-{name}-email", f"delivery-coach-assignment-{name}-slack"],
+			[f"delivery-coach-assignment-{name}-email", f"delivery-coach-assignment-{name}-client_email"],
 		)
 		self.assertTrue(all(job["deduplicate"] and job["enqueue_after_commit"] for job in jobs))
 		# The sweep itself contacts no provider.
 		self.sendmail.assert_not_called()
-		self.slack_post.assert_not_called()
 
 		event = self.run_jobs(name)
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_SENT, STATUS_SENT))
-		self.assertEqual((event.email_attempts, event.slack_attempts), (1, 1))
-		self.assertTrue(event.email_recovered_at and event.slack_recovered_at)
+		self.assertEqual((event.email_status, event.client_email_status), (STATUS_SENT, STATUS_SENT))
+		self.assertEqual((event.email_attempts, event.client_email_attempts), (1, 1))
+		self.assertTrue(event.email_recovered_at and event.client_email_recovered_at)
 		self.assertEqual([c.kwargs["recipients"] for c in self.sendmail.call_args_list], [[COACH_A]])
 
 	def test_worker_crash_before_channel_claim_is_recovered(self):
@@ -220,10 +211,10 @@ class TestDeliveryCoachNotificationRecovery(FrappeTestCase):
 			(event.email_status, event.email_attempts, event.email_claimed_at), (STATUS_PENDING, 0, None)
 		)
 		with self.later():
-			self.assertEqual(self.sweep(name), [(name, "email"), (name, "slack")])
+			self.assertEqual(self.sweep(name), [(name, "client_email"), (name, "email")])
 		event = self.run_jobs(name)
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_SENT, STATUS_SENT))
-		self.assertEqual(self.sendmail.call_count, 1)
+		self.assertEqual((event.email_status, event.client_email_status), (STATUS_SENT, STATUS_SENT))
+		self.assertEqual(self.recipients(), [[CLIENT_EMAIL], [COACH_A]])
 
 	def test_worker_crash_after_claim_is_recovered_once_the_claim_goes_stale(self):
 		_deal, name = self.record_assignment()
@@ -233,10 +224,10 @@ class TestDeliveryCoachNotificationRecovery(FrappeTestCase):
 
 		# A claim within the window may still be running; the unclaimed channel is recovered.
 		with self.later():
-			self.assertEqual(self.sweep(name), [(name, "slack")])
+			self.assertEqual(self.sweep(name), [(name, "client_email")])
 		with self.later(minutes=STALE_AFTER_MINUTES * 2):
 			self.assertEqual(self.sweep(name), [(name, "email")])
-		self.assertEqual(sorted(job["channel"] for job in self.jobs(name)), ["email", "slack"])
+		self.assertEqual(sorted(job["channel"] for job in self.jobs(name)), ["client_email", "email"])
 
 	def test_concurrent_sweeps_queue_each_stale_channel_once(self):
 		_deal, name = self.record_assignment()
@@ -250,24 +241,24 @@ class TestDeliveryCoachNotificationRecovery(FrappeTestCase):
 			by_a = [pair for pair in seen_by_a if recovery._recover(*pair, cutoff)]
 			again = self.sweep(name)
 
-		self.assertEqual(seen_by_a, [(name, "email"), (name, "slack")])
-		self.assertEqual(by_b, [(name, "email"), (name, "slack")])
+		self.assertEqual(seen_by_a, [(name, "client_email"), (name, "email")])
+		self.assertEqual(by_b, [(name, "client_email"), (name, "email")])
 		self.assertEqual((by_a, again), ([], []))
 		self.assertEqual(len(self.jobs(name)), 2)
 
 		event = self.run_jobs(name)
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_SENT, STATUS_SENT))
-		self.assertEqual(self.sendmail.call_count, 1)
+		self.assertEqual((event.email_status, event.client_email_status), (STATUS_SENT, STATUS_SENT))
+		self.assertEqual(self.sendmail.call_count, 2)
 
 	def test_sweep_leaves_sent_skipped_failed_uncertain_and_fresh_channels_untouched(self):
 		_d1, settled = self.record_assignment()
 		_d2, held = self.record_assignment(COACH_B)
 		_d3, in_flight = self.record_assignment()
 		self.enqueued.clear()
-		self.set_channels(settled, email_status=STATUS_SENT, slack_status=STATUS_SKIPPED)
-		self.set_channels(held, email_status=STATUS_FAILED, slack_status=STATUS_UNCERTAIN)
+		self.set_channels(settled, email_status=STATUS_SENT, client_email_status=STATUS_SKIPPED)
+		self.set_channels(held, email_status=STATUS_FAILED, client_email_status=STATUS_UNCERTAIN)
 		future = add_to_date(now_datetime(), minutes=STALE_AFTER_MINUTES + 1)
-		self.set_channels(in_flight, email_claimed_at=future, slack_recovered_at=future)
+		self.set_channels(in_flight, email_claimed_at=future, client_email_recovered_at=future)
 
 		with self.later():
 			for name in (settled, held, in_flight):
@@ -276,9 +267,8 @@ class TestDeliveryCoachNotificationRecovery(FrappeTestCase):
 			self.assertEqual(self.jobs(name), [])
 		for name in (settled, held):
 			event = self.event(name)
-			self.assertEqual((event.email_recovered_at, event.slack_recovered_at), (None, None))
+			self.assertEqual((event.email_recovered_at, event.client_email_recovered_at), (None, None))
 		self.sendmail.assert_not_called()
-		self.slack_post.assert_not_called()
 
 	def test_sweep_queues_only_the_stale_channel_and_never_resends_a_sent_one(self):
 		_deal, name = self.record_assignment()
@@ -286,19 +276,17 @@ class TestDeliveryCoachNotificationRecovery(FrappeTestCase):
 		self.set_channels(name, email_status=STATUS_SENT)
 
 		with self.later():
-			self.assertEqual(self.sweep(name), [(name, "slack")])
+			self.assertEqual(self.sweep(name), [(name, "client_email")])
 		[job] = self.jobs(name)
-		self.assertEqual(job["channel"], "slack")
+		self.assertEqual(job["channel"], "client_email")
 		event = self.run_jobs(name)
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_SENT, STATUS_SENT))
-		self.sendmail.assert_not_called()
+		self.assertEqual((event.email_status, event.client_email_status), (STATUS_SENT, STATUS_SENT))
+		self.assertEqual(self.recipients(), [[CLIENT_EMAIL]])
 
 		# A rerun of the same job delivers nothing more.
-		process_assignment_notification(name, "slack")
+		process_assignment_notification(name, "client_email")
 		process_assignment_notification(name)
-		self.sendmail.assert_not_called()
-		methods = [c.args[0].rsplit("/", 1)[-1] for c in self.slack_post.call_args_list]
-		self.assertEqual(methods.count("chat.postMessage"), 1)
+		self.assertEqual(self.recipients(), [[CLIENT_EMAIL]])
 
 	def test_sweep_processes_a_bounded_batch(self):
 		self.record_assignment()
@@ -310,48 +298,46 @@ class TestDeliveryCoachNotificationRecovery(FrappeTestCase):
 		_deal, name = self.record_assignment()
 		self.enqueued.clear()
 		with self.later():
-			# Email's job could not be queued: its stamp is undone and the next sweep retries it.
+			# The client email's job could not be queued: its stamp is undone and the next sweep
+			# retries it.
 			self.enqueue_error = ConnectionError("redis down")
-			self.assertEqual(self.sweep(name), [(name, "slack")])
-			self.assertIsNone(self.event(name).email_recovered_at)
 			self.assertEqual(self.sweep(name), [(name, "email")])
+			self.assertIsNone(self.event(name).client_email_recovered_at)
+			self.assertEqual(self.sweep(name), [(name, "client_email")])
 			self.assertEqual(self.sweep(name), [])
-		self.assertEqual(sorted(job["channel"] for job in self.jobs(name)), ["email", "slack"])
+		self.assertEqual(sorted(job["channel"] for job in self.jobs(name)), ["client_email", "email"])
 
 	# -- retry -----------------------------------------------------------------------------
 
 	def test_system_manager_retries_one_failed_channel(self):
 		_deal, name = self.record_assignment()
 		self.sendmail.side_effect = Exception("smtp down")
-		self.slack["users.lookupByEmail"] = {"ok": False, "error": "users_not_found"}
 		event = self.run_jobs(name)
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_FAILED, STATUS_FAILED))
-		self.slack_post.reset_mock()
+		self.assertEqual((event.email_status, event.client_email_status), (STATUS_FAILED, STATUS_FAILED))
 		self.sendmail.reset_mock(side_effect=True)
 
 		result = self.as_user(OPERATOR, retry_assignment_notification_channel, name, "email")
 		self.assertEqual(result["channels"]["email"]["status"], STATUS_PENDING)
-		self.assertEqual(result["channels"]["slack"]["status"], STATUS_FAILED)
+		self.assertEqual(result["channels"]["client_email"]["status"], STATUS_FAILED)
 		[job] = self.jobs(name)
 		self.assertEqual(job["channel"], "email")
 		comment = {"reference_doctype": LEDGER_DOCTYPE, "reference_name": name, "comment_type": "Info"}
 		self.assertTrue(frappe.db.exists("Comment", comment))
 
 		event = self.run_jobs(name)
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_SENT, STATUS_FAILED))
+		self.assertEqual((event.email_status, event.client_email_status), (STATUS_SENT, STATUS_FAILED))
 		self.assertEqual(event.email_attempts, 2)
-		self.assertEqual([c.kwargs["recipients"] for c in self.sendmail.call_args_list], [[COACH_A]])
 		# The other Failed channel is not retried along with it.
-		self.slack_post.assert_not_called()
+		self.assertEqual(self.recipients(), [[COACH_A]])
 
 	def test_administrator_can_retry_and_a_second_retry_is_refused(self):
 		_deal, name = self.record_assignment()
 		self.enqueued.clear()
-		self.set_channels(name, slack_status=STATUS_FAILED)
+		self.set_channels(name, client_email_status=STATUS_FAILED)
 
-		self.as_user("Administrator", retry_assignment_notification_channel, name, "slack")
+		self.as_user("Administrator", retry_assignment_notification_channel, name, "client_email")
 		with self.assertRaises(frappe.ValidationError):
-			self.as_user("Administrator", retry_assignment_notification_channel, name, "slack")
+			self.as_user("Administrator", retry_assignment_notification_channel, name, "client_email")
 		self.assertEqual(len(self.jobs(name)), 1)
 
 	def test_retry_keeps_the_captured_routing_and_generation(self):
@@ -392,18 +378,17 @@ class TestDeliveryCoachNotificationRecovery(FrappeTestCase):
 		_deal, name = self.record_assignment()
 		self.enqueued.clear()
 		for status in (STATUS_SENT, STATUS_SKIPPED, STATUS_PENDING, STATUS_UNCERTAIN):
-			self.set_channels(name, email_status=status, slack_status=status)
-			for channel in ("email", "slack"):
+			self.set_channels(name, email_status=status, client_email_status=status)
+			for channel in ("email", "client_email"):
 				with self.assertRaises(frappe.ValidationError):
 					self.as_user(OPERATOR, retry_assignment_notification_channel, name, channel)
 			event = self.event(name)
-			self.assertEqual((event.email_status, event.slack_status), (status, status))
+			self.assertEqual((event.email_status, event.client_email_status), (status, status))
 		with self.assertRaises(frappe.ValidationError):
 			self.as_user(OPERATOR, retry_assignment_notification_channel, name, "sms")
 
 		self.assertEqual(self.jobs(name), [])
 		self.sendmail.assert_not_called()
-		self.slack_post.assert_not_called()
 
 	def test_retry_and_status_refuse_users_who_are_not_system_managers(self):
 		_deal, name = self.record_assignment()
@@ -421,7 +406,7 @@ class TestDeliveryCoachNotificationRecovery(FrappeTestCase):
 
 	def test_status_names_the_deal_users_and_channel_without_secrets(self):
 		deal, name = self.record_assignment()
-		self.sendmail.side_effect = Exception(f"auth rejected for {TOKEN}")
+		self.sendmail.side_effect = [Exception("auth rejected: Authorization: Bearer abc123"), None]
 		self.run_jobs(name)
 
 		status = self.as_user(OPERATOR, get_assignment_notification_status, name)
@@ -432,5 +417,5 @@ class TestDeliveryCoachNotificationRecovery(FrappeTestCase):
 		email = status["channels"]["email"]
 		self.assertEqual((email["status"], email["attempts"], email["can_retry"]), (STATUS_FAILED, 1, True))
 		self.assertIn("[redacted]", email["error"])
-		self.assertEqual(status["channels"]["slack"]["can_retry"], False)
-		self.assertNotIn(TOKEN, frappe.as_json(status))
+		self.assertEqual(status["channels"]["client_email"]["can_retry"], False)
+		self.assertNotIn("abc123", frappe.as_json(status))

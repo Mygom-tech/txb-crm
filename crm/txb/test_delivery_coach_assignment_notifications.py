@@ -1,42 +1,41 @@
 # Copyright (c) 2026, Mygom and Contributors
 # See license.txt
 
-"""TXB-270, TXB-289: Delivery Coach assignment email and Slack DM.
+"""TXB-270, TXB-289: Delivery Coach notifications on activation and later reassignment.
 
-Pins the delivery flow on top of the TXB-269 foundation: only a real assignment of a Delivering
-Coaching deal creates one event, queued after commit; each mode routes both channels correctly;
-email and Slack succeed, fail and retry independently and a Sent channel is never resent; the
-Slack DM goes through lookupByEmail, conversations.open and chat.postMessage. Every channel is
-rechecked against the current assignment generation, pipeline and Disabled stop (TXB-289); an
-ambiguous chat.postMessage is held Uncertain and a failure in one channel never stops the other.
-SMTP and the Slack Web API are mocked at their boundaries.
+Pins the delivery flow on top of the TXB-269 foundation. Activating coaching records one event
+per deal -- the coach's email with the client's details and the client's email, both promising
+contact within 48 hours -- gives the coach a CRM Task due in 48 hours and tells the sales owner in
+the CRM. A coach assigned to an already Active deal is emailed once; the client is not. Each
+mode routes both channels correctly; the channels succeed, fail and retry independently and a
+Sent channel is never resent; every channel is rechecked against the current assignment
+generation, pipeline and Disabled stop. SMTP is mocked at its boundary.
 """
 
 from unittest.mock import MagicMock, patch
 
 import frappe
-import requests
 from frappe.tests.utils import FrappeTestCase
-from frappe.utils import format_datetime, get_url
+from frappe.utils import get_datetime, now_datetime
 
-from crm.fcrm.doctype.crm_coach_assignment_notification.crm_coach_assignment_notification import (
-	CRMCoachAssignmentNotification,
-)
 from crm.patches.v1_0.add_delivery_coach_notification_foundation import execute as migrate
+from crm.patches.v1_0.coach_activation_notifications import execute as migrate_activation
 from crm.txb.constants import (
 	ADMIN_ROLE,
 	FIELD_DELIVERY_COACH,
+	FIELD_SALES_SOURCE_DEAL,
 	PIPELINE_DELIVERING_COACHING,
 	PIPELINE_INDIVIDUAL_SESSION,
 )
 from crm.txb.delivery_coach_assignment import (
 	LEFT_PIPELINE,
 	LOG_TITLE,
-	OUTCOME_NOT_RECORDED,
+	NOT_ACTIVATION,
+	REACH_OUT_HOURS,
 	STOPPED,
 	SUPERSEDED,
-	build_slack_message,
 	process_assignment_notification,
+	record_activation,
 )
 from crm.txb.delivery_coach_notifications import (
 	LEDGER_DOCTYPE,
@@ -44,37 +43,36 @@ from crm.txb.delivery_coach_notifications import (
 	MODE_LIVE,
 	MODE_TEST_REDIRECT,
 	SETTING_MODE,
-	SETTING_SLACK_BOT_TOKEN,
 	SETTING_TEST_USER,
 	SETTINGS_DOCTYPE,
 	STATUS_FAILED,
 	STATUS_PENDING,
 	STATUS_SENT,
 	STATUS_SKIPPED,
-	STATUS_UNCERTAIN,
 )
+from crm.txb.pipelines.delivering_coaching import set_first_call_date
 
 COACH_A = "txb-assign-coach-a@example.com"
 COACH_B = "txb-assign-coach-b@example.com"
 TESTER = "txb-assign-tester@example.com"
 ASSIGNER = "txb-assign-admin@example.com"
+SELLER = "txb-assign-seller@example.com"
+CLIENT_EMAIL = "grace.client@example.com"
 ORGANIZATION = "TxB Assignment Notify Co"
 WORKER = "crm.txb.delivery_coach_assignment.process_assignment_notification"
-# Built at runtime so GitHub push protection does not flag a fake Slack token.
-TOKEN = "-".join(("xoxb", "123456789012", "abcdefghijklmnopQRSTUVWX"))
-
-
-def slack_response(payload):
-	response = MagicMock()
-	response.json.return_value = payload
-	return response
 
 
 class TestDeliveryCoachAssignmentNotifications(FrappeTestCase):
 	@classmethod
 	def setUpClass(cls):
 		super().setUpClass()
-		users = ((COACH_A, "Coach A"), (COACH_B, "Coach B"), (TESTER, "Vainius"), (ASSIGNER, "Ada"))
+		users = (
+			(COACH_A, "Coach A"),
+			(COACH_B, "Coach B"),
+			(TESTER, "Vainius"),
+			(ASSIGNER, "Ada"),
+			(SELLER, "Sam"),
+		)
 		for email, first_name in users:
 			if not frappe.db.exists("User", email):
 				frappe.get_doc(
@@ -88,6 +86,7 @@ class TestDeliveryCoachAssignmentNotifications(FrappeTestCase):
 		# Only an Admin may set the Delivery Coach, and a new Delivering Coaching deal raises an
 		# Admin task (TXB-208).
 		frappe.get_doc("User", ASSIGNER).add_roles("Sales User", ADMIN_ROLE)
+		frappe.get_doc("User", SELLER).add_roles("Sales User")
 		if not frappe.db.exists("CRM Organization", ORGANIZATION):
 			frappe.get_doc(
 				{
@@ -100,23 +99,14 @@ class TestDeliveryCoachAssignmentNotifications(FrappeTestCase):
 
 	def setUp(self):
 		migrate()
+		migrate_activation()
 		self.set_mode(MODE_LIVE)
-		settings = frappe.get_single(SETTINGS_DOCTYPE)
-		settings.set(SETTING_SLACK_BOT_TOKEN, TOKEN)
-		settings.save(ignore_permissions=True)
 
 		self.enqueued = []
 		self.sendmail = MagicMock()
-		self.slack = {
-			"users.lookupByEmail": {"ok": True, "user": {"id": "U123"}},
-			"conversations.open": {"ok": True, "channel": {"id": "D123"}},
-			"chat.postMessage": {"ok": True},
-		}
-		self.slack_post = MagicMock(side_effect=self.fake_slack_post)
 		for patcher in (
 			patch("frappe.enqueue", side_effect=self.fake_enqueue),
 			patch("frappe.sendmail", self.sendmail),
-			patch("crm.txb.slack.requests.post", self.slack_post),
 			# The worker commits each channel; keep every test inside its rollback.
 			patch.object(frappe.db, "commit"),
 		):
@@ -134,28 +124,38 @@ class TestDeliveryCoachAssignmentNotifications(FrappeTestCase):
 		if method == WORKER:
 			self.enqueued.append(kwargs)
 
-	def fake_slack_post(self, url, headers=None, data=None, timeout=None):
-		result = self.slack[url.rsplit("/", 1)[-1]]
-		if isinstance(result, Exception):
-			raise result
-		return slack_response(result)
-
 	def set_mode(self, mode, test_user=None):
 		frappe.db.set_single_value(SETTINGS_DOCTYPE, SETTING_TEST_USER, test_user)
 		frappe.db.set_single_value(SETTINGS_DOCTYPE, SETTING_MODE, mode)
 
-	def make_deal(self, **fields):
+	def make_contact(self, email=CLIENT_EMAIL):
+		contact = frappe.new_doc("Contact")
+		contact.first_name, contact.last_name = "Grace", "Client"
+		if email:
+			contact.append("email_ids", {"email_id": email, "is_primary": 1})
+		contact.append("phone_nos", {"phone": "+37060000001", "is_primary_mobile_no": 1})
+		return contact.insert(ignore_permissions=True).name
+
+	def make_deal(self, status="Contract Cleared", email=CLIENT_EMAIL, **fields):
 		return frappe.get_doc(
 			{
 				"doctype": "CRM Deal",
 				"pipeline_type": PIPELINE_DELIVERING_COACHING,
-				"status": "Submitted",
+				"status": status,
 				"first_name": "Grace",
 				"last_name": "Client",
 				"organization": ORGANIZATION,
+				"custom_program_type": "Lyderystė",
+				"contacts": [{"contact": self.make_contact(email), "is_primary": 1}],
 				**fields,
 			}
 		).insert(ignore_permissions=True)
+
+	def activated(self, coach=COACH_A, **fields):
+		"""A deal whose coaching was just activated, and its one activation event."""
+		deal = self.make_deal(status="Active", **{FIELD_DELIVERY_COACH: coach, **fields})
+		record_activation(deal)
+		return deal, f"{deal.name}-activation"
 
 	def assign(self, deal, coach):
 		deal.reload()
@@ -165,7 +165,7 @@ class TestDeliveryCoachAssignmentNotifications(FrappeTestCase):
 
 	def events(self, deal):
 		return frappe.get_all(
-			LEDGER_DOCTYPE, filters={"deal": deal.name}, pluck="name", order_by="creation asc"
+			LEDGER_DOCTYPE, filters={"deal": deal.name}, pluck="name", order_by="assigned_at asc"
 		)
 
 	def event(self, name):
@@ -175,11 +175,8 @@ class TestDeliveryCoachAssignmentNotifications(FrappeTestCase):
 		process_assignment_notification(event_key)
 		return self.event(event_key)
 
-	def slack_calls(self):
-		return [
-			(c.args[0].rsplit("/", 1)[-1], c.kwargs["data"], c.kwargs["headers"])
-			for c in self.slack_post.call_args_list
-		]
+	def statuses(self, event):
+		return event.email_status, event.client_email_status
 
 	def email_recipients(self):
 		return [c.kwargs["recipients"] for c in self.sendmail.call_args_list]
@@ -187,194 +184,233 @@ class TestDeliveryCoachAssignmentNotifications(FrappeTestCase):
 	def error_logs(self):
 		return frappe.get_all("Error Log", filters={"method": LOG_TITLE}, pluck="error")
 
-	# -- event creation --------------------------------------------------------------------
+	# -- activation ------------------------------------------------------------------------
 
-	def test_initial_assignment_creates_one_event_queued_after_commit(self):
-		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
+	def test_activation_records_one_event_queued_after_commit(self):
+		_deal, name = self.activated()
 
-		[name] = self.events(deal)
 		event = self.event(name)
-		self.assertEqual(event.intended_user, COACH_A)
-		self.assertEqual(event.effective_user, COACH_A)
-		self.assertEqual(event.assigned_by, ASSIGNER)
-		self.assertEqual(event.mode, MODE_LIVE)
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_PENDING, STATUS_PENDING))
-		self.assertTrue(event.assigned_at)
+		self.assertEqual((event.intended_user, event.effective_user), (COACH_A, COACH_A))
+		self.assertEqual((event.assigned_by, event.mode), (ASSIGNER, MODE_LIVE))
+		self.assertEqual(self.statuses(event), (STATUS_PENDING, STATUS_PENDING))
 
 		[job] = self.enqueued
 		self.assertTrue(job["enqueue_after_commit"])
 		self.assertTrue(job["deduplicate"])
 		self.assertEqual(job["event_key"], name)
-		self.assertIn(name, job["job_id"])
 		# Nothing is delivered inside the Deal's transaction.
 		self.sendmail.assert_not_called()
-		self.slack_post.assert_not_called()
 
-	def test_assignment_on_existing_deal_creates_one_event(self):
+	def test_activation_gives_the_coach_a_reach_out_task_due_in_48_hours(self):
+		deal, _name = self.activated()
+
+		[task] = frappe.get_all(
+			"CRM Task",
+			filters={"reference_docname": deal.name, "title": ["like", "Reach out to the client%"]},
+			fields=["assigned_to", "priority", "due_date"],
+		)
+		self.assertEqual((task.assigned_to, task.priority), (COACH_A, "High"))
+		hours = (get_datetime(task.due_date) - now_datetime()).total_seconds() / 3600
+		self.assertAlmostEqual(hours, REACH_OUT_HOURS, delta=0.1)
+
+	def test_activation_tells_the_sales_owner_in_the_crm(self):
+		sales = frappe.get_doc(
+			{
+				"doctype": "CRM Deal",
+				"pipeline_type": PIPELINE_INDIVIDUAL_SESSION,
+				"status": "Submitted",
+				"deal_owner": SELLER,
+			}
+		).insert(ignore_permissions=True)
+		deal, _name = self.activated(**{FIELD_SALES_SOURCE_DEAL: sales.name})
+
+		[note] = frappe.get_all(
+			"CRM Notification",
+			filters={"to_user": SELLER, "reference_name": deal.name},
+			fields=["type", "message"],
+		)
+		self.assertEqual(note.type, "Assignment")
+		self.assertIn("Grace Client", note.message)
+		self.assertIn("Coach A", note.message)
+
+	def test_activation_happens_once_per_deal(self):
+		deal, name = self.activated()
+		record_activation(deal)
+
+		self.assertEqual(self.events(deal), [name])
+		self.assertEqual(len(self.enqueued), 1)
+		tasks = frappe.get_all("CRM Task", filters={"reference_docname": deal.name, "assigned_to": COACH_A})
+		self.assertEqual(len(tasks), 1)
+
+	def test_set_first_call_date_activates_coaching(self):
+		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
+		set_first_call_date(deal, {"first_call_date": "2031-03-10 10:00:00"})
+
+		self.assertEqual(self.events(deal), [f"{deal.name}-activation"])
+
+	def test_activation_without_a_coach_does_nothing(self):
 		deal = self.make_deal()
+		record_activation(deal)
 		self.assertEqual(self.events(deal), [])
 
-		self.assign(deal, COACH_A)
-		self.assertEqual(len(self.events(deal)), 1)
-		self.assertEqual(len(self.enqueued), 1)
-
-	def test_reassignment_notifies_only_the_new_coach(self):
+	def test_activation_failure_never_blocks_the_activation(self):
 		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-		self.run_worker(self.events(deal)[0])
-		self.sendmail.reset_mock()
-		self.slack_post.reset_mock()
-
-		self.assign(deal, COACH_B)
-		events = self.events(deal)
-		self.assertEqual(len(events), 2)
-		event = self.run_worker(events[1])
-
-		self.assertEqual(event.intended_user, COACH_B)
-		self.assertEqual(self.email_recipients(), [[COACH_B]])
-		self.assertEqual(self.slack_calls()[0][1], {"email": COACH_B})
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_SENT, STATUS_SENT))
-
-	def test_unchanged_save_creates_no_event(self):
-		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-		deal.reload()
-		deal.last_name = "Renamed"
-		deal.save(ignore_permissions=True)
-		self.assign(deal, COACH_A)
-
-		self.assertEqual(len(self.events(deal)), 1)
-		self.assertEqual(len(self.enqueued), 1)
-
-	def test_clearing_the_coach_creates_no_event(self):
-		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-		self.assign(deal, None)
-
-		self.assertEqual(len(self.events(deal)), 1)
-
-	def test_self_assignment_creates_no_event(self):
-		deal = self.make_deal(**{FIELD_DELIVERY_COACH: ASSIGNER})
-		self.assertEqual(self.events(deal), [])
-		self.assertEqual(self.enqueued, [])
-
-	def test_other_pipelines_create_no_event(self):
-		deal = self.make_deal(
-			pipeline_type=PIPELINE_INDIVIDUAL_SESSION, **{FIELD_DELIVERY_COACH: COACH_A}
-		)
-		self.assertEqual(self.events(deal), [])
-
-	def test_entering_the_pipeline_with_a_coach_already_set_creates_no_event(self):
-		deal = self.make_deal(
-			pipeline_type=PIPELINE_INDIVIDUAL_SESSION, **{FIELD_DELIVERY_COACH: COACH_A}
-		)
-		deal.reload()
-		deal.pipeline_type = PIPELINE_DELIVERING_COACHING
-		deal.save(ignore_permissions=True)
-
-		self.assertEqual(self.events(deal), [])
-		self.assertEqual(self.enqueued, [])
-
-	def test_import_does_not_backfill(self):
-		frappe.flags.in_import = True
-		try:
-			deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-		finally:
-			frappe.flags.in_import = False
-		self.assertEqual(self.events(deal), [])
-
-	def test_queue_failure_never_blocks_the_deal_save(self):
 		with patch(
 			"crm.txb.delivery_coach_assignment.get_notification_config",
 			side_effect=RuntimeError("settings unavailable"),
 		):
-			deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
+			record_activation(deal)
 
-		self.assertTrue(frappe.db.exists("CRM Deal", deal.name))
+		self.assertEqual(self.events(deal), [])
+		self.assertEqual(
+			frappe.get_all("CRM Task", filters={"reference_docname": deal.name, "assigned_to": COACH_A}), []
+		)
 		self.assertTrue(self.error_logs())
 
-	# -- rapid changes and retries ---------------------------------------------------------
+	# -- coach changes after activation ----------------------------------------------------
 
-	def test_rapid_reassignment_skips_the_superseded_coach(self):
-		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
+	def test_reassigning_an_active_deal_emails_only_the_new_coach(self):
+		deal = self.make_deal(status="Active", **{FIELD_DELIVERY_COACH: COACH_A})
+		self.assertEqual(self.events(deal), [])
+
 		self.assign(deal, COACH_B)
-		first, second = self.events(deal)
+		[name] = self.events(deal)
+		event = self.run_worker(name)
 
-		stale = self.run_worker(first)
-		self.assertEqual((stale.email_status, stale.slack_status), (STATUS_SKIPPED, STATUS_SKIPPED))
-		self.assertEqual(stale.email_error, SUPERSEDED)
-		self.sendmail.assert_not_called()
-		self.slack_post.assert_not_called()
-
-		current = self.run_worker(second)
-		self.assertEqual((current.email_status, current.slack_status), (STATUS_SENT, STATUS_SENT))
+		self.assertEqual(event.intended_user, COACH_B)
+		self.assertEqual(self.statuses(event), (STATUS_SENT, STATUS_SKIPPED))
+		self.assertEqual(event.client_email_error, NOT_ACTIVATION)
 		self.assertEqual(self.email_recipients(), [[COACH_B]])
 
-	def test_deleted_deal_is_skipped_and_stays_deletable(self):
-		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-		[name] = self.events(deal)
-		frappe.delete_doc("CRM Deal", deal.name, ignore_permissions=True)
-
-		event = self.run_worker(name)
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_SKIPPED, STATUS_SKIPPED))
-		self.sendmail.assert_not_called()
-
-	def test_retry_only_resends_failed_channels(self):
-		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-		[name] = self.events(deal)
-		self.slack["chat.postMessage"] = {"ok": False, "error": "ratelimited"}
-
-		event = self.run_worker(name)
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_SENT, STATUS_FAILED))
-		self.assertIn("ratelimited", event.slack_error)
-		self.assertEqual(self.sendmail.call_count, 1)
-
-		self.slack["chat.postMessage"] = {"ok": True}
-		event = self.run_worker(name)
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_SENT, STATUS_SENT))
-		self.assertEqual(self.sendmail.call_count, 1)
-
-		self.slack_post.reset_mock()
-		event = self.run_worker(name)
-		self.assertEqual(self.sendmail.call_count, 1)
-		self.slack_post.assert_not_called()
-
-	def test_worker_reruns_and_repeated_saves_stay_idempotent(self):
-		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-		[name] = self.events(deal)
-
-		self.run_worker(name)
-		event = self.run_worker(name)
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_SENT, STATUS_SENT))
-		self.assertEqual((event.email_attempts, event.slack_attempts), (1, 1))
-		self.assertEqual(self.sendmail.call_count, 1)
-		self.assertEqual(len(self.slack_calls()), 3)
-
-		self.assign(deal, COACH_A)
-		self.assertEqual(self.events(deal), [name])
-		self.assertEqual(len(self.enqueued), 1)
-
-	# -- assignment generations ------------------------------------------------------------
-
-	def test_reassignment_back_skips_every_obsolete_generation(self):
+	def test_a_coach_change_before_activation_sends_nothing(self):
 		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
 		self.assign(deal, COACH_B)
+		self.assertEqual(self.events(deal), [])
+		self.assertEqual(self.enqueued, [])
+
+	def test_unchanged_cleared_and_self_assignments_create_no_event(self):
+		deal = self.make_deal(status="Active", **{FIELD_DELIVERY_COACH: COACH_A})
+		deal.reload()
+		deal.last_name = "Renamed"
+		deal.save(ignore_permissions=True)
 		self.assign(deal, COACH_A)
-		first, second, current = self.events(deal)
+		self.assign(deal, None)
+		self.assign(deal, ASSIGNER)
 
-		# The first event's coach is the Deal's coach again, but a newer generation exists.
-		for obsolete in (first, second):
-			event = self.run_worker(obsolete)
-			self.assertEqual((event.email_status, event.slack_status), (STATUS_SKIPPED, STATUS_SKIPPED))
-			self.assertEqual((event.email_error, event.slack_error), (SUPERSEDED, SUPERSEDED))
-			self.assertEqual((event.email_attempts, event.slack_attempts), (0, 0))
+		self.assertEqual(self.events(deal), [])
+
+	def test_other_pipelines_and_imports_create_no_event(self):
+		other = self.make_deal(
+			status="Submitted", pipeline_type=PIPELINE_INDIVIDUAL_SESSION, **{FIELD_DELIVERY_COACH: COACH_A}
+		)
+		self.assign(other, COACH_B)
+		deal = self.make_deal(status="Active", **{FIELD_DELIVERY_COACH: COACH_A})
+		frappe.flags.in_import = True
+		try:
+			self.assign(deal, COACH_B)
+		finally:
+			frappe.flags.in_import = False
+
+		self.assertEqual(self.events(other) + self.events(deal), [])
+
+	def test_queue_failure_never_blocks_the_deal_save(self):
+		deal = self.make_deal(status="Active", **{FIELD_DELIVERY_COACH: COACH_A})
+		with patch(
+			"crm.txb.delivery_coach_assignment.get_notification_config",
+			side_effect=RuntimeError("settings unavailable"),
+		):
+			self.assign(deal, COACH_B)
+
+		self.assertEqual(frappe.db.get_value("CRM Deal", deal.name, FIELD_DELIVERY_COACH), COACH_B)
+		self.assertTrue(self.error_logs())
+
+	# -- delivery --------------------------------------------------------------------------
+
+	def test_live_emails_the_coach_the_client_details_and_the_client_in_lithuanian(self):
+		_deal, name = self.activated()
+
+		event = self.run_worker(name)
+		self.assertEqual(self.statuses(event), (STATUS_SENT, STATUS_SENT))
+		coach_mail, client_mail = (c.kwargs for c in self.sendmail.call_args_list)
+
+		self.assertEqual(coach_mail["recipients"], [COACH_A])
+		self.assertEqual(coach_mail["subject"], "New client assigned: Grace Client")
+		for detail in ("Grace Client", ORGANIZATION, CLIENT_EMAIL, "+37060000001", "Lyderystė", "48 hours"):
+			self.assertIn(detail, coach_mail["message"])
+
+		self.assertEqual(client_mail["recipients"], [CLIENT_EMAIL])
+		self.assertEqual(client_mail["subject"], "Jums paskirtas koučeris")
+		for detail in ("Sveiki, Grace", "Coach A", "48 valandas", "Lyderystė"):
+			self.assertIn(detail, client_mail["message"])
+
+	def test_test_redirect_sends_both_emails_to_the_test_user(self):
+		self.set_mode(MODE_TEST_REDIRECT, TESTER)
+		_deal, name = self.activated()
+
+		event = self.run_worker(name)
+		self.assertEqual(event.effective_user, TESTER)
+		self.assertEqual(self.email_recipients(), [[TESTER], [TESTER]])
+		subjects = [c.kwargs["subject"] for c in self.sendmail.call_args_list]
+		self.assertEqual(
+			subjects,
+			[
+				"[TEST for Coach A] New client assigned: Grace Client",
+				"[TEST for Grace Client] Jums paskirtas koučeris",
+			],
+		)
+
+	def test_disabled_sends_nothing_but_still_gives_the_coach_the_task(self):
+		self.set_mode(MODE_DISABLED)
+		deal, name = self.activated()
+
+		self.assertEqual(self.enqueued, [])
+		event = self.run_worker(name)
+		self.assertEqual(self.statuses(event), (STATUS_SKIPPED, STATUS_SKIPPED))
 		self.sendmail.assert_not_called()
-		self.slack_post.assert_not_called()
+		self.assertTrue(
+			frappe.get_all("CRM Task", filters={"reference_docname": deal.name, "assigned_to": COACH_A})
+		)
 
-		event = self.run_worker(current)
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_SENT, STATUS_SENT))
+	def test_a_client_without_a_primary_email_fails_only_the_client_email(self):
+		_deal, name = self.activated(email=None)
+
+		event = self.run_worker(name)
+		self.assertEqual(self.statuses(event), (STATUS_SENT, STATUS_FAILED))
+		self.assertIn("client_has_no_primary_email", event.client_email_error)
 		self.assertEqual(self.email_recipients(), [[COACH_A]])
+		self.assertTrue(self.error_logs())
+
+	def test_retry_only_resends_the_failed_channel(self):
+		_deal, name = self.activated()
+		self.sendmail.side_effect = [None, RuntimeError("smtp down")]
+
+		event = self.run_worker(name)
+		self.assertEqual(self.statuses(event), (STATUS_SENT, STATUS_FAILED))
+
+		self.sendmail.side_effect = None
+		event = self.run_worker(name)
+		self.assertEqual(self.statuses(event), (STATUS_SENT, STATUS_SENT))
+		self.assertEqual(self.email_recipients(), [[COACH_A], [CLIENT_EMAIL], [CLIENT_EMAIL]])
+
+		event = self.run_worker(name)
+		self.assertEqual((event.email_attempts, event.client_email_attempts), (1, 2))
+		self.assertEqual(self.sendmail.call_count, 3)
+
+	def test_a_superseded_coach_is_skipped(self):
+		deal, name = self.activated()
+		self.assign(deal, COACH_B)
+
+		stale = self.run_worker(name)
+		self.assertEqual(self.statuses(stale), (STATUS_SKIPPED, STATUS_SKIPPED))
+		self.assertEqual((stale.email_error, stale.client_email_error), (SUPERSEDED, SUPERSEDED))
+		self.assertEqual(self.email_recipients(), [])
+
+		[current] = [e for e in self.events(deal) if e != name]
+		self.run_worker(current)
+		self.assertEqual(self.email_recipients(), [[COACH_B]])
 
 	def test_reassignment_between_channels_skips_the_unsent_channel(self):
-		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-		[name] = self.events(deal)
+		deal, name = self.activated()
 
 		def reassign_once(**kwargs):
 			self.sendmail.side_effect = None
@@ -383,323 +419,55 @@ class TestDeliveryCoachAssignmentNotifications(FrappeTestCase):
 		self.sendmail.side_effect = reassign_once
 		event = self.run_worker(name)
 
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_SENT, STATUS_SKIPPED))
-		self.assertEqual(event.slack_error, SUPERSEDED)
-		self.assertEqual(self.sendmail.call_args_list[0].kwargs["recipients"], [COACH_A])
-		self.slack_post.assert_not_called()
+		self.assertEqual(self.statuses(event), (STATUS_SENT, STATUS_SKIPPED))
+		self.assertEqual(event.client_email_error, SUPERSEDED)
+		self.assertEqual(self.email_recipients(), [[COACH_A]])
 
 	def test_leaving_delivering_coaching_skips_unsent_channels(self):
-		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-		[name] = self.events(deal)
+		deal, name = self.activated()
 		frappe.db.set_value("CRM Deal", deal.name, "pipeline_type", PIPELINE_INDIVIDUAL_SESSION)
 
 		event = self.run_worker(name)
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_SKIPPED, STATUS_SKIPPED))
-		self.assertEqual((event.email_error, event.slack_error), (LEFT_PIPELINE, LEFT_PIPELINE))
+		self.assertEqual(self.statuses(event), (STATUS_SKIPPED, STATUS_SKIPPED))
+		self.assertEqual((event.email_error, event.client_email_error), (LEFT_PIPELINE, LEFT_PIPELINE))
 		self.sendmail.assert_not_called()
-		self.slack_post.assert_not_called()
 
 	def test_current_disabled_stops_a_queued_event(self):
-		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-		[name] = self.events(deal)
+		_deal, name = self.activated()
 		self.set_mode(MODE_DISABLED)
 
 		event = self.run_worker(name)
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_SKIPPED, STATUS_SKIPPED))
-		self.assertEqual((event.email_error, event.slack_error), (STOPPED, STOPPED))
+		self.assertEqual(self.statuses(event), (STATUS_SKIPPED, STATUS_SKIPPED))
+		self.assertEqual((event.email_error, event.client_email_error), (STOPPED, STOPPED))
 		self.sendmail.assert_not_called()
-		self.slack_post.assert_not_called()
-
-	def test_current_disabled_stops_a_failed_channel_but_keeps_the_sent_one(self):
-		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-		[name] = self.events(deal)
-		self.slack["chat.postMessage"] = {"ok": False, "error": "ratelimited"}
-		self.run_worker(name)
-		self.set_mode(MODE_DISABLED)
-		self.slack_post.reset_mock()
-
-		event = self.run_worker(name)
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_SENT, STATUS_SKIPPED))
-		self.assertEqual(event.slack_error, STOPPED)
-		self.assertEqual(self.sendmail.call_count, 1)
-		self.slack_post.assert_not_called()
 
 	def test_queued_events_keep_their_captured_routing(self):
 		self.set_mode(MODE_TEST_REDIRECT, TESTER)
-		[redirected] = self.events(self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A}))
+		_deal, redirected = self.activated()
 		self.set_mode(MODE_LIVE)
-		[live] = self.events(self.make_deal(**{FIELD_DELIVERY_COACH: COACH_B}))
+		_deal, live = self.activated(coach=COACH_B)
 
 		self.set_mode(MODE_TEST_REDIRECT, TESTER)
 		self.run_worker(live)
 		self.set_mode(MODE_LIVE)
 		self.run_worker(redirected)
 
-		self.assertEqual(self.email_recipients(), [[COACH_B], [TESTER]])
-		lookups = [data for method, data, _headers in self.slack_calls() if method == "users.lookupByEmail"]
-		self.assertEqual(lookups, [{"email": COACH_B}, {"email": TESTER}])
+		self.assertEqual(self.email_recipients(), [[COACH_B], [CLIENT_EMAIL], [TESTER], [TESTER]])
 
-	# -- modes -----------------------------------------------------------------------------
-
-	def test_disabled_sends_nothing(self):
-		self.set_mode(MODE_DISABLED)
-		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-		[name] = self.events(deal)
-
-		self.assertEqual(self.enqueued, [])
-		event = self.run_worker(name)
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_SKIPPED, STATUS_SKIPPED))
-		self.sendmail.assert_not_called()
-		self.slack_post.assert_not_called()
-
-	def test_test_redirect_routes_both_channels_to_the_test_user(self):
-		self.set_mode(MODE_TEST_REDIRECT, TESTER)
-		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-		[name] = self.events(deal)
+	def test_deleted_deal_is_skipped(self):
+		deal, name = self.activated()
+		frappe.db.delete("CRM Task", {"reference_docname": deal.name})
+		frappe.delete_doc("CRM Deal", deal.name, ignore_permissions=True, force=True)
 
 		event = self.run_worker(name)
-		self.assertEqual((event.intended_user, event.effective_user), (COACH_A, TESTER))
-		self.assertEqual(self.email_recipients(), [[TESTER]])
-		self.assertIn("[TEST for Coach A]", self.sendmail.call_args.kwargs["subject"])
-		self.assertIn("intended for <strong>Coach A</strong>", self.sendmail.call_args.kwargs["message"])
-
-		lookup, _open, post = self.slack_calls()
-		self.assertEqual(lookup[1], {"email": TESTER})
-		self.assertIn("Test notification", post[1]["text"])
-		self.assertIn("*Coach A*", post[1]["text"])
-
-	def test_live_routes_to_the_assigned_coach(self):
-		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-		self.run_worker(self.events(deal)[0])
-
-		self.assertEqual(self.email_recipients(), [[COACH_A]])
-		self.assertEqual(self.slack_calls()[0][1], {"email": COACH_A})
-		self.assertNotIn("TEST", self.sendmail.call_args.kwargs["subject"])
-
-	# -- content ---------------------------------------------------------------------------
-
-	def test_email_and_slack_carry_the_assignment_details(self):
-		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-		event = self.run_worker(self.events(deal)[0])
-		deal.reload()
-		url = get_url(f"/crm/deals/{deal.name}")
-		assigned_at = format_datetime(event.assigned_at)
-		details = ("Grace Client", ORGANIZATION, deal.status, "Ada", assigned_at, "Coach A", url)
-
-		subject = self.sendmail.call_args.kwargs["subject"]
-		body = self.sendmail.call_args.kwargs["message"]
-		text = self.slack_calls()[2][1]["text"]
-		self.assertIn("Grace Client", subject)
-		for content in (body, text):
-			for expected in details:
-				self.assertIn(expected, content)
-
-	def test_slack_message_includes_program_type_and_escapes_markup(self):
-		text = build_slack_message(
-			{
-				"client_name": "A <b>&",
-				"organization": "",
-				"program_type": "Mindset",
-				"status": "Submitted",
-				"assigned_by_name": "Ada",
-				"assigned_at": "28-09-2026 10:00",
-				"opportunity_url": "https://crm.example/crm/deals/D-1",
-				"intended_coach_name": "Coach A",
-				"is_test_redirect": False,
-			}
-		)
-		self.assertIn("*Program:* Mindset", text)
-		self.assertIn("A &lt;b&gt;&amp;", text)
-		self.assertNotIn("Organization", text)
-		self.assertIn("<https://crm.example/crm/deals/D-1|Open the Opportunity in CRM>", text)
-
-	# -- Slack -----------------------------------------------------------------------------
-
-	def test_slack_dm_uses_lookup_open_and_post(self):
-		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-		self.run_worker(self.events(deal)[0])
-
-		calls = self.slack_calls()
-		self.assertEqual(
-			[method for method, _data, _headers in calls],
-			["users.lookupByEmail", "conversations.open", "chat.postMessage"],
-		)
-		self.assertEqual(calls[1][1], {"users": "U123"})
-		self.assertEqual(calls[2][1]["channel"], "D123")
-		for _method, _data, headers in calls:
-			self.assertEqual(headers, {"Authorization": f"Bearer {TOKEN}"})
-
-	def test_missing_slack_user_fails_slack_only(self):
-		self.slack["users.lookupByEmail"] = {"ok": False, "error": "users_not_found"}
-		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-		event = self.run_worker(self.events(deal)[0])
-
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_SENT, STATUS_FAILED))
-		self.assertEqual(event.slack_error, "users.lookupByEmail: users_not_found")
-		self.assertEqual([c[0] for c in self.slack_calls()], ["users.lookupByEmail"])
-		[log] = self.error_logs()
-		for expected in (deal.name, COACH_A, MODE_LIVE, "channel=slack", "users_not_found"):
-			self.assertIn(expected, log)
-		self.assertNotIn(TOKEN, log)
-
-	def test_email_failure_does_not_suppress_slack(self):
-		self.sendmail.side_effect = frappe.OutgoingEmailError("SMTP refused")
-		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-		event = self.run_worker(self.events(deal)[0])
-
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_FAILED, STATUS_SENT))
-		self.assertIn("SMTP refused", event.email_error)
-		[log] = self.error_logs()
-		self.assertIn("channel=email", log)
-
-	def test_slack_transport_error_is_sanitized(self):
-		self.slack_post.side_effect = requests.ConnectionError(f"Bearer {TOKEN}")
-		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-		event = self.run_worker(self.events(deal)[0])
-
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_SENT, STATUS_FAILED))
-		self.assertEqual(event.slack_error, "users.lookupByEmail: ConnectionError")
-		self.assertNotIn(TOKEN, " ".join(self.error_logs()))
-
-	def test_missing_bot_token_fails_slack_only(self):
-		frappe.db.delete("__Auth", {"doctype": SETTINGS_DOCTYPE, "fieldname": SETTING_SLACK_BOT_TOKEN})
-		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-		event = self.run_worker(self.events(deal)[0])
-
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_SENT, STATUS_FAILED))
-		self.assertEqual(event.slack_error, "missing_bot_token")
-		self.slack_post.assert_not_called()
-
-	def test_definite_slack_rejection_is_failed(self):
-		delivered = dict(self.slack)
-		cases = (
-			("chat.postMessage", {"ok": False, "error": "channel_not_found"}, "channel_not_found"),
-			# Never connected, so nothing was dispatched.
-			("chat.postMessage", requests.ConnectTimeout("connect"), "ConnectTimeout"),
-			# Lookups never post a message, so even a lost answer is definite.
-			("conversations.open", requests.ReadTimeout("read"), "ReadTimeout"),
-		)
-		for method, result, code in cases:
-			with self.subTest(method=method, code=code):
-				self.slack = {**delivered, method: result}
-				deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-				event = self.run_worker(self.events(deal)[0])
-
-				self.assertEqual((event.email_status, event.slack_status), (STATUS_SENT, STATUS_FAILED))
-				self.assertEqual(event.slack_error, f"{method}: {code}")
-
-	def test_ambiguous_post_message_is_uncertain_and_never_resent(self):
-		for error in (requests.ReadTimeout(f"Bearer {TOKEN}"), requests.ConnectionError("reset")):
-			with self.subTest(error=type(error).__name__):
-				self.slack["chat.postMessage"] = error
-				deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-				[name] = self.events(deal)
-
-				event = self.run_worker(name)
-				self.assertEqual((event.email_status, event.slack_status), (STATUS_SENT, STATUS_UNCERTAIN))
-				self.assertEqual(event.slack_error, f"chat.postMessage: {type(error).__name__}")
-
-				self.slack["chat.postMessage"] = {"ok": True}
-				self.slack_post.reset_mock()
-				event = self.run_worker(name)
-				self.assertEqual(event.slack_status, STATUS_UNCERTAIN)
-				self.assertEqual(event.slack_attempts, 1)
-				self.slack_post.assert_not_called()
-
-		logs = " ".join(self.error_logs())
-		self.assertIn("channel=slack status=Uncertain", logs)
-		self.assertNotIn(TOKEN, logs)
-
-	def test_unreadable_post_message_response_is_uncertain(self):
-		unreadable = MagicMock()
-		unreadable.json.side_effect = ValueError("<html>proxy error</html>")
-
-		def post(url, **kwargs):
-			if url.endswith("chat.postMessage"):
-				return unreadable
-			return self.fake_slack_post(url, **kwargs)
-
-		self.slack_post.side_effect = post
-		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-		event = self.run_worker(self.events(deal)[0])
-
-		self.assertEqual(event.slack_status, STATUS_UNCERTAIN)
-		self.assertEqual(event.slack_error, "chat.postMessage: invalid_response")
-		self.assertNotIn("proxy error", " ".join(self.error_logs()))
-
-	# -- isolation -------------------------------------------------------------------------
-
-	def test_context_failure_fails_both_channels_without_contacting_anyone(self):
-		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-		with patch(
-			"crm.txb.delivery_coach_assignment.build_assignment_email_context",
-			side_effect=RuntimeError(f"Bearer {TOKEN}"),
-		):
-			event = self.run_worker(self.events(deal)[0])
-
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_FAILED, STATUS_FAILED))
-		self.assertNotIn(TOKEN, event.email_error + event.slack_error)
-		self.assertNotIn(TOKEN, " ".join(self.error_logs()))
-		self.assertTrue(frappe.db.exists("CRM Deal", deal.name))
-		self.sendmail.assert_not_called()
-		self.slack_post.assert_not_called()
-
-	def test_email_template_failure_does_not_suppress_slack(self):
-		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-		with patch(
-			"crm.txb.delivery_coach_assignment.render_assignment_email",
-			side_effect=frappe.DoesNotExistError("Email Template"),
-		):
-			event = self.run_worker(self.events(deal)[0])
-
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_FAILED, STATUS_SENT))
+		self.assertEqual(self.statuses(event), (STATUS_SKIPPED, STATUS_SKIPPED))
 		self.sendmail.assert_not_called()
 
-	def test_eligibility_failure_leaves_both_channels_pending_and_never_raises(self):
-		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-		[name] = self.events(deal)
-		with patch(
-			"crm.txb.delivery_coach_assignment.get_notification_config",
-			side_effect=RuntimeError("settings unavailable"),
-		):
+	def test_a_channel_failure_never_stops_the_other(self):
+		_deal, name = self.activated()
+		broken = MagicMock(side_effect=RuntimeError("template broken"))
+		with patch.dict("crm.txb.delivery_coach_assignment.SENDERS", {"email": broken}):
 			event = self.run_worker(name)
 
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_PENDING, STATUS_PENDING))
-		self.sendmail.assert_not_called()
-		self.slack_post.assert_not_called()
-		logs = self.error_logs()
-		self.assertEqual(len(logs), 2)
-		for log in logs:
-			self.assertIn("worker_failed: RuntimeError", log)
-			self.assertNotIn("settings unavailable", log)
-		self.assertTrue(frappe.db.exists("CRM Deal", deal.name))
-
-		event = self.run_worker(name)
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_SENT, STATUS_SENT))
-
-	def test_unrecorded_outcomes_are_isolated_and_a_posted_slack_dm_is_held(self):
-		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-		[name] = self.events(deal)
-		mark_channel = CRMCoachAssignmentNotification.mark_channel
-
-		def unrecordable_sent(doc, channel, status, error=None):
-			if status == STATUS_SENT:
-				raise frappe.ValidationError(f"Bearer {TOKEN}")
-			return mark_channel(doc, channel, status, error)
-
-		with patch.object(CRMCoachAssignmentNotification, "mark_channel", unrecordable_sent):
-			event = self.run_worker(name)
-
-		# The queued email rolled back with its attempt; the Slack DM may already be out.
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_PENDING, STATUS_UNCERTAIN))
-		self.assertEqual(event.slack_error, OUTCOME_NOT_RECORDED)
-		logs = " ".join(self.error_logs())
-		self.assertIn("channel=email error=worker_failed: ValidationError", logs)
-		self.assertIn("channel=slack error=worker_failed: SlackOutcomeNotRecorded", logs)
-		self.assertNotIn(TOKEN, logs)
-
-		self.slack_post.reset_mock()
-		event = self.run_worker(name)
-		self.assertEqual((event.email_status, event.slack_status), (STATUS_SENT, STATUS_UNCERTAIN))
-		self.slack_post.assert_not_called()
-		self.assertTrue(frappe.db.exists("CRM Deal", deal.name))
+		self.assertEqual(self.statuses(event), (STATUS_FAILED, STATUS_SENT))
+		self.assertEqual(self.email_recipients(), [[CLIENT_EMAIL]])

@@ -12,6 +12,7 @@ from crm.fcrm.doctype.crm_products.crm_products import create_product_details_sc
 from crm.txb.call_log_status import reconcile_call_log_status_options
 from crm.txb.delivery_coach_notifications import (
 	ensure_assignment_email_template,
+	ensure_client_email_template,
 	ensure_notification_settings,
 )
 from crm.txb.registration_setup import ensure_registration_setup
@@ -47,6 +48,7 @@ def after_install(force=False):
 	# Delivery Coach assignment notifications (TXB-269): Disabled until an operator opts in.
 	ensure_notification_settings()
 	ensure_assignment_email_template()
+	ensure_client_email_template()
 	frappe.db.commit()
 
 

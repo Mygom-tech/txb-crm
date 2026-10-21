@@ -59,9 +59,7 @@ def require_recipient(deal, data: dict) -> tuple[str | None, str | None]:
 	"""
 	if not wants_recap(data):
 		return None, None
-	contact = get_effective_primary_contact(deal.get("contacts") or [])
-	email = frappe.db.get_value(CONTACT_DOCTYPE, contact, "email_id") if contact else None
-	email = validate_email_address((email or "").strip()) or None
+	contact, email = primary_contact_email(deal)
 	if not email:
 		frappe.throw(
 			f"{RECAP_RECIPIENT_MISSING}: "
@@ -70,6 +68,13 @@ def require_recipient(deal, data: dict) -> tuple[str | None, str | None]:
 			title=_("Recap recipient missing"),
 		)
 	return contact, email
+
+
+def primary_contact_email(deal) -> tuple[str | None, str | None]:
+	"""The Deal's effective primary Contact and its valid email; either may be None."""
+	contact = get_effective_primary_contact(deal.get("contacts") or [])
+	email = frappe.db.get_value(CONTACT_DOCTYPE, contact, "email_id") if contact else None
+	return contact, validate_email_address((email or "").strip()) or None
 
 
 def find_submission(deal_name: str, submission_id: str | None) -> dict | None:

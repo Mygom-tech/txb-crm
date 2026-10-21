@@ -21,13 +21,13 @@
   "email_attempts",
   "email_claimed_at",
   "email_recovered_at",
-  "column_break_slack",
-  "slack_status",
-  "slack_sent_at",
-  "slack_error",
-  "slack_attempts",
-  "slack_claimed_at",
-  "slack_recovered_at"
+  "column_break_client_email",
+  "client_email_status",
+  "client_email_sent_at",
+  "client_email_error",
+  "client_email_attempts",
+  "client_email_claimed_at",
+  "client_email_recovered_at"
  ],
  "fields": [
   {
@@ -157,57 +157,57 @@
    "read_only": 1
   },
   {
-   "fieldname": "column_break_slack",
+   "fieldname": "column_break_client_email",
    "fieldtype": "Column Break"
   },
   {
    "default": "Pending",
-   "fieldname": "slack_status",
+   "fieldname": "client_email_status",
    "fieldtype": "Select",
    "in_list_view": 1,
    "in_standard_filter": 1,
-   "label": "Slack Status",
+   "label": "Client Email Status",
    "options": "Pending\nSent\nFailed\nSkipped\nUncertain",
    "read_only": 1,
    "reqd": 1
   },
   {
-   "fieldname": "slack_sent_at",
+   "fieldname": "client_email_sent_at",
    "fieldtype": "Datetime",
-   "label": "Slack Sent At",
+   "label": "Client Email Sent At",
    "read_only": 1
   },
   {
-   "fieldname": "slack_error",
+   "fieldname": "client_email_error",
    "fieldtype": "Small Text",
-   "label": "Slack Error",
+   "label": "Client Email Error",
    "read_only": 1
   },
   {
    "default": "0",
-   "fieldname": "slack_attempts",
+   "fieldname": "client_email_attempts",
    "fieldtype": "Int",
-   "label": "Slack Attempts",
+   "label": "Client Email Attempts",
    "non_negative": 1,
    "read_only": 1
   },
   {
-   "fieldname": "slack_claimed_at",
+   "fieldname": "client_email_claimed_at",
    "fieldtype": "Datetime",
-   "label": "Slack Claimed At",
+   "label": "Client Email Claimed At",
    "read_only": 1
   },
   {
-   "fieldname": "slack_recovered_at",
+   "fieldname": "client_email_recovered_at",
    "fieldtype": "Datetime",
-   "label": "Slack Recovered At",
+   "label": "Client Email Recovered At",
    "read_only": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-10-08 10:00:00.000000",
+ "modified": "2026-10-20 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "FCRM",
  "name": "CRM Coach Assignment Notification",

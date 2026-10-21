@@ -19,10 +19,9 @@ from crm.txb.delivery_coach_notifications import (
 class CRMCoachAssignmentNotification(Document):
 	"""One committed Delivery Coach assignment event and its per-channel delivery state.
 
-	Named by `event_key`, so the database refuses a second row for the same event. Email and
-	Slack move independently through CHANNEL_TRANSITIONS; a channel already Sent can never be
-	moved again, which is what makes a retry safe, and an Uncertain one waits for
-	reconciliation instead of being resent. The captured routing (mode, intended and effective
+	Named by `event_key`, so the database refuses a second row for the same event. The coach's
+	email and the client's email move independently through CHANNEL_TRANSITIONS; a channel
+	already Sent can never be moved again, which is what makes a retry safe. The captured routing (mode, intended and effective
 	user) and the assignment generation are set-only-once, so recovery always delivers to the
 	recipient the event was recorded with.
 	"""
@@ -49,12 +48,12 @@ class CRMCoachAssignmentNotification(Document):
 		event_key: DF.Data
 		intended_user: DF.Link
 		mode: DF.Literal["Disabled", "Test redirect", "Live"]
-		slack_attempts: DF.Int
-		slack_claimed_at: DF.Datetime | None
-		slack_error: DF.SmallText | None
-		slack_recovered_at: DF.Datetime | None
-		slack_sent_at: DF.Datetime | None
-		slack_status: DF.Literal["Pending", "Sent", "Failed", "Skipped", "Uncertain"]
+		client_email_attempts: DF.Int
+		client_email_claimed_at: DF.Datetime | None
+		client_email_error: DF.SmallText | None
+		client_email_recovered_at: DF.Datetime | None
+		client_email_sent_at: DF.Datetime | None
+		client_email_status: DF.Literal["Pending", "Sent", "Failed", "Skipped", "Uncertain"]
 	# end: auto-generated types
 
 	def validate(self):

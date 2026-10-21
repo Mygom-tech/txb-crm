@@ -275,7 +275,7 @@ doc_events = {
 			"crm.txb.admin_assignment.validate_admin_task_assignee",
 			# The first-call reminder delay is configurable but never instantaneous (TXB-227).
 			"crm.txb.first_call_reminders.validate_reminder_delay",
-			# Delivery Coach notification mode, recipient and Slack token are System Manager-only (TXB-288).
+			# Delivery Coach notification mode and recipient are System Manager-only (TXB-288).
 			"crm.txb.permissions.guard_notification_settings",
 		],
 	},
@@ -341,8 +341,9 @@ doc_events = {
 			# save, so a reminder is never closed for a write that did not commit.
 			"crm.txb.first_call_reminders.settle_activation_cycle",
 			"crm.txb.first_call_reminders.complete_reminder_on_first_call_date",
-			# A newly assigned Delivery Coach is emailed and Slacked once, by a job queued after
-			# commit so delivery can never delay or roll back the save (TXB-270).
+			# A coach assigned to an already Active deal is emailed once, by a job queued after
+			# commit so delivery can never delay or roll back the save (TXB-270). Activation
+			# itself notifies from the Set First Call Date action.
 			"crm.txb.delivery_coach_assignment.queue_assignment_notification",
 		],
 	},

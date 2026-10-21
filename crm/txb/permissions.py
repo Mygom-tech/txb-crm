@@ -16,11 +16,7 @@ from crm.txb.constants import (
 	PIPELINE_DELIVERING_COACHING,
 	STATUS_FIELDS,
 )
-from crm.txb.delivery_coach_notifications import (
-	SETTING_MODE,
-	SETTING_SLACK_BOT_TOKEN,
-	SETTING_TEST_USER,
-)
+from crm.txb.delivery_coach_notifications import SETTING_MODE, SETTING_TEST_USER
 from crm.txb.pipelines.actions import PIPELINE_ACTIONS
 from crm.txb.pipelines.transitions import is_allowed
 
@@ -43,9 +39,9 @@ ADMIN_ONLY_FIELDS = {
 }
 
 # FCRM Settings fields only a System Manager may write (TXB-288). They decide who a Delivery
-# Coach notification reaches and which Slack bot sends it, so ordinary settings access -- a
-# Sales Manager's -- must not reach them.
-SYSTEM_MANAGER_ONLY_SETTINGS = (SETTING_MODE, SETTING_TEST_USER, SETTING_SLACK_BOT_TOKEN)
+# Coach notification reaches, so ordinary settings access -- a Sales Manager's -- must not
+# reach them.
+SYSTEM_MANAGER_ONLY_SETTINGS = (SETTING_MODE, SETTING_TEST_USER)
 
 
 def can_change_status(pipeline_type: str | None, user: str | None = None) -> bool:
@@ -173,9 +169,7 @@ def guard_notification_settings(doc, method=None):
 	"""Refuse a change to a System Manager-only FCRM Settings field by anyone else.
 
 	FCRM Settings `validate` is the boundary: the settings page, `frappe.client` and REST
-	writes all save through it. The Slack bot token is a Password, which an unchanged form
-	posts back masked as asterisks -- Frappe keeps the stored token then, so that is not a
-	change. The error names the fields, never a value.
+	writes all save through it. The error names the fields, never a value.
 	"""
 	if is_system_manager():
 		return
@@ -199,10 +193,7 @@ def guard_notification_settings(doc, method=None):
 
 
 def _setting_changed(doc, before, fieldname: str) -> bool:
-	value = doc.get(fieldname) or ""
-	if doc.meta.get_field(fieldname).fieldtype == "Password" and value and doc.is_dummy_password(value):
-		return False
-	return value != ((before.get(fieldname) if before else None) or "")
+	return (doc.get(fieldname) or "") != ((before.get(fieldname) if before else None) or "")
 
 
 def guard_transition(doc, method=None):
