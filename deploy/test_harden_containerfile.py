@@ -37,13 +37,21 @@ GITCFG = "RUN git config --global http.version HTTP/1.1"
 def test_single_injection_before_bench_init():
     out = hc.harden(UPSTREAM)
     assert out.count(GITCFG) == 1, "expected exactly one git-config RUN"
-    assert out.index("http.version HTTP/1.1") < out.index("bench init"), (
+    assert out.index(GITCFG) < out.index("RUN --mount=type=secret,id=apps_json"), (
         "hardening must precede bench init"
     )
     # backend-stage USER frappe lines are left alone
     assert out.count("USER frappe") == UPSTREAM.count("USER frappe")
     # the apps_json secret RUN is preserved verbatim
     assert "RUN --mount=type=secret,id=apps_json" in out
+
+
+def test_comment_between_user_and_bench_init():
+    # upstream frappe_docker fcc73cf put a comment between the two lines
+    src = UPSTREAM.replace("USER frappe\n\nRUN", "USER frappe\n\n# note\nRUN", 1)
+    out = hc.harden(src)
+    assert out.count(GITCFG) == 1
+    assert out.index(GITCFG) < out.index("RUN --mount=type=secret,id=apps_json")
 
 
 def test_missing_anchor_fails_loudly():
@@ -105,6 +113,7 @@ def test_hardened_containerfile_lives_in_build_context():
 
 if __name__ == "__main__":
     test_single_injection_before_bench_init()
+    test_comment_between_user_and_bench_init()
     test_missing_anchor_fails_loudly()
     test_ambiguous_anchor_fails_loudly()
     test_already_hardened_fails_loudly()

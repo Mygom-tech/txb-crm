@@ -31,9 +31,11 @@ import sys
 # BuildKit secret, immediately after it drops to `USER frappe`. That
 # `USER frappe` + apps_json-secret RUN pairing is unique to the builder stage
 # (the backend stage's `USER frappe` lines are not followed by this mount), so
-# it is an unambiguous anchor for the one place the hardening belongs.
+# it is an unambiguous anchor for the one place the hardening belongs. Blank and
+# `#` comment lines may sit between the two (upstream added one in fcc73cf).
 ANCHOR_RE = re.compile(
-    r"^(USER frappe[ \t]*\n)(\n*)(RUN --mount=type=secret,id=apps_json)",
+    r"^(USER frappe[ \t]*\n)((?:[ \t]*(?:#[^\n]*)?\n)*)"
+    r"(RUN --mount=type=secret,id=apps_json)",
     re.MULTILINE,
 )
 
