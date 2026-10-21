@@ -9,7 +9,8 @@ Leads, Contacts, Companies and Deals (`frontend/src/components/GlobalSearch.vue`
   (`+370 612 34567`, `861234567` and `612 34567` are the same number).
 - **Groups**, in this order: Leads · Contacts · Companies · Deals, each showing its 5 newest
   matches and how many there are in total. Narrow the query to see others.
-- **Converted Leads are hidden**: the person continues as a Contact and a Deal.
+- **Converted Leads are included**: they open as the read-only archived Lead and show their
+  "Converted" status as the badge.
 - **Visibility**: candidates are re-read through `frappe.get_list`, so the existing Lead/Deal
   visibility rules apply and nobody finds a record they could not open.
 - **Keyboard**: ↑/↓ move, Enter opens, Esc closes. At least 2 characters before searching.
