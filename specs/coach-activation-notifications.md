@@ -26,7 +26,7 @@ client is not emailed again. Before activation a coach change sends nothing.
   **Live** sends to the coach and the client.
 - A client with no valid primary email fails only `client_email`.
 
-## Templates (editable Email Templates, TXB-116 wrapper)
+## Templates (editable Email Templates, content only — see email-shell.md)
 
 - `TxB Delivery Coach Assignment` — re-seeded on migrate only while unedited.
 - `TxB Coach Assigned to Client` — seeded once.
