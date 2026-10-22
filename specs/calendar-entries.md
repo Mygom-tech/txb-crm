@@ -19,4 +19,4 @@ Scheduled dates become calendar Events through `crm.txb.meetings` (one keyed Eve
 - `crm.api.event.get_calendar_events` backs the Calendar list. System Managers read without Frappe's
   Event owner/participant rule (which only exempts Administrator); everyone else gets `get_list`.
 - System Managers get an "All users" button: empty user = no owner/participant filter.
-- `has_calendar_admin_permission` (Event `has_permission` hook) lets admins open any Event; edits stay owner-only.
+- `crm.api.event.get_calendar_event` backs the event panel so admins can open any listed Event (a `has_permission` hook can't grant this on both Frappe 15 and 16); edits stay owner-only.

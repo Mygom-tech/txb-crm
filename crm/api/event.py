@@ -397,11 +397,14 @@ def get_calendar_events(
 	)
 
 
-def has_calendar_admin_permission(doc, ptype=None, user=None, debug=False) -> bool | None:
-	"""Let admins open any Event the Calendar's "All users" view lists; edits stay owner-only.
+@frappe.whitelist()
+def get_calendar_event(name: str) -> dict:
+	"""One Event for the Calendar panel, readable by admins wherever the list above showed it.
 
-	Returning None defers to Frappe's own Event rule (public, owner or participant).
+	Done here rather than through a has_permission hook: Frappe 15 lets the first hook decide
+	while Frappe 16 ANDs them, so no hook can grant this read safely on both.
 	"""
-	if ptype == "read" and is_admin(user):
-		return True
-	return None
+	doc = frappe.get_doc("Event", name)
+	if not is_admin():
+		doc.check_permission("read")
+	return doc.as_dict()

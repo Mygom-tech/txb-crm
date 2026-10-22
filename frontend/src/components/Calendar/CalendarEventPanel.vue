@@ -582,7 +582,7 @@ import {
   dayjs,
   CalendarColorMap as colorMap,
   CalendarActiveEvent as activeEvent,
-  createDocumentResource,
+  createResource,
   TabButtons,
   toast,
   call,
@@ -731,18 +731,19 @@ function fetchEvent(oldMode) {
     event.value.id !== 'new-event' &&
     event.value.id !== 'duplicate-event'
   ) {
-    eventResource.value = createDocumentResource({
-      doctype: 'Event',
-      name: event.value.id,
-      fields: ['*'],
+    // Not createDocumentResource: admins may open others' private Events, see get_calendar_event.
+    eventResource.value = createResource({
+      url: 'crm.api.event.get_calendar_event',
+      params: { name: event.value.id },
+      cache: ['calendar-event', event.value.id],
       onSuccess: (data) => {
         _event.value = parseEventDoc(data)
         oldEvent.value = deepClone(_event.value)
         handleReadonlyEvent()
       },
     })
-    if (eventResource.value.doc && !event.value.reloadEvent) {
-      _event.value = parseEventDoc(eventResource.value.doc)
+    if (eventResource.value.data && !event.value.reloadEvent) {
+      _event.value = parseEventDoc(eventResource.value.data)
       oldEvent.value = deepClone(_event.value)
     } else {
       eventResource.value.reload()

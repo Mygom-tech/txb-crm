@@ -145,7 +145,6 @@ has_permission = {
 	"CRM Lead": "crm.permissions.org_hierarchy.has_lead_permission",
 	"CRM Deal": "crm.permissions.org_hierarchy.has_deal_permission",
 	"CRM Notification": "crm.fcrm.doctype.crm_notification.crm_notification.has_permission",
-	"Event": "crm.api.event.has_calendar_admin_permission",
 }
 
 # DocType Class
