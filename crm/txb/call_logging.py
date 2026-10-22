@@ -15,11 +15,15 @@ import frappe
 from frappe import _
 from frappe.utils import escape_html, now_datetime
 
+from crm.txb import meetings
 from crm.txb.constants import DIAL_RESULT_RETRY, DIAL_RESULTS
 
 CALL_LOG_DOCTYPE = "CRM Call Log"
 NOTE_DOCTYPE = "FCRM Note"
 TASK_DOCTYPE = "CRM Task"
+
+# The one calendar Event a Deal or Contact keeps for its next call; rescheduling moves it.
+FOLLOW_UP_CALL_FLOW = "call_follow_up"
 
 # The records a call can be logged on.
 LOGGABLE_DOCTYPES = ("CRM Lead", "CRM Deal", "Contact")
@@ -116,11 +120,10 @@ def record_call(reference_doctype: str, reference_name: str, call: dict) -> dict
 		}
 	)
 	log.insert(ignore_permissions=True)
-	follow_up = (
-		_create_follow_up_task(reference_doctype, reference_name, call["follow_up_date"])
-		if call["follow_up_date"]
-		else None
-	)
+	follow_up = None
+	if call["follow_up_date"]:
+		follow_up = _create_follow_up_task(reference_doctype, reference_name, call["follow_up_date"])
+		_schedule_follow_up_call(reference_doctype, reference_name, call["follow_up_date"])
 	return {"call_log": log.name, "note": note, "follow_up": follow_up}
 
 
@@ -168,3 +171,36 @@ def _create_follow_up_task(reference_doctype: str, reference_name: str, due) -> 
 	)
 	task.insert(ignore_permissions=True)
 	return task.name
+
+
+def _schedule_follow_up_call(reference_doctype: str, reference_name: str, starts_on):
+	"""Put the next call on the calendar of whoever logged this one and the record's people."""
+	me = meetings.user_participant(frappe.session.user)
+	caller = [me] if me else []
+	if reference_doctype == meetings.LEAD_DOCTYPE:
+		# A Lead's follow-up is occurrence-based: a new date retires the previous open one.
+		meetings.sync_lead_occurrence_event(
+			reference_docname=reference_name,
+			flow=meetings.LEAD_FOLLOW_UP_FLOW,
+			submission_id=meetings.submission_id(None, starts_on),
+			# Same subject as the Lead's Schedule Follow-up action, which owns this flow too.
+			subject=_("Follow-up"),
+			starts_on=starts_on,
+			participants=meetings.lead_participants(frappe.get_doc(reference_doctype, reference_name))
+			+ caller,
+		)
+		return
+	# A Deal or Contact keeps one follow-up Event that moves, so each caller joins it as they log.
+	people = (
+		meetings.deal_participants(frappe.get_doc(reference_doctype, reference_name))
+		if reference_doctype == meetings.DEAL_DOCTYPE
+		else []
+	)
+	meetings.sync_meeting_event(
+		reference_doctype=reference_doctype,
+		reference_docname=reference_name,
+		flow=FOLLOW_UP_CALL_FLOW,
+		subject=_("Follow-up call"),
+		starts_on=starts_on,
+		participants=people + caller,
+	)

@@ -42,10 +42,16 @@ from crm.txb.pipelines.common import (
 	add_note,
 	add_task,
 	lines,
+	set_deal_meeting,
 )
 
 import frappe
+from frappe import _
 from frappe.utils import getdate
+
+# Each coaching call owns its own calendar Event, keyed `coaching_call_<number>`, so scheduling
+# the next call never moves a past one.
+MEETING_FLOW_COACHING_CALL = "coaching_call"
 
 # Internal handler-result key: the handler left the deal untouched, so `run_action` skips its
 # save and the deal's save hooks do not run again (TXB-273 replay).
@@ -110,6 +116,7 @@ def set_first_call_date(deal, data):
 	are notified (`crm.txb.delivery_coach_assignment.record_activation`)."""
 	deal.custom_first_call_date = data.get("first_call_date")
 	record_activation(deal)
+	set_coaching_call_event(deal, 1, data.get("first_call_date"))
 
 	if data.get("call_notes"):
 		add_note(
@@ -117,6 +124,18 @@ def set_first_call_date(deal, data):
 			"First Call Scheduled",
 			lines(f"First call: {data.get('first_call_date')}", data["call_notes"]),
 		)
+
+
+def set_coaching_call_event(deal, number: int, starts_on):
+	"""Put coaching call #number on the calendar of the deal's owner, coach and Contacts."""
+	# ponytail: synced from the actions only; editing the date on the Deal form leaves the Event
+	# where it was. Move to a Deal on_update hook if hand edits become common.
+	set_deal_meeting(
+		deal,
+		flow=f"{MEETING_FLOW_COACHING_CALL}_{number}",
+		subject=_("Coaching Call #{0}").format(number),
+		starts_on=starts_on,
+	)
 
 
 def log_coaching_call_defaults(deal) -> dict:
@@ -392,7 +411,9 @@ def log_coaching_call(deal, data):
 			"Next Coaching Call",
 			"Follow up for next coaching call",
 			assigned_to=deal.custom_assigned_coach,
+			due_date=data["next_call_date"],
 		)
+		set_coaching_call_event(deal, call_number + 1, data["next_call_date"])
 
 	return recap_result(note.name, recap.name, recap.status)
 

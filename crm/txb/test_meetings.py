@@ -184,6 +184,22 @@ class TestMeetingIdentity(FrappeTestCase):
 			[{"reference_doctype": "Contact", "reference_docname": "Contact-A"}],
 		)
 
+	def test_deal_participants_include_the_delivery_coach(self):
+		"""The delivery coach attends a coaching Deal's calls, so their calendar shows them."""
+		deal = FakeDeal(contacts=[FakeRow("Contact-A")])
+		deal.custom_delivery_coach = "coach-nobody@example.com"
+		self.assertEqual(
+			deal_participants(deal),
+			[
+				{
+					"reference_doctype": "User",
+					"reference_docname": "coach-nobody@example.com",
+					"email": "coach-nobody@example.com",
+				},
+				{"reference_doctype": "Contact", "reference_docname": "Contact-A"},
+			],
+		)
+
 	def test_normalize_email_trims_and_lowercases(self):
 		self.assertEqual(_normalize_email("  Who@Example.COM "), "who@example.com")
 		self.assertEqual(_normalize_email(None), "")
