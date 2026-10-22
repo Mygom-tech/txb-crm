@@ -106,11 +106,17 @@
               @update:modelValue="updateActiveView($event)"
             />
 
+            <Button
+              v-if="isAdmin()"
+              :variant="currentUser ? 'subtle' : 'solid'"
+              :label="__('All users')"
+              @click="updateUser('')"
+            />
             <Link
               class="form-control"
-              :value="getUser(currentUser).full_name"
+              :value="currentUser ? getUser(currentUser).full_name : ''"
               doctype="User"
-              :placeholder="__('John Doe')"
+              :placeholder="__('All users')"
               :filters="{
                 name: ['in', users.data.crmUsers?.map((user) => user.name)],
                 ignore_user_type: 1,
@@ -119,7 +125,11 @@
               @change="(option) => updateUser(option)"
             >
               <template #prefix>
-                <UserAvatar class="mr-2 !h-4 !w-4" :user="currentUser" />
+                <UserAvatar
+                  v-if="currentUser"
+                  class="mr-2 !h-4 !w-4"
+                  :user="currentUser"
+                />
               </template>
               <template #item-prefix="{ option }">
                 <UserAvatar class="mr-2" :user="option.value" size="sm" />
@@ -189,7 +199,7 @@ import { useRoute } from 'vue-router'
 const { user } = sessionStore()
 const { $dialog } = globalStore()
 const { settings } = getSettings()
-const { users, getUser } = usersStore()
+const { users, getUser, isAdmin } = usersStore()
 const route = useRoute()
 
 const modeMap = {
@@ -227,7 +237,9 @@ function buildEventFilters(range) {
   return filters
 }
 
+// An empty user is the admin-only "All users" view: no owner/participant filter.
 function buildEventOrFilters() {
+  if (!currentUser.value) return []
   return [
     ['owner', '=', currentUser.value],
     ['Event Participants', 'email', '=', currentUser.value],
@@ -236,6 +248,8 @@ function buildEventOrFilters() {
 
 const events = createListResource({
   doctype: 'Event',
+  // Lets admins read other users' private Events; see get_calendar_events.
+  url: 'crm.api.event.get_calendar_events',
   fields: [
     'name',
     'status',
