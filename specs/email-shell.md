@@ -5,12 +5,13 @@ goes out in one TXB-branded shell: `crm/templates/emails/standard.html`. It over
 `templates/emails/standard.html` because crm is searched before frappe by the Jinja loader, so
 no send call changes.
 
-- **Look** (design option B): blue `#1131f2` header with the white logo, a 4 px `#ff3c00` rule,
-  white content card on `#f2f2f2`, gray `#cccccc` footer in Lithuanian
-  ("Ten Times Better Consulting · txbconsulting.com").
-- **Email-safe**: tables and inline styles only, 600 px wide; the logo is a hosted 2× PNG
-  (`/assets/crm/images/txb-email-logo.png`) since Gmail and Outlook do not render SVG. Fonts fall
-  back to Helvetica/Arial: Roobert never loads in mail clients. Outlook squares the corners.
+- **Look** (design option C, Editorial White): all-white, no card. Logo top-left, content,
+  then a 1 px `#cccccc` rule over a two-cell footer in `#4d4d4d`
+  ("Ten Times Better Consulting" left, "txbconsulting.com" right).
+- **Email-safe**: tables and inline styles only, 600 px wide; the logo is the brand-hosted PNG
+  `https://assets.txbconsulting.com/logo.png` (175×40, shown at 131×30) since Gmail and Outlook
+  do not render SVG. The old `/assets/crm/images/txb-email-logo.png` stays: already-sent emails
+  still load it. Fonts fall back to Helvetica/Arial: Roobert never loads in mail clients.
 - **Kept from Frappe**: `header` (notification title + indicator), `print_html` and its footer
   (email-account footer, System Settings "Email Footer Address", unsubscribe slot, open-tracking
   pixel) under the brand line. Only the "Sent via Frappe" line is off

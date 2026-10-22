@@ -19,7 +19,7 @@ class TestEmailShell(FrappeTestCase):
 		)
 
 		for part in (
-			"/assets/crm/images/txb-email-logo.png",
+			"https://assets.txbconsulting.com/logo.png",
 			"Ten Times Better Consulting",
 			"Turinys",
 			"Antraštė",
