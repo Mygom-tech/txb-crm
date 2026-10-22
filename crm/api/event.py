@@ -19,6 +19,8 @@ from datetime import datetime, timedelta
 import frappe
 from frappe.utils import add_to_date, now_datetime
 
+from crm.txb.permissions import is_admin
+
 
 def trigger_offset_event_notifications():
 	"""Trigger event notifications for offset-based intervals (minutes)."""
@@ -370,3 +372,39 @@ def _format_time_remaining(before_value, interval):
 def _send_system_notification(notification):
 	"""Send system notification for an event"""
 	frappe.publish_realtime("event_notification", notification)
+
+
+@frappe.whitelist()
+def get_calendar_events(
+	fields: str | list | None = None,
+	filters: str | list | dict | None = None,
+	or_filters: str | list | dict | None = None,
+	limit_page_length: int = 0,
+) -> list:
+	"""The Calendar page's Event list.
+
+	Frappe only lets Administrator past Event's owner/participant rule, so an admin browsing
+	another user's (or everyone's) calendar would otherwise see an empty week. Admins read without
+	that rule; everyone else gets the normal permission-checked list.
+	"""
+	return frappe.get_list(
+		"Event",
+		fields=fields,
+		filters=filters,
+		or_filters=or_filters,
+		limit_page_length=limit_page_length,
+		ignore_permissions=is_admin(),
+	)
+
+
+@frappe.whitelist()
+def get_calendar_event(name: str) -> dict:
+	"""One Event for the Calendar panel, readable by admins wherever the list above showed it.
+
+	Done here rather than through a has_permission hook: Frappe 15 lets the first hook decide
+	while Frappe 16 ANDs them, so no hook can grant this read safely on both.
+	"""
+	doc = frappe.get_doc("Event", name)
+	if not is_admin():
+		doc.check_permission("read")
+	return doc.as_dict()

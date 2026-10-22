@@ -25,7 +25,7 @@ import frappe
 from frappe.utils import add_to_date, escape_html, get_datetime
 
 from crm.txb import human_contact
-from crm.txb.constants import FIELD_CONVERTED_CONTACT, FIELD_MEETING_KEY
+from crm.txb.constants import FIELD_CONVERTED_CONTACT, FIELD_DELIVERY_COACH, FIELD_MEETING_KEY
 from crm.txb.people import format_person_name
 
 EVENT_DOCTYPE = "Event"
@@ -296,7 +296,7 @@ def _cancel_open_lead_events(lead_name: str, flow: str, except_key: str | None =
 
 
 def deal_participants(deal) -> list[dict]:
-	"""The required Event attendees derivable from a Deal: its owner and its linked Contacts.
+	"""The required Event attendees derivable from a Deal: its owner, delivery coach and Contacts.
 
 	TXB-212: the Deal owner (a User) is the source-record owner and every linked Contact is a
 	customer target, so both belong on the meeting when they resolve. The owner is emitted first,
@@ -304,9 +304,11 @@ def deal_participants(deal) -> list[dict]:
 	resolvable email is omitted rather than blocking the meeting; blank Contact rows are skipped.
 	"""
 	participants = []
-	owner = _owner_participant(deal.get("deal_owner"))
-	if owner:
-		participants.append(owner)
+	# The delivery coach runs a coaching Deal's calls, so they attend its meetings too.
+	for user in (deal.get("deal_owner"), deal.get(FIELD_DELIVERY_COACH)):
+		attendee = user_participant(user)
+		if attendee:
+			participants.append(attendee)
 	for row in deal.get("contacts") or []:
 		contact = row.get("contact") if hasattr(row, "get") else getattr(row, "contact", None)
 		if contact:
@@ -324,7 +326,7 @@ def lead_participants(lead) -> list[dict]:
 	resolved, so a Lead with no owner or no email still schedules its meeting with fewer attendees.
 	"""
 	participants = []
-	owner = _owner_participant(lead.get("lead_owner"))
+	owner = user_participant(lead.get("lead_owner"))
 	if owner:
 		participants.append(owner)
 	target = _lead_customer_participant(lead)
@@ -378,7 +380,7 @@ def _contact_primary_email(contact: str | None) -> str | None:
 	return frappe.db.get_value(CONTACT_DOCTYPE, contact, "email_id")
 
 
-def _owner_participant(owner: str | None) -> dict | None:
+def user_participant(owner: str | None) -> dict | None:
 	"""An Event Participant for a source-record owner (a User), or None when it cannot resolve.
 
 	The owner is a User link, so the participant references that User and carries the User's email
