@@ -161,7 +161,7 @@ def _should_update_modified(doc: Communication | Comment) -> bool:
 	if not (doc.reference_doctype and doc.reference_name):
 		return False
 
-	if doc.reference_doctype not in ["CRM Lead", "CRM Deal"]:
+	if doc.reference_doctype not in ["CRM Lead", "CRM Deal", "Contact"]:
 		return False
 
 	if doc.doctype not in ["Comment", "Communication"]:
@@ -238,7 +238,7 @@ def on_comment_insert(doc: Comment, method: str | None = None):
 	if not (doc.reference_doctype and doc.reference_name):
 		return
 
-	if doc.reference_doctype not in ["CRM Lead", "CRM Deal"] or doc.comment_type != "Comment":
+	if doc.reference_doctype not in ["CRM Lead", "CRM Deal", "Contact"] or doc.comment_type != "Comment":
 		return
 
 	if not _should_update_modified(doc):
@@ -260,11 +260,12 @@ def on_communication_update(doc: Communication, method: str | None = None):
 	if not (doc.reference_doctype and doc.reference_name):
 		return
 
-	if doc.reference_doctype not in ["CRM Lead", "CRM Deal"]:
+	if doc.reference_doctype not in ["CRM Lead", "CRM Deal", "Contact"]:
 		return
 
 	should_update_modified = _should_update_modified(doc)
-	status = _get_communication_status(doc)
+	# A Contact has no communication_status field; only its modified time moves.
+	status = _get_communication_status(doc) if doc.reference_doctype != "Contact" else None
 
 	values = {}
 
