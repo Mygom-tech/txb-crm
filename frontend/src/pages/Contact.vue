@@ -161,16 +161,19 @@
         </button>
       </template>
       <template #tab-panel="{ tab }">
-        <!-- The aggregate history stays read-only; calls are logged from the header. -->
+        <!-- The person-level history: the Contact's own records, its archived Leads and its
+             linked Opportunities, rendered by the same timeline as Leads and Deals. -->
         <div
-          v-if="tab.name === 'Activity'"
+          v-if="TIMELINE_TABS.includes(tab.name)"
           class="flex flex-1 flex-col overflow-hidden"
         >
           <Activities
-            readOnly
+            v-model:tabIndex="tabIndex"
             doctype="Contact"
             :docname="contactId"
-            :tabs="activityTabs"
+            :tabs="tabs"
+            @newNote="newNote"
+            @logCall="logCall"
           />
         </div>
         <ContactNotes
@@ -233,14 +236,15 @@ import SidePanelLayout from '@/components/SidePanelLayout.vue'
 import LayoutHeader from '@/components/LayoutHeader.vue'
 import PhoneIcon from '@/components/Icons/PhoneIcon.vue'
 import CameraIcon from '@/components/Icons/CameraIcon.vue'
-import DealsIcon from '@/components/Icons/DealsIcon.vue'
-import ActivityIcon from '@/components/Icons/ActivityIcon.vue'
-import NoteIcon from '@/components/Icons/NoteIcon.vue'
 import DealsListView from '@/components/ListViews/DealsListView.vue'
 import Activities from '@/components/Activities/Activities.vue'
 import ContactNotes from '@/components/ContactNotes.vue'
 import ContactCalls from '@/components/ContactCalls.vue'
-import { contactActivitiesResource } from '@/composables/contactActivityFeed'
+import {
+  contactActivitiesResource,
+  contactTabs,
+  TIMELINE_TABS,
+} from '@/composables/contactActivityFeed'
 import ContactSourceLeads from '@/components/ContactSourceLeads.vue'
 import ContactInactivityStatus from '@/components/ContactInactivity/ContactInactivityStatus.vue'
 import CustomActions from '@/components/CustomActions.vue'
@@ -382,43 +386,10 @@ function changeContactImage(file) {
 }
 
 const tabIndex = ref(0)
-const tabs = [
-  {
-    name: 'Deals',
-    label: 'Deals',
-    icon: DealsIcon,
-    count: computed(() => deals.data?.length),
-  },
-  {
-    name: 'Notes',
-    label: 'Notes',
-    icon: NoteIcon,
-    count: computed(() => contactActivities.data?.notes?.length),
-  },
-  {
-    name: 'Calls',
-    label: 'Calls',
-    icon: PhoneIcon,
-    count: computed(() => contactActivities.data?.calls?.length),
-  },
-  {
-    name: 'Activity',
-    label: 'Activity',
-    icon: ActivityIcon,
-  },
-]
-
-// The Contact Activity tab is a single read-only aggregate timeline: the deduplicated
-// person-level history across every archived Lead and linked Opportunity, in one chronological
-// stream. Activities keys its rendered category off tab name; a single 'Activity' tab yields
-// the unified log (no composer/category switcher, which stay Lead/Deal-only).
-const activityTabs = [
-  {
-    name: 'Activity',
-    label: __('Activity'),
-    icon: ActivityIcon,
-  },
-]
+const tabs = contactTabs({
+  deals: () => deals.data,
+  feed: () => contactActivities.data,
+})
 
 const deals = createResource({
   url: 'crm.api.contact.get_linked_deals',

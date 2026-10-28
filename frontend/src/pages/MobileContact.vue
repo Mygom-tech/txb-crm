@@ -141,23 +141,18 @@
             />
           </div>
         </div>
-        <!-- The aggregate history stays read-only; Log a Call is the only Activity action. -->
+        <!-- Same timeline as desktop; Log a Call and New Note are in its header menu. -->
         <div
-          v-else-if="tab.name === 'Activity'"
+          v-else-if="TIMELINE_TABS.includes(tab.name)"
           class="flex flex-1 flex-col overflow-hidden"
         >
-          <div class="flex justify-end px-3 pt-4 sm:px-10">
-            <Button
-              :label="__('Log a Call')"
-              icon-left="phone"
-              @click="logCall"
-            />
-          </div>
           <Activities
-            readOnly
+            v-model:tabIndex="tabIndex"
             doctype="Contact"
             :docname="contactId"
-            :tabs="activityTabs"
+            :tabs="tabs"
+            @newNote="newNote"
+            @logCall="logCall"
           />
         </div>
         <ContactNotes
@@ -207,14 +202,15 @@ import LayoutHeader from '@/components/LayoutHeader.vue'
 import DetailsIcon from '@/components/Icons/DetailsIcon.vue'
 import PhoneIcon from '@/components/Icons/PhoneIcon.vue'
 import CameraIcon from '@/components/Icons/CameraIcon.vue'
-import DealsIcon from '@/components/Icons/DealsIcon.vue'
-import ActivityIcon from '@/components/Icons/ActivityIcon.vue'
-import NoteIcon from '@/components/Icons/NoteIcon.vue'
 import DealsListView from '@/components/ListViews/DealsListView.vue'
 import Activities from '@/components/Activities/Activities.vue'
 import ContactNotes from '@/components/ContactNotes.vue'
 import ContactCalls from '@/components/ContactCalls.vue'
-import { contactActivitiesResource } from '@/composables/contactActivityFeed'
+import {
+  contactActivitiesResource,
+  contactTabs,
+  TIMELINE_TABS,
+} from '@/composables/contactActivityFeed'
 import ContactSourceLeads from '@/components/ContactSourceLeads.vue'
 import ContactInactivityStatus from '@/components/ContactInactivity/ContactInactivityStatus.vue'
 import { validateIsImageFile } from '@/utils'
@@ -243,7 +239,7 @@ import {
 import { useDoctypeModal } from '@/composables/doctypeModal'
 import { useContactActivityActions } from '@/composables/contactActivityActions'
 import { useTelemetry } from 'frappe-ui/frappe'
-import { ref, computed, h, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 const { brand } = getSettings()
@@ -350,44 +346,11 @@ async function deleteContact() {
 
 const tabIndex = ref(0)
 const tabs = [
-  {
-    name: 'Details',
-    label: __('Details'),
-    icon: DetailsIcon,
-  },
-  {
-    name: 'Deals',
-    label: __('Deals'),
-    icon: h(DealsIcon, { class: 'h-4 w-4' }),
-    count: computed(() => deals.data?.length),
-  },
-  {
-    name: 'Notes',
-    label: __('Notes'),
-    icon: h(NoteIcon, { class: 'h-4 w-4' }),
-    count: computed(() => contactActivities.data?.notes?.length),
-  },
-  {
-    name: 'Calls',
-    label: __('Calls'),
-    icon: h(PhoneIcon, { class: 'h-4 w-4' }),
-    count: computed(() => contactActivities.data?.calls?.length),
-  },
-  {
-    name: 'Activity',
-    label: __('Activity'),
-    icon: h(ActivityIcon, { class: 'h-4 w-4' }),
-  },
-]
-
-// Same read-only aggregate contract as desktop: a single unified Activity timeline so mobile
-// and desktop render identical person-level history.
-const activityTabs = [
-  {
-    name: 'Activity',
-    label: __('Activity'),
-    icon: ActivityIcon,
-  },
+  { name: 'Details', label: __('Details'), icon: DetailsIcon },
+  ...contactTabs({
+    deals: () => deals.data,
+    feed: () => contactActivities.data,
+  }),
 ]
 
 const deals = createResource({
