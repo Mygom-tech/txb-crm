@@ -1,9 +1,5 @@
 <template>
-  <!-- Read-only aggregate mode (Contact) suppresses every composer/"New" affordance: the
-       header is the entry point for emails, comments, notes, tasks, attachments, events and
-       WhatsApp, so it is not rendered at all rather than gated button-by-button. -->
   <ActivityHeader
-    v-if="!readOnly"
     v-model="tabIndex"
     v-model:showWhatsappTemplates="showWhatsappTemplates"
     v-model:showFilesUploader="showFilesUploader"
@@ -13,7 +9,10 @@
     :doc="doc"
     :whatsappBox="whatsappBox"
     :modalRef="modalRef"
+    :doctype="doctype"
     @createCoachingNote="emit('createCoachingNote')"
+    @newNote="emit('newNote')"
+    @logCall="emit('logCall')"
   />
   <FadedScrollableDiv class="flex flex-col h-full overflow-y-auto">
     <div
@@ -130,7 +129,7 @@
           <!-- Aggregate Contact log: attribute each row to its archived Lead / linked
                Opportunity source and pre/post-conversion phase above the entry. -->
           <div
-            v-if="readOnly"
+            v-if="isContact"
             class="px-3 pt-3 sm:px-10"
           >
             <ActivitySourceBadge :activity="activity" :leadEmails="leadEmails" />
@@ -205,7 +204,6 @@
             <EmailArea
               :activity="activity"
               :emailBox="emailBox || {}"
-              :readOnly="readOnly"
             />
           </div>
           <div
@@ -215,7 +213,6 @@
           >
             <CommentArea
               :activity="activity"
-              :readOnly="readOnly"
               @reload="all_activities.reload()"
             />
           </div>
@@ -304,9 +301,7 @@
                 <span>{{ __('added a note') }}</span>
                 <button
                   type="button"
-                  class="max-w-xs truncate font-medium text-ink-gray-8"
-                  :class="readOnly ? '' : 'hover:underline'"
-                  :disabled="readOnly"
+                  class="max-w-xs truncate font-medium text-ink-gray-8 hover:underline"
                   @click="openNoteActivity(activity)"
                 >
                   {{ activity.summary || activity.data?.title }}
@@ -393,9 +388,9 @@
                   </div>
                 </span>
                 <!-- TXB-133: a Task lifecycle row opens its canonical CRM Task so the full detail
-                     stays in the specialized Tasks module. Suppressed in the read-only aggregate. -->
+                     stays in the specialized Tasks module. -->
                 <button
-                  v-if="!readOnly && isTaskActivity(activity)"
+                  v-if="isTaskActivity(activity)"
                   type="button"
                   class="font-medium text-ink-gray-8 hover:underline"
                   @click="openTaskActivity(activity)"
@@ -493,7 +488,7 @@
       :top="top"
     />
   </FadedScrollableDiv>
-  <div v-if="!readOnly">
+  <div>
     <CommunicationArea
       v-if="['Emails', 'Comments', 'Activity'].includes(title)"
       ref="emailBox"
@@ -513,13 +508,12 @@
     />
   </div>
   <WhatsappTemplateSelectorModal
-    v-if="whatsappEnabled && !readOnly"
+    v-if="whatsappEnabled && !isContact"
     v-model="showWhatsappTemplates"
     :doctype="doctype"
     @send="(t) => sendTemplate(t)"
   />
   <AllModals
-    v-if="!readOnly"
     ref="modalRef"
     v-model="all_activities"
     :doctype="doctype"
@@ -527,7 +521,7 @@
     @refreshDocument="_document.reload()"
   />
   <FilesUploader
-    v-if="!readOnly"
+    v-if="!isContact"
     v-model="showFilesUploader"
     :doctype="doctype"
     :docname="docname"
@@ -612,14 +606,20 @@ const props = defineProps({
   doctype: { type: String, default: 'CRM Lead' },
   docname: { type: String, default: '' },
   tabs: { type: Array, default: () => [] },
-  // Read-only aggregate contract (Contact). When true the timeline renders the deduplicated
-  // cross-source history with per-row source/phase attribution and suppresses every
-  // Contact-side mutation control (composers, uploads, edits, deletes). Lead/Deal callers
-  // leave this false and keep their existing editable behavior unchanged.
-  readOnly: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['beforeSave', 'afterSave', 'createCoachingNote'])
+// A Contact renders the deduplicated cross-source history (its own records, archived Leads and
+// linked Opportunities) with a per-row source badge. Note and Log a Call go back to the Contact
+// page, which owns their Opportunity picker.
+const isContact = computed(() => props.doctype === 'Contact')
+
+const emit = defineEmits([
+  'beforeSave',
+  'afterSave',
+  'createCoachingNote',
+  'newNote',
+  'logCall',
+])
 
 const route = useRoute()
 
@@ -657,7 +657,7 @@ const all_activities = createResource({
 // Aggregate Contact log: distinct archived-Lead sources across every loaded stream, so the
 // per-row source badge can prefer a human email label over the immutable Lead docname.
 const leadSourceDocnames = computed(() => {
-  if (!props.readOnly || !all_activities.data) return []
+  if (!isContact.value || !all_activities.data) return []
   const { versions, calls, notes, tasks, attachments } = all_activities.data
   return leadSourceNames([
     ...(versions || []),
@@ -879,9 +879,31 @@ function meetingVerb(activity) {
 // Hydrate the canonical Event so a feed row opens the same modal as the Events tab. The event
 // composable already reads this Lead/Opportunity's linked Events (with participants); the feed row
 // only carries the open target, so resolve the full record by its canonical name.
-const { events: linkedEvents } = useEvent({
+const { events: linkedEvents, eventsResource } = useEvent({
   doctype: props.doctype,
   docname: props.docname,
+})
+
+// A Contact's Events tab and rows also cover Events on its archived Leads and linked
+// Opportunities. They arrive by name in the aggregate feed, so the shared (cached) Event list
+// widens to "filed on the Contact OR named in the feed" once the feed loads.
+const contactEventNames = computed(() => {
+  if (!isContact.value) return ''
+  const names = (all_activities.data?.versions || [])
+    .filter((a) => a.activity_type === 'event')
+    .map((a) => a.canonical_docname)
+  return [...new Set(names)].sort().join('\n')
+})
+watch(contactEventNames, (names) => {
+  if (!names) return
+  eventsResource.update({
+    filters: {},
+    orFilters: [
+      ['Event', 'reference_docname', '=', props.docname],
+      ['Event', 'name', 'in', names.split('\n')],
+    ],
+  })
+  eventsResource.reload()
 })
 function openEventActivity(activity) {
   const eventName = activity.target?.name || activity.canonical_docname
@@ -893,7 +915,6 @@ function openEventActivity(activity) {
 
 // Open the canonical Note in the authoritative Notes module; the feed entry is metadata only.
 function openNoteActivity(activity) {
-  if (props.readOnly) return
   const noteName = activity.target?.name || activity.canonical_docname
   modalRef.value?.showNote({ name: noteName })
 }
@@ -905,7 +926,6 @@ function isTaskActivity(activity) {
   return activity.target?.doctype === 'CRM Task'
 }
 function openTaskActivity(activity) {
-  if (props.readOnly) return
   const taskName = activity.target?.name || activity.canonical_docname
   modalRef.value?.showTask({ name: taskName })
 }
