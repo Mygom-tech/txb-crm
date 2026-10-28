@@ -211,7 +211,8 @@ const unlinkLinkedDoc = (doc) => {
 
   call('crm.api.doc.remove_linked_doc_reference', {
     items: selectedDocs,
-    remove_contact: props.doctype == 'Contact',
+    doctype: props.doctype,
+    docname: props.docname,
     delete: doc.delete,
   }).then(() => {
     linkedDocsResource.reload()
