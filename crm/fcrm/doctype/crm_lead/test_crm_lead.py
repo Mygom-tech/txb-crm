@@ -1589,6 +1589,117 @@ class TestContactOwnedCallsAndNotes(FrappeTestCase):
 		self.assertNotIn(linked_call.name, [call.get("name") for call in other_calls])
 
 
+class TestContactOwnedTimeline(FrappeTestCase):
+	"""Comments, emails, Events and Tasks on the Contact itself join its activity aggregate,
+	alongside what its archived Lead and Opportunities already contribute."""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		ensure_conversion_result_fields()
+		ensure_deal_statuses()
+
+	def tearDown(self):
+		frappe.set_user("Administrator")
+		frappe.db.rollback()
+
+	def _contact(self, first_name, email):
+		lead = create_lead(first_name=first_name, email=email, organization=f"{first_name} Co")
+		lead.convert_to_deal()
+		return lead, frappe.db.get_value("CRM Lead", lead.name, FIELD_CONVERTED_CONTACT)
+
+	def _comment(self, doctype, name, content="a comment"):
+		return frappe.get_doc(
+			{
+				"doctype": "Comment",
+				"comment_type": "Comment",
+				"reference_doctype": doctype,
+				"reference_name": name,
+				"content": content,
+			}
+		).insert(ignore_permissions=True)
+
+	def _email(self, recipients, doctype=None, name=None, subject="Hello"):
+		return frappe.get_doc(
+			{
+				"doctype": "Communication",
+				"communication_type": "Communication",
+				"communication_medium": "Email",
+				"sent_or_received": "Sent",
+				"subject": subject,
+				"content": "body",
+				"recipients": recipients,
+				"reference_doctype": doctype,
+				"reference_name": name,
+			}
+		).insert(ignore_permissions=True)
+
+	def _of_type(self, activities, activity_type):
+		return [a for a in activities if a.get("activity_type") == activity_type]
+
+	def test_contact_feed_includes_contact_owned_comment_email_event_task(self):
+		_, contact = self._contact("Cora", "cora@ex.com")
+		comment = self._comment("Contact", contact)
+		email = self._email("cora@ex.com", "Contact", contact)
+		event = frappe.get_doc(
+			{
+				"doctype": "Event",
+				"subject": "Follow-up",
+				"event_type": "Private",
+				"starts_on": frappe.utils.now_datetime(),
+				"reference_doctype": "Contact",
+				"reference_docname": contact,
+			}
+		).insert(ignore_permissions=True)
+		task = frappe.get_doc(
+			{
+				"doctype": "CRM Task",
+				"title": "Send proposal",
+				"status": "Todo",
+				"reference_doctype": "Contact",
+				"reference_docname": contact,
+			}
+		).insert(ignore_permissions=True)
+
+		activities, _, _, tasks, _ = activities_api.get_contact_activities(contact)
+
+		def own(activity_type, name):
+			return [
+				a
+				for a in self._of_type(activities, activity_type)
+				if a.get("canonical_docname") == name and a.get("source_doctype") == "Contact"
+			]
+
+		self.assertEqual(len(own("comment", comment.name)), 1)
+		self.assertEqual(len(own("communication", email.name)), 1)
+		self.assertEqual(len(own("event", event.name)), 1)
+		self.assertEqual(len(own("creation", task.name)), 1)
+		self.assertIn(task.name, [t.get("name") for t in tasks])
+
+	def test_contact_feed_includes_email_matched_by_address(self):
+		_, contact = self._contact("Dina", "dina@ex.com")
+		email = self._email("dina@ex.com")
+
+		activities = activities_api.get_contact_activities(contact)[0]
+
+		matched = [a for a in self._of_type(activities, "communication") if a.get("name") == email.name]
+		self.assertEqual(len(matched), 1)
+
+	def test_contact_feed_keeps_lead_comment_and_email(self):
+		lead = create_lead(first_name="Eli", email="eli@ex.com", organization="Eli Co")
+		comment = self._comment("CRM Lead", lead.name)
+		email = self._email("eli@ex.com", "CRM Lead", lead.name)
+		lead.convert_to_deal()
+		contact = frappe.db.get_value("CRM Lead", lead.name, FIELD_CONVERTED_CONTACT)
+
+		activities = activities_api.get_contact_activities(contact)[0]
+
+		for activity_type, name in (("comment", comment.name), ("communication", email.name)):
+			rows = [a for a in self._of_type(activities, activity_type) if a.get("name") == name]
+			self.assertEqual(len(rows), 1, activity_type)
+			self.assertEqual(rows[0]["source_doctype"], "CRM Lead")
+
+
 class TestLeadReferredBy(FrappeTestCase):
 	"""The Lead-or-Contact Referred By contract: migration, validation and search (TXB-254)."""
 
