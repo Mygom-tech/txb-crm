@@ -9,7 +9,7 @@
           v-if="!editing"
           :label="__('Refresh')"
           :iconLeft="LucideRefreshCcw"
-          @click="dashboardItems.reload"
+          @click="refresh"
         />
         <Button
           v-if="!editing && isAdmin()"
@@ -118,6 +118,22 @@
     </div>
 
     <div class="w-full overflow-y-scroll">
+      <section
+        v-if="!editing"
+        :key="todayKey"
+        :aria-label="__('Today')"
+        class="flex flex-col gap-4 px-5 pb-4 pt-2"
+      >
+        <div class="flex flex-wrap gap-4">
+          <div class="min-w-0 flex-[3_1_420px]">
+            <TodayTasks :user="filters.user" height="360px" />
+          </div>
+          <div class="min-w-0 flex-[2_1_300px]">
+            <TodayEvents :user="filters.user" height="360px" />
+          </div>
+        </div>
+        <WeekReferrals :user="filters.user" />
+      </section>
       <DashboardGrid
         v-if="!dashboardItems.loading && dashboardItems.data"
         v-model="dashboardItems.data"
@@ -139,6 +155,9 @@ import LucideRefreshCcw from '~icons/lucide/refresh-ccw'
 import LucideUndo2 from '~icons/lucide/undo-2'
 import LucidePenLine from '~icons/lucide/pen-line'
 import DashboardGrid from '@/components/Dashboard/DashboardGrid.vue'
+import TodayTasks from '@/components/Dashboard/Today/TodayTasks.vue'
+import TodayEvents from '@/components/Dashboard/Today/TodayEvents.vue'
+import WeekReferrals from '@/components/Dashboard/Today/WeekReferrals.vue'
 import UserAvatar from '@/components/UserAvatar.vue'
 import ViewBreadcrumbs from '@/components/ViewBreadcrumbs.vue'
 import LayoutHeader from '@/components/LayoutHeader.vue'
@@ -246,6 +265,14 @@ const dashboardItems = createResource({
   },
   auto: true,
 })
+
+// Remounting the Today widgets refetches them with the charts.
+const todayKey = ref(0)
+
+function refresh() {
+  todayKey.value++
+  dashboardItems.reload()
+}
 
 const dirty = computed(() => {
   if (!editing.value) return false
