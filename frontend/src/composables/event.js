@@ -16,19 +16,18 @@ export function useEvent({
 }) {
   const { getUser } = usersStore()
 
+  // A record's Events tab lists every Event on it to whoever can read the record (a Contact's
+  // also spans its Leads and Opportunities); Frappe's own list would hide others' Private ones.
+  const forRecord = !filters && doctype && docname
   if (!filters) {
-    if (doctype && docname) {
-      filters = {
-        reference_doctype: doctype,
-        reference_docname: docname,
-      }
-    } else {
-      filters = {}
-    }
+    filters = forRecord
+      ? { reference_doctype: doctype, reference_docname: docname }
+      : {}
   }
 
   const eventsResource = createListResource({
     doctype: 'Event',
+    url: forRecord ? 'crm.api.event.get_record_events' : undefined,
     cache: ['calendar-events', docname],
     fields: [
       'name',
@@ -55,12 +54,14 @@ export function useEvent({
 
   const eventParticipantsResource = createListResource({
     doctype: 'Event Participants',
+    url: forRecord ? 'crm.api.event.get_record_event_rows' : undefined,
     fields: ['*'],
     parent: 'Event',
   })
 
   const eventNotificationsResource = createListResource({
     doctype: 'Event Notifications',
+    url: forRecord ? 'crm.api.event.get_record_event_rows' : undefined,
     fields: ['*'],
     parent: 'Event',
   })
