@@ -31,7 +31,7 @@ Three whitelisted functions, each `@sales_user_only`, each resolving scope the s
 everyone).
 
 1. **`get_today_tasks(user=None)`** returns `[{name, title, status, priority, due_date,
-   assigned_to, reference_doctype, reference_docname, group}]`, `group` one of `overdue`,
+   assigned_to, reference_doctype, reference_docname, reference_title, group}]`, `group` one of `overdue`,
    `today`, `done`.
    - Open = status not in Done, Canceled.
    - Assigned today = an open ToDo on that CRM Task created today (`assign_to` writes one per
@@ -41,12 +41,12 @@ everyone).
      turns Done.
    - Sorted: overdue by due date, today by due date (no due date last), done by modified.
 2. **`get_today_events(user=None)`** returns `[{name, subject, starts_on, ends_on, all_day,
-   owner, reference_doctype, reference_docname}]`, sorted by `starts_on`. It reads Events
+   owner, reference_doctype, reference_docname, reference_title}]`, sorted by `starts_on`. It reads Events
    directly with SQL, so Private meetings and follow-ups of other users show for a manager, as
    on the record Events tab (#163).
 3. **`get_week_referrals(week_of=None, user=None)`** returns `{week_start, week_end, total,
    reps: [{user, points}], leads: [{name, lead_name, referred_by_type, referred_by,
-   referred_by_title, lead_owner, creation}]}`.
+   reference_title, lead_owner, creation}]}`. `reference_title` is the referrer's name.
    - `week_of` is any date in the wanted week, defaulting to today. The dialog's previous/next
      buttons use it.
    - `reps` covers every lead owner with at least one point, highest first.

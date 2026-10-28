@@ -1202,3 +1202,173 @@ def get_deal_status_change_counts(
 
 	result = query.run(as_dict=True)
 	return result or []
+
+
+# Dashboard Today widgets: Today's tasks, Today's events, Referrals this week. Always today /
+# this week (site time zone), never the dashboard's date range. A Sales User sees only their
+# own tasks and events; a manager sees everyone's, or the Sales User filter's.
+TASK_CLOSED = ("Done", "Canceled")
+
+
+def _is_widget_manager():
+	return bool({"Sales Manager", "System Manager"} & set(frappe.get_roles()))
+
+
+def _widget_user(user):
+	return (user or None) if _is_widget_manager() else frappe.session.user
+
+
+def _with_reference_titles(rows):
+	"""Adds `reference_title`, the linked record's title (a Lead's name, not its ID)."""
+	for row in rows:
+		doctype, name = row.get("reference_doctype"), row.get("reference_docname")
+		title_field = doctype and name and frappe.get_meta(doctype).get_title_field()
+		row["reference_title"] = (title_field and frappe.db.get_value(doctype, name, title_field)) or name
+	return rows
+
+
+@frappe.whitelist()
+@sales_user_only
+def get_today_tasks(user: str | None = None):
+	"""Open tasks overdue, due today or assigned today, and tasks completed today, each tagged
+	with its `group`: overdue, today or done."""
+	user = _widget_user(user)
+	today = frappe.utils.nowdate()
+	scope = {"assigned_to": user} if user else {}
+	open_scope = {**scope, "status": ("not in", TASK_CLOSED)}
+	fields = [
+		"name",
+		"title",
+		"status",
+		"priority",
+		"due_date",
+		"assigned_to",
+		"reference_doctype",
+		"reference_docname",
+		"modified",
+	]
+
+	overdue = frappe.get_all(
+		"CRM Task", filters={**open_scope, "due_date": ("<", today)}, fields=fields, order_by="due_date asc"
+	)
+	assigned_today = frappe.get_all(
+		"ToDo",
+		filters={
+			"reference_type": "CRM Task",
+			"status": ("!=", "Cancelled"),
+			"creation": (">=", today),
+			**({"allocated_to": user} if user else {}),
+		},
+		pluck="reference_name",
+	)
+	due_or_assigned = frappe.get_all(
+		"CRM Task",
+		filters=open_scope,
+		or_filters={"due_date": ("between", [today, today]), "name": ("in", assigned_today or [""])},
+		fields=fields,
+	)
+	overdue_names = {t.name for t in overdue}
+	due_today = sorted(
+		(t for t in due_or_assigned if t.name not in overdue_names),
+		key=lambda t: (t.due_date is None, t.due_date or ""),
+	)
+	# ponytail: "completed today" is Done and last modified today, since tasks keep no completed-on
+	# time; editing an old Done task brings it back. Stamp a completion time if that bites.
+	done = frappe.get_all(
+		"CRM Task",
+		filters={**scope, "status": "Done", "modified": (">=", today)},
+		fields=fields,
+		order_by="modified desc",
+	)
+	return _with_reference_titles(
+		[{**t, "group": "overdue"} for t in overdue]
+		+ [{**t, "group": "today"} for t in due_today]
+		+ [{**t, "group": "done"} for t in done]
+	)
+
+
+@frappe.whitelist()
+@sales_user_only
+def get_today_events(user: str | None = None):
+	"""Events, not cancelled, that overlap today. Read directly, so a manager also sees other
+	users' Private meetings and follow-ups; a Sales User sees the ones they own or attend."""
+	user = _widget_user(user)
+	today = frappe.utils.nowdate()
+	tomorrow = frappe.utils.add_days(today, 1)
+	Event = DocType("Event")
+	Participant = DocType("Event Participants")
+	query = (
+		frappe.qb.from_(Event)
+		.select(
+			Event.name,
+			Event.subject,
+			Event.starts_on,
+			Event.ends_on,
+			Event.all_day,
+			Event.owner,
+			Event.reference_doctype,
+			Event.reference_docname,
+		)
+		.where(Event.status != "Cancelled")
+		.where(Event.starts_on < tomorrow)
+		.where((Event.starts_on >= today) | (Event.ends_on >= today))
+		.orderby(Event.starts_on)
+	)
+	if user:
+		attending = frappe.qb.from_(Participant).select(Participant.parent).where(Participant.email == user)
+		query = query.where((Event.owner == user) | Event.name.isin(attending))
+	# ponytail: repeating events count only on the day they start; expand repeat rules if needed
+	return _with_reference_titles(query.run(as_dict=True))
+
+
+@frappe.whitelist()
+@sales_user_only
+def get_week_referrals(week_of: str | None = None, user: str | None = None):
+	"""Leads created in the week of `week_of` (default this week) with Referred By set. Each is a
+	point for its lead owner. Everyone sees the points; the lead rows are only the readable ones."""
+	from crm.txb.constants import FIELD_REFERRED_BY, FIELD_REFERRED_BY_TYPE
+
+	week_start = frappe.utils.get_first_day_of_week(week_of or frappe.utils.nowdate())
+	week_end = frappe.utils.add_days(week_start, 6)
+	filters = {FIELD_REFERRED_BY: ("is", "set"), "creation": ("between", [week_start, week_end])}
+	user = user if _is_widget_manager() else None
+	if user:
+		filters["lead_owner"] = user
+	leads = frappe.get_all(
+		"CRM Lead",
+		filters=filters,
+		fields=[
+			"name",
+			"lead_name",
+			"lead_owner",
+			"creation",
+			f"{FIELD_REFERRED_BY_TYPE} as referred_by_type",
+			f"{FIELD_REFERRED_BY} as referred_by",
+		],
+		order_by="creation desc",
+		ignore_permissions=True,
+	)
+
+	points = {}
+	for lead in leads:
+		if lead.lead_owner:
+			points[lead.lead_owner] = points.get(lead.lead_owner, 0) + 1
+	reps = [{"user": u, "points": p} for u, p in sorted(points.items(), key=lambda i: (-i[1], i[0]))]
+
+	readable = set(
+		frappe.get_list("CRM Lead", filters={"name": ("in", [l.name for l in leads] or [""])}, pluck="name")
+	)
+	rows = [
+		{**lead, "reference_doctype": lead.referred_by_type, "reference_docname": lead.referred_by}
+		for lead in leads
+		if lead.name in readable
+	]
+	_with_reference_titles(rows)
+
+	return {
+		"week_start": str(week_start),
+		"week_end": str(week_end),
+		"total": len(leads),
+		"reps": reps,
+		"leads": rows,
+	}
