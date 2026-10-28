@@ -879,32 +879,11 @@ function meetingVerb(activity) {
 // Hydrate the canonical Event so a feed row opens the same modal as the Events tab. The event
 // composable already reads this Lead/Opportunity's linked Events (with participants); the feed row
 // only carries the open target, so resolve the full record by its canonical name.
-const { events: linkedEvents, eventsResource } = useEvent({
+const { events: linkedEvents } = useEvent({
   doctype: props.doctype,
   docname: props.docname,
 })
 
-// A Contact's Events tab and rows also cover Events on its archived Leads and linked
-// Opportunities. They arrive by name in the aggregate feed, so the shared (cached) Event list
-// widens to "filed on the Contact OR named in the feed" once the feed loads.
-const contactEventNames = computed(() => {
-  if (!isContact.value) return ''
-  const names = (all_activities.data?.versions || [])
-    .filter((a) => a.activity_type === 'event')
-    .map((a) => a.canonical_docname)
-  return [...new Set(names)].sort().join('\n')
-})
-watch(contactEventNames, (names) => {
-  if (!names) return
-  eventsResource.update({
-    filters: {},
-    orFilters: [
-      ['Event', 'reference_docname', '=', props.docname],
-      ['Event', 'name', 'in', names.split('\n')],
-    ],
-  })
-  eventsResource.reload()
-})
 function openEventActivity(activity) {
   const eventName = activity.target?.name || activity.canonical_docname
   const full = (linkedEvents.value || []).find((e) => e.name === eventName)

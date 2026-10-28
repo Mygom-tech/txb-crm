@@ -398,6 +398,94 @@ def get_calendar_events(
 
 
 @frappe.whitelist()
+def get_record_events(
+	doctype: str = "Event",
+	fields: str | list | None = None,
+	filters: str | dict | None = None,
+	order_by: str | None = None,
+	limit_page_length: int = 50,
+	**kwargs,
+) -> list:
+	"""A Lead's, Opportunity's or Contact's Events tab, in `frappe.client.get_list`'s shape.
+
+	Meetings and follow-ups are Private Events (off other people's calendars), which Frappe lists
+	only to their owner and participants -- yet the record's Activity timeline shows them to
+	everyone who can read the record. This lists them on the same terms: read permission on the
+	record is the gate. A Contact also lists the Events of its archived Leads and Opportunities.
+	Writes still go through Event's own permissions.
+	"""
+	from crm.api.activities import resolve_contact_sources
+
+	filters = frappe.parse_json(filters) or {}
+	reference_doctype = filters.get("reference_doctype")
+	reference_docname = filters.get("reference_docname")
+	if not (reference_doctype and reference_docname):
+		frappe.throw(frappe._("An Event list needs the record it belongs to."))
+	frappe.has_permission(reference_doctype, "read", reference_docname, throw=True)
+
+	scopes = {reference_doctype: [reference_docname]}
+	if reference_doctype == "Contact":
+		leads, deals = resolve_contact_sources(reference_docname)
+		scopes["CRM Lead"] = leads
+		scopes["CRM Deal"] = deals
+
+	events = []
+	for scope_doctype, names in scopes.items():
+		if names:
+			events += frappe.get_all(
+				"Event",
+				filters={"reference_doctype": scope_doctype, "reference_docname": ("in", names)},
+				fields=frappe.parse_json(fields) or ["name"],
+				order_by=order_by or "creation desc",
+				limit_page_length=limit_page_length,
+			)
+	# ponytail: per-scope queries merged in Python; one OR query if a Contact ever spans many records
+	events.sort(key=lambda e: e.get("creation") or "", reverse=True)
+	return events[: int(limit_page_length)] if limit_page_length else events
+
+
+EVENT_CHILD_DOCTYPES = ("Event Participants", "Event Notifications")
+
+
+@frappe.whitelist()
+def get_record_event_rows(
+	doctype: str,
+	fields: str | list | None = None,
+	filters: str | dict | None = None,
+	**kwargs,
+) -> list:
+	"""Participants or notifications of the Events `get_record_events` listed, on the same terms:
+	an Event's rows are readable when the Event is, or when its Lead/Opportunity/Contact is."""
+	if doctype not in EVENT_CHILD_DOCTYPES:
+		frappe.throw(frappe._("Not permitted"), frappe.PermissionError)
+	filters = frappe.parse_json(filters) or {}
+	parents = filters.get("parent")
+	names = parents[1] if isinstance(parents, list) else [parents]
+	events = frappe.get_all(
+		"Event",
+		filters={"name": ("in", names or [""])},
+		fields=["name", "reference_doctype", "reference_docname"],
+	)
+	readable = [
+		e.name
+		for e in events
+		if frappe.has_permission("Event", "read", e.name)
+		or (
+			e.reference_doctype
+			and e.reference_docname
+			and frappe.has_permission(e.reference_doctype, "read", e.reference_docname)
+		)
+	]
+	if not readable:
+		return []
+	return frappe.get_all(
+		doctype,
+		filters={**filters, "parenttype": "Event", "parent": ("in", readable)},
+		fields=frappe.parse_json(fields) or ["*"],
+	)
+
+
+@frappe.whitelist()
 def get_calendar_event(name: str) -> dict:
 	"""One Event for the Calendar panel, readable by admins wherever the list above showed it.
 
