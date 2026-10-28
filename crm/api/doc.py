@@ -759,57 +759,51 @@ def get_linked_docs_of_document(doctype: str, docname: str):
 	return docs_data
 
 
-def remove_doc_link(doctype, docname):
-	if not doctype or not docname:
+def clear_links_to(doctype: str, name: str, ref_doctype: str, ref_name: str):
+	"""Remove every field on `ref_doctype` `ref_name` that points at `doctype` `name`.
+
+	Link fields are cleared, Dynamic Link pairs blanked and child-table rows that link it removed
+	(a Contact unlinked from a Deal drops its contact row, not every row). Written directly, so a
+	converted Lead's edit guard or a dependent validation cannot silently keep the link.
+	"""
+	meta = frappe.get_meta(ref_doctype)
+	if meta.issingle:
 		return
+	row = frappe.db.get_value(ref_doctype, ref_name, "*", as_dict=True) or {}
+	values = {}
+	for df in meta.get_link_fields():
+		if df.options == doctype and row.get(df.fieldname) == name:
+			values[df.fieldname] = None
+	for df in meta.get_dynamic_link_fields():
+		if row.get(df.options) == doctype and row.get(df.fieldname) == name:
+			values.update({df.options: None, df.fieldname: None})
+	if values:
+		frappe.db.set_value(ref_doctype, ref_name, values, update_modified=False)
 
-	try:
-		linked_doc_data = frappe.get_doc(doctype, docname)
-		if doctype == "CRM Notification":
-			delete_notification_type = {
-				"notification_type_doctype": "",
-				"notification_type_doc": "",
-			}
-			delete_references = {
-				"reference_doctype": "",
-				"reference_name": "",
-			}
-
-			if linked_doc_data.get("notification_type_doctype") == linked_doc_data.get("reference_doctype"):
-				delete_references.update(delete_notification_type)
-
-			linked_doc_data.update(delete_references)
-		else:
-			linked_doc_data.update(
-				{
-					"reference_doctype": "",
-					"reference_docname": "",
-				}
-			)
-		linked_doc_data.save(ignore_permissions=True)
-	except (frappe.DoesNotExistError, frappe.ValidationError):
-		pass
+	for table in meta.get_table_fields():
+		child = frappe.get_meta(table.options)
+		parent = {"parenttype": ref_doctype, "parent": ref_name, "parentfield": table.fieldname}
+		for df in child.get_link_fields():
+			if df.options == doctype:
+				frappe.db.delete(table.options, {**parent, df.fieldname: name})
+		for df in child.get_dynamic_link_fields():
+			frappe.db.delete(table.options, {**parent, df.options: doctype, df.fieldname: name})
 
 
-def remove_contact_link(doctype, docname):
-	if not doctype or not docname:
-		return
-
-	try:
-		linked_doc_data = frappe.get_doc(doctype, docname)
-		linked_doc_data.update(
-			{
-				"contact": None,
-				"contacts": [],
-			}
-		)
-		linked_doc_data.save(ignore_permissions=True)
-	except (frappe.DoesNotExistError, frappe.ValidationError):
-		pass
+def detach_all_links(doctype: str, name: str):
+	"""Clear every record's link to `doctype` `name` so it can be deleted."""
+	doc = frappe.get_doc(doctype, name)
+	for linked in get_linked_docs(doc) + get_dynamic_linked_docs(doc):
+		clear_links_to(doctype, name, linked["reference_doctype"], linked["reference_docname"])
 
 
 @frappe.whitelist()
-def remove_linked_doc_reference(items: str | list, remove_contact: bool = False, delete: bool = False):
+def remove_linked_doc_reference(items: str | list, doctype: str, docname: str, delete: bool = False):
+	"""Unlink `items` from `doctype` `docname` (the record about to be deleted), or delete them.
+
+	Failures raise instead of being skipped, so the delete dialog never reports an unlink that
+	did not happen.
+	"""
 	if isinstance(items, str):
 		items = frappe.parse_json(items)
 
@@ -817,22 +811,22 @@ def remove_linked_doc_reference(items: str | list, remove_contact: bool = False,
 		if not item.get("doctype") or not item.get("docname"):
 			continue
 
-		if not frappe.has_permission(item["doctype"], "write", item["docname"]):
-			continue
-
-		try:
-			if remove_contact:
-				remove_contact_link(item["doctype"], item["docname"])
-			else:
-				remove_doc_link(item["doctype"], item["docname"])
-
-			if delete:
-				frappe.delete_doc(item["doctype"], item["docname"])
-		except (frappe.DoesNotExistError, frappe.ValidationError):
-			# Skip if document doesn't exist or has validation errors
-			continue
+		if delete:
+			if item["doctype"] == "CRM Deal":
+				delete_deal(item["docname"])
+				continue
+			frappe.has_permission(item["doctype"], "delete", item["docname"], throw=True)
+			detach_all_links(item["doctype"], item["docname"])
+			frappe.delete_doc(item["doctype"], item["docname"])
+		else:
+			frappe.has_permission(item["doctype"], "write", item["docname"], throw=True)
+			clear_links_to(doctype, docname, item["doctype"], item["docname"])
 
 	return "success"
+
+
+# What is filed on a Deal goes with it. Calls first: a call can link the note it was logged with.
+DEAL_FILED_DOCTYPES = ("CRM Call Log", "FCRM Note", "CRM Task", "Event")
 
 
 @frappe.whitelist()
@@ -871,6 +865,18 @@ def delete_deal(name: str):
 		):
 			frappe.db.set_value("CRM Lead", lead_name, FIELD_CONVERTED_DEAL, None)
 
+	# Notes, calls, tasks and Events filed on the Deal are deleted with it (anything still linking
+	# them, e.g. a Contact-owned call's note, is unlinked first). Every other link is cleared:
+	# a Contact-owned note or call keeps its Contact and loses only its Opportunity. Comments go
+	# with the Deal and emails are unlinked, as Frappe's delete does.
+	for doctype in DEAL_FILED_DOCTYPES:
+		for filed in frappe.get_all(
+			doctype, filters={"reference_doctype": "CRM Deal", "reference_docname": name}, pluck="name"
+		):
+			detach_all_links(doctype, filed)
+			frappe.delete_doc(doctype, filed, ignore_permissions=True, flags={"deleting_deal": True})
+	detach_all_links("CRM Deal", name)
+
 	frappe.delete_doc("CRM Deal", name)
 	return "success"
 
@@ -888,6 +894,12 @@ def delete_bulk_docs(doctype: str, items: str | list, delete_linked: bool = Fals
 	items = frappe.parse_json(items)
 	if not isinstance(items, list):
 		frappe.throw(_("Items must be a list"))
+
+	if doctype == "CRM Deal":
+		# A Deal deletes with what is filed on it, through the one Deal path.
+		for doc in items:
+			delete_deal(doc)
+		return "success"
 
 	for doc in items:
 		try:
@@ -907,7 +919,8 @@ def delete_bulk_docs(doctype: str, items: str | list, delete_linked: bool = Fals
 							"docname": linked_doc["reference_docname"],
 						}
 					],
-					remove_contact=doctype == "Contact",
+					doctype=doctype,
+					docname=doc,
 					delete=delete_linked,
 				)
 		except Exception as e:

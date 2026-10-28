@@ -37,8 +37,9 @@ class CRMTask(Document):
 		# disappear through hard deletion, whether from the UI or a direct server/API call. Tasks
 		# linked to a CRM Deal are cancelled (status=Canceled) instead of deleted; deletion stays
 		# available for unrelated Task contexts. Enforced here so the rule cannot be bypassed by
-		# calling frappe.client.delete directly against the record.
-		if self.reference_doctype == "CRM Deal" and self.reference_docname:
+		# calling frappe.client.delete directly against the record. The one exception is deleting
+		# the Deal itself (crm.api.doc.delete_deal), which takes everything filed on it.
+		if self.reference_doctype == "CRM Deal" and self.reference_docname and not self.flags.deleting_deal:
 			frappe.throw(
 				_("An Opportunity Task cannot be deleted. Cancel it instead to preserve its history."),
 				frappe.PermissionError,
