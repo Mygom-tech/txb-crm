@@ -380,6 +380,63 @@ def _version_field_events(
 		yield activity
 
 
+def _docinfo_activities(docinfo, *, is_lead: bool):
+	"""Comments and emails from a record's docinfo, as feed activities (Lead, Deal and Contact)."""
+	activities = []
+	for comment in docinfo.comments:
+		activity = {
+			"name": comment.name,
+			"activity_type": "comment",
+			"creation": comment.creation,
+			"owner": comment.owner,
+			"content": comment.content,
+			"attachments": get_attachments("Comment", comment.name),
+			"is_lead": is_lead,
+		}
+		_with_event_envelope(
+			activity,
+			occurred_at=comment.creation,
+			actor=comment.owner,
+			canonical_doctype="Comment",
+			canonical_docname=comment.name,
+			target={"doctype": "Comment", "name": comment.name},
+		)
+		activities.append(activity)
+
+	for communication in docinfo.communications + docinfo.automated_messages:
+		activity = {
+			"name": communication.name,
+			"activity_type": "communication",
+			"communication_type": communication.communication_type,
+			"communication_date": communication.communication_date or communication.creation,
+			"creation": communication.creation,
+			"data": {
+				"subject": communication.subject,
+				"content": communication.content,
+				"sender_full_name": communication.sender_full_name,
+				"sender": communication.sender,
+				"recipients": communication.recipients,
+				"cc": communication.cc,
+				"bcc": communication.bcc,
+				"attachments": get_attachments("Communication", communication.name),
+				"read_by_recipient": communication.read_by_recipient,
+				"delivery_status": communication.delivery_status,
+			},
+			"is_lead": is_lead,
+		}
+		_with_event_envelope(
+			activity,
+			occurred_at=communication.communication_date or communication.creation,
+			actor=communication.sender,
+			canonical_doctype="Communication",
+			canonical_docname=communication.name,
+			summary=communication.subject,
+			target={"doctype": "Communication", "name": communication.name},
+		)
+		activities.append(activity)
+	return activities
+
+
 @frappe.whitelist()
 def get_activities(name: str):
 	if frappe.db.exists("CRM Deal", name):
@@ -472,57 +529,7 @@ def _read_deal_activities(name: str, include_lead: bool = True):
 			)
 		)
 
-	for comment in docinfo.comments:
-		activity = {
-			"name": comment.name,
-			"activity_type": "comment",
-			"creation": comment.creation,
-			"owner": comment.owner,
-			"content": comment.content,
-			"attachments": get_attachments("Comment", comment.name),
-			"is_lead": False,
-		}
-		_with_event_envelope(
-			activity,
-			occurred_at=comment.creation,
-			actor=comment.owner,
-			canonical_doctype="Comment",
-			canonical_docname=comment.name,
-			target={"doctype": "Comment", "name": comment.name},
-		)
-		activities.append(activity)
-
-	for communication in docinfo.communications + docinfo.automated_messages:
-		activity = {
-			"name": communication.name,
-			"activity_type": "communication",
-			"communication_type": communication.communication_type,
-			"communication_date": communication.communication_date or communication.creation,
-			"creation": communication.creation,
-			"data": {
-				"subject": communication.subject,
-				"content": communication.content,
-				"sender_full_name": communication.sender_full_name,
-				"sender": communication.sender,
-				"recipients": communication.recipients,
-				"cc": communication.cc,
-				"bcc": communication.bcc,
-				"attachments": get_attachments("Communication", communication.name),
-				"read_by_recipient": communication.read_by_recipient,
-				"delivery_status": communication.delivery_status,
-			},
-			"is_lead": False,
-		}
-		_with_event_envelope(
-			activity,
-			occurred_at=communication.communication_date or communication.creation,
-			actor=communication.sender,
-			canonical_doctype="Communication",
-			canonical_docname=communication.name,
-			summary=communication.subject,
-			target={"doctype": "Communication", "name": communication.name},
-		)
-		activities.append(activity)
+	activities.extend(_docinfo_activities(docinfo, is_lead=False))
 
 	for attachment_log in docinfo.attachment_logs:
 		activity = {
@@ -639,57 +646,7 @@ def _read_lead_activities(name: str):
 			)
 		)
 
-	for comment in docinfo.comments:
-		activity = {
-			"name": comment.name,
-			"activity_type": "comment",
-			"creation": comment.creation,
-			"owner": comment.owner,
-			"content": comment.content,
-			"attachments": get_attachments("Comment", comment.name),
-			"is_lead": True,
-		}
-		_with_event_envelope(
-			activity,
-			occurred_at=comment.creation,
-			actor=comment.owner,
-			canonical_doctype="Comment",
-			canonical_docname=comment.name,
-			target={"doctype": "Comment", "name": comment.name},
-		)
-		activities.append(activity)
-
-	for communication in docinfo.communications + docinfo.automated_messages:
-		activity = {
-			"name": communication.name,
-			"activity_type": "communication",
-			"communication_type": communication.communication_type,
-			"communication_date": communication.communication_date or communication.creation,
-			"creation": communication.creation,
-			"data": {
-				"subject": communication.subject,
-				"content": communication.content,
-				"sender_full_name": communication.sender_full_name,
-				"sender": communication.sender,
-				"recipients": communication.recipients,
-				"cc": communication.cc,
-				"bcc": communication.bcc,
-				"attachments": get_attachments("Communication", communication.name),
-				"read_by_recipient": communication.read_by_recipient,
-				"delivery_status": communication.delivery_status,
-			},
-			"is_lead": True,
-		}
-		_with_event_envelope(
-			activity,
-			occurred_at=communication.communication_date or communication.creation,
-			actor=communication.sender,
-			canonical_doctype="Communication",
-			canonical_docname=communication.name,
-			summary=communication.subject,
-			target={"doctype": "Communication", "name": communication.name},
-		)
-		activities.append(activity)
+	activities.extend(_docinfo_activities(docinfo, is_lead=True))
 
 	for attachment_log in docinfo.attachment_logs:
 		activity = {
@@ -788,13 +745,15 @@ def get_contact_activities(name: str):
 	# TXB-248: calls and notes recorded directly against the Contact are read first, so when the
 	# same canonical record is also reached through its optional Opportunity link the first-seen
 	# (Contact-owned) copy is the one kept by the name-based dedup below.
-	direct_calls, direct_notes, direct_activities = _read_direct_contact_records(name)
+	direct_calls, direct_notes, direct_tasks, direct_activities = _read_direct_contact_records(name)
 	_tag_contact_source(direct_calls, name)
 	_tag_contact_source(direct_notes, name)
+	_tag_contact_source(direct_tasks, name)
 	_tag_contact_source(direct_activities, name)
 	activities += direct_activities
 	calls += direct_calls
 	notes += direct_notes
+	tasks += direct_tasks
 
 	for lead in lead_names:
 		streams = _read_lead_activities(lead)
@@ -957,17 +916,23 @@ def _tag_deal_source(records: list, deal: str) -> list:
 
 
 def _read_direct_contact_records(contact: str):
-	"""Read the calls and notes whose canonical owner is the Contact itself (TXB-248).
+	"""Read the records whose canonical owner is the Contact itself (TXB-248).
 
-	Returns (calls, notes, activities): the Call Log and Note rows, plus the Note-creation
-	metadata events for the main Activity stream -- the same reference-only shape the Lead and
-	Deal readers emit for their own notes. Calls carry the normalized call envelope.
+	Returns (calls, notes, tasks, activities): the Call Log, Note and Task rows, plus the main
+	Activity stream entries -- Note-creation metadata, the Contact's comments and emails
+	(including those Frappe links to it by address), its Events and its Task lifecycle -- in the
+	same shapes the Lead and Deal readers emit. Calls carry the normalized call envelope.
 	"""
 	calls = get_contact_owned_calls({"reference_docname": contact})
 	notes = get_contact_owned_notes({"reference_docname": contact})
+	tasks = get_linked_tasks(contact, "Contact")
 	_tag_call_events(calls)
+	get_docinfo("", "Contact", contact)
 	activities = _note_metadata_events(notes, is_lead=False)
-	return calls, notes, activities
+	activities.extend(_docinfo_activities(frappe.response["docinfo"], is_lead=False))
+	activities.extend(_meeting_events("Contact", contact, is_lead=False))
+	activities.extend(get_linked_task_activities(contact, "Contact"))
+	return calls, notes, tasks, activities
 
 
 def _tag_contact_source(records: list, contact: str) -> list:
@@ -1357,10 +1322,13 @@ def _append_new_records(records: list, extra: list) -> list:
 	return records
 
 
-def get_linked_tasks(name: str):
+def get_linked_tasks(name: str, doctype: str | None = None):
+	filters = {"reference_docname": name}
+	if doctype:
+		filters["reference_doctype"] = doctype
 	tasks = frappe.db.get_all(
 		"CRM Task",
-		filters={"reference_docname": name},
+		filters=filters,
 		fields=[
 			"name",
 			"title",
@@ -1376,8 +1344,8 @@ def get_linked_tasks(name: str):
 	return tasks or []
 
 
-def get_linked_task_activities(name: str):
-	"""Yield normalized lifecycle events for the Tasks linked to a CRM Deal (TXB-133).
+def get_linked_task_activities(name: str, doctype: str = "CRM Deal"):
+	"""Yield normalized lifecycle events for the Tasks linked to a CRM Deal or Contact (TXB-133).
 
 	Each Task contributes one ``creation`` event plus one ``field_change`` event per tracked change
 	(status, assigned_to, due_date, priority) recorded in its own audit Versions. This is forward
@@ -1387,7 +1355,7 @@ def get_linked_task_activities(name: str):
 	"""
 	tasks = frappe.db.get_all(
 		"CRM Task",
-		filters={"reference_doctype": "CRM Deal", "reference_docname": name},
+		filters={"reference_doctype": doctype, "reference_docname": name},
 		fields=["name", "title", "owner", "creation"],
 	)
 	if not tasks:

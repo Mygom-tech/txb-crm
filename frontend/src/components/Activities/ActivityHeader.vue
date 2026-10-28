@@ -114,10 +114,13 @@ const props = defineProps({
   doc: { type: Object, default: () => ({}) },
   modalRef: { type: Object, default: () => ({}) },
   whatsappBox: { type: Object, default: () => ({}) },
+  doctype: { type: String, default: '' },
 })
 
 // The deal page owns the available actions, so it resolves and runs Log Coaching Call.
-const emit = defineEmits(['createCoachingNote'])
+// A Contact page owns Note and Log a Call (with its Opportunity picker), so they are emitted.
+const emit = defineEmits(['createCoachingNote', 'newNote', 'logCall'])
+const isContact = computed(() => props.doctype === 'Contact')
 
 const { makeCall } = globalStore()
 
@@ -152,7 +155,8 @@ const defaultActions = computed(() => {
     {
       icon: h(PhoneIcon, { class: 'h-4 w-4' }),
       label: __('Log a Call'),
-      onClick: () => props.modalRef.createCallLog(),
+      onClick: () =>
+        isContact.value ? emit('logCall') : props.modalRef.createCallLog(),
     },
     {
       icon: h(PhoneIcon, { class: 'h-4 w-4' }),
@@ -163,7 +167,8 @@ const defaultActions = computed(() => {
     {
       icon: h(NoteIcon, { class: 'h-4 w-4' }),
       label: __('Note'),
-      onClick: () => props.modalRef.showNote(),
+      onClick: () =>
+        isContact.value ? emit('newNote') : props.modalRef.showNote(),
     },
     {
       icon: h(TaskIcon, { class: 'h-4 w-4' }),
@@ -174,12 +179,13 @@ const defaultActions = computed(() => {
       icon: h(AttachmentIcon, { class: 'h-4 w-4' }),
       label: __('Upload Attachment'),
       onClick: () => (showFilesUploader.value = true),
+      condition: () => !isContact.value,
     },
     {
       icon: h(WhatsAppIcon, { class: 'h-4 w-4' }),
       label: __('WhatsApp Message'),
       onClick: () => (tabIndex.value = getTabIndex('WhatsApp')),
-      condition: () => whatsappEnabled.value,
+      condition: () => whatsappEnabled.value && !isContact.value,
     },
   ]
   return actions.filter((action) =>

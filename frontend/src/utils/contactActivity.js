@@ -95,3 +95,21 @@ export function leadSourceNames(activities) {
   }
   return [...names]
 }
+
+/**
+ * Tab counts for the Contact page, from its aggregate feed (`{versions, calls, notes, tasks}`).
+ * An Event counts once, by its "scheduled" entry; later reschedules are the same Event.
+ */
+export function contactTabCounts(feed) {
+  const versions = feed?.versions || []
+  const ofType = (type) => versions.filter((a) => a?.activity_type === type)
+  return {
+    Emails: ofType('communication').length,
+    Comments: ofType('comment').length,
+    Events: ofType('event').filter((a) => a.data?.meeting_action === 'scheduled')
+      .length,
+    Calls: feed?.calls?.length || 0,
+    Tasks: feed?.tasks?.length || 0,
+    Notes: feed?.notes?.length || 0,
+  }
+}
