@@ -50,7 +50,8 @@ from crm.txb.delivery_coach_notifications import (
 	STATUS_SENT,
 	STATUS_SKIPPED,
 )
-from crm.txb.pipelines.delivering_coaching import set_first_call_date
+from crm.txb.api.actions import run_action
+from crm.txb.pipelines.actions import find_action
 
 COACH_A = "txb-assign-coach-a@example.com"
 COACH_B = "txb-assign-coach-b@example.com"
@@ -60,6 +61,13 @@ SELLER = "txb-assign-seller@example.com"
 CLIENT_EMAIL = "grace.client@example.com"
 ORGANIZATION = "TxB Assignment Notify Co"
 WORKER = "crm.txb.delivery_coach_assignment.process_assignment_notification"
+# Everything the delivery-readiness gate (TXB-251) asks of a deal entering Active.
+READY = {
+	"custom_contract_signed": "Yes",
+	"custom_payment_confirmed": "Yes",
+	"custom_test_completed": "Yes",
+	"custom_delivery_notes": "Ready",
+}
 
 
 class TestDeliveryCoachAssignmentNotifications(FrappeTestCase):
@@ -242,11 +250,42 @@ class TestDeliveryCoachAssignmentNotifications(FrappeTestCase):
 		tasks = frappe.get_all("CRM Task", filters={"reference_docname": deal.name, "assigned_to": COACH_A})
 		self.assertEqual(len(tasks), 1)
 
+	def ready_deal(self):
+		return self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A, **READY})
+
 	def test_set_first_call_date_activates_coaching(self):
-		deal = self.make_deal(**{FIELD_DELIVERY_COACH: COACH_A})
-		set_first_call_date(deal, {"first_call_date": "2031-03-10 10:00:00"})
+		deal = self.ready_deal()
+		run_action(deal, find_action(PIPELINE_DELIVERING_COACHING, "set_first_call_date"), {"first_call_date": "2031-03-10 10:00:00"})
 
 		self.assertEqual(self.events(deal), [f"{deal.name}-activation"])
+
+	def test_a_direct_status_change_to_active_activates_coaching(self):
+		# The status control and Kanban write the status bare; an Admin may (TXB-110).
+		deal = self.ready_deal()
+		deal.status = "Active"
+		deal.save()
+
+		self.assertEqual(self.events(deal), [f"{deal.name}-activation"])
+		self.assertEqual(len(self.enqueued), 1)
+
+	def test_reactivating_a_deal_activated_before_the_ledger_sends_nothing(self):
+		# Activated by Kanban before activation was recorded: no ledger row to dedupe on.
+		deal = self.make_deal(status="Active", **{FIELD_DELIVERY_COACH: COACH_A, **READY})
+		for status in ("On Hold", "Active"):
+			deal.status = status
+			deal.save()
+
+		self.assertEqual(self.events(deal), [])
+		self.assertEqual(self.enqueued, [])
+
+	def test_reactivation_does_not_notify_again(self):
+		deal = self.ready_deal()
+		for status in ("Active", "On Hold", "Active"):
+			deal.status = status
+			deal.save()
+
+		self.assertEqual(self.events(deal), [f"{deal.name}-activation"])
+		self.assertEqual(len(self.enqueued), 1)
 
 	def test_activation_without_a_coach_does_nothing(self):
 		deal = self.make_deal()
