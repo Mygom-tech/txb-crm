@@ -5,8 +5,8 @@ ledger row each and queue the worker after commit, so delivery can never delay, 
 back the save:
 
 * `record_activation` -- called by `notify_activation` (CRM Deal on_update) when a Delivering
-  Coaching deal enters Active by any route: Set First Call Date, the status control, Kanban or
-  the API -- emails the Delivery Coach the client's details and the client that a
+  Coaching deal first enters Active, by any route: Set First Call Date, the status control,
+  Kanban or the API -- emails the Delivery Coach the client's details and the client that a
   coach was assigned, both promising contact within 48 hours. In the same transaction it gives
   the coach a CRM Task due in 48 hours and tells the sales Opportunity's owner, in the CRM, that
   their sold client has a coach. Keyed per deal, so it happens once however often it is called.
@@ -47,6 +47,8 @@ from crm.txb.delivery_coach_notifications import (
 	get_notification_config,
 	render_assignment_email,
 )
+from crm.txb.pipelines.actions import find_action
+from crm.txb.pipelines.common import add_task
 
 LOG_TITLE = "Delivery Coach assignment notification"
 SUPERSEDED = "Superseded: the Delivery Coach changed before delivery"
@@ -55,6 +57,8 @@ STOPPED = "Skipped: notifications were Disabled before delivery"
 NOT_ACTIVATION = "Skipped: the client is only emailed when coaching is activated"
 REACH_OUT_HOURS = 48
 ACTIVATION_SAVEPOINT = "coach_activation"
+# Entering Active from these is Reactivate, not activation.
+REACTIVATED_FROM = tuple(find_action(PIPELINE_DELIVERING_COACHING, "reactivate")["from_states"])
 
 
 def record_activation(deal) -> None:
@@ -81,17 +85,20 @@ def record_activation(deal) -> None:
 
 
 def notify_activation(deal, method=None):
-	"""Notify on a Delivering Coaching deal's move into Active, whichever route made it.
+	"""Notify on a Delivering Coaching deal's first move into Active, whichever route made it.
 
-	`record_activation` is keyed per deal, so a later Reactivate never notifies again.
+	Only a move from before activation counts. Coming back from On Hold, Payment Hold or
+	Inactive is a reactivation: the coach and client already know each other, including on
+	deals activated before activation was recorded. An insert is not a move.
 	"""
-	# Imported here: the pipelines import this module.
-	from crm.txb.pipelines.delivering_coaching import is_entering_active
-
 	if frappe.flags.in_import or frappe.flags.in_migrate or frappe.flags.in_patch:
 		return
-	if is_entering_active(deal):
-		record_activation(deal)
+	if deal.pipeline_type != PIPELINE_DELIVERING_COACHING or deal.status != STATUS_ACTIVE:
+		return
+	before = deal.get_doc_before_save()
+	if not before or before.status == STATUS_ACTIVE or before.status in REACTIVATED_FROM:
+		return
+	record_activation(deal)
 
 
 def queue_assignment_notification(deal, method=None):
@@ -156,9 +163,6 @@ def _record_event(deal, event_key: str, coach: str, assigned_at, notify_client: 
 
 def _add_reach_out_task(deal, coach: str) -> None:
 	"""The coach's CRM Task to contact the client within 48 hours."""
-	# Imported here: the pipelines import this module.
-	from crm.txb.pipelines.common import add_task
-
 	add_task(
 		deal,
 		"Reach out to the client",

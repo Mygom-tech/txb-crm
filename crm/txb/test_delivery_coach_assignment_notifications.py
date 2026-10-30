@@ -268,6 +268,16 @@ class TestDeliveryCoachAssignmentNotifications(FrappeTestCase):
 		self.assertEqual(self.events(deal), [f"{deal.name}-activation"])
 		self.assertEqual(len(self.enqueued), 1)
 
+	def test_reactivating_a_deal_activated_before_the_ledger_sends_nothing(self):
+		# Activated by Kanban before activation was recorded: no ledger row to dedupe on.
+		deal = self.make_deal(status="Active", **{FIELD_DELIVERY_COACH: COACH_A, **READY})
+		for status in ("On Hold", "Active"):
+			deal.status = status
+			deal.save()
+
+		self.assertEqual(self.events(deal), [])
+		self.assertEqual(self.enqueued, [])
+
 	def test_reactivation_does_not_notify_again(self):
 		deal = self.ready_deal()
 		for status in ("Active", "On Hold", "Active"):
