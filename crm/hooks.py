@@ -341,9 +341,10 @@ doc_events = {
 			# save, so a reminder is never closed for a write that did not commit.
 			"crm.txb.first_call_reminders.settle_activation_cycle",
 			"crm.txb.first_call_reminders.complete_reminder_on_first_call_date",
-			# A coach assigned to an already Active deal is emailed once, by a job queued after
-			# commit so delivery can never delay or roll back the save (TXB-270). Activation
-			# itself notifies from the Set First Call Date action.
+			# Entering Active by any route emails the coach and the client, once per deal; a
+			# coach assigned to an already Active deal is emailed once. Both by a job queued
+			# after commit so delivery can never delay or roll back the save (TXB-270).
+			"crm.txb.delivery_coach_assignment.notify_activation",
 			"crm.txb.delivery_coach_assignment.queue_assignment_notification",
 		],
 	},

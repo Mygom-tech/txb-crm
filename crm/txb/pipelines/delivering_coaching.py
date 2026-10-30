@@ -10,7 +10,6 @@ move the status. See crm/txb/permissions.py for the rule that enforces it.
 """
 
 from crm.txb import human_contact
-from crm.txb.delivery_coach_assignment import record_activation
 from crm.txb.coaching_call_recap import (
 	create_recap,
 	find_submission,
@@ -112,10 +111,9 @@ def clear_contract(deal, data):
 
 
 def set_first_call_date(deal, data):
-	"""Activate coaching: the deal's first move to Active, so the coach, client and sales owner
-	are notified (`crm.txb.delivery_coach_assignment.record_activation`)."""
+	"""Activate coaching. The save into Active notifies the coach, client and sales owner
+	(`crm.txb.delivery_coach_assignment.notify_activation`)."""
 	deal.custom_first_call_date = data.get("first_call_date")
-	record_activation(deal)
 	set_coaching_call_event(deal, 1, data.get("first_call_date"))
 
 	if data.get("call_notes"):

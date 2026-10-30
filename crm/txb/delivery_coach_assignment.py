@@ -4,8 +4,9 @@ Built on the TXB-269 foundation (settings, ledger, Email Templates). Two trigger
 ledger row each and queue the worker after commit, so delivery can never delay, fail or roll
 back the save:
 
-* `record_activation` -- called by the Set First Call Date action, a Delivering Coaching deal's
-  first move to Active -- emails the Delivery Coach the client's details and the client that a
+* `record_activation` -- called by `notify_activation` (CRM Deal on_update) when a Delivering
+  Coaching deal enters Active by any route: Set First Call Date, the status control, Kanban or
+  the API -- emails the Delivery Coach the client's details and the client that a
   coach was assigned, both promising contact within 48 hours. In the same transaction it gives
   the coach a CRM Task due in 48 hours and tells the sales Opportunity's owner, in the CRM, that
   their sold client has a coach. Keyed per deal, so it happens once however often it is called.
@@ -59,8 +60,8 @@ ACTIVATION_SAVEPOINT = "coach_activation"
 def record_activation(deal) -> None:
 	"""Notify the coach, the client and the sales owner that coaching was activated.
 
-	Called by the activation action before it saves the deal, inside its transaction. Best
-	effort: a failure here is logged and never blocks the activation.
+	Called by `notify_activation` inside the activating save's transaction. Best effort: a
+	failure here is logged and never blocks the activation.
 	"""
 	event_key = f"{deal.name}-activation"
 	coach = deal.get(FIELD_DELIVERY_COACH)
@@ -77,6 +78,20 @@ def record_activation(deal) -> None:
 			title=LOG_TITLE,
 			message=f"deal={deal.name} intended_user={coach} error=activation_failed: {type(e).__name__}",
 		)
+
+
+def notify_activation(deal, method=None):
+	"""Notify on a Delivering Coaching deal's move into Active, whichever route made it.
+
+	`record_activation` is keyed per deal, so a later Reactivate never notifies again.
+	"""
+	# Imported here: the pipelines import this module.
+	from crm.txb.pipelines.delivering_coaching import is_entering_active
+
+	if frappe.flags.in_import or frappe.flags.in_migrate or frappe.flags.in_patch:
+		return
+	if is_entering_active(deal):
+		record_activation(deal)
 
 
 def queue_assignment_notification(deal, method=None):
