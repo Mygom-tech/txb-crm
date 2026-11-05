@@ -122,17 +122,13 @@
         v-if="!editing"
         :key="todayKey"
         :aria-label="__('Today')"
-        class="flex flex-col gap-4 px-5 pb-4 pt-2"
+        class="grid gap-4 px-5 pb-4 pt-2 lg:grid-cols-2"
       >
-        <div class="flex flex-wrap gap-4">
-          <div class="min-w-0 flex-[3_1_420px]">
-            <TodayTasks :user="filters.user" height="360px" />
-          </div>
-          <div class="min-w-0 flex-[2_1_300px]">
-            <TodayEvents :user="filters.user" height="360px" />
-          </div>
+        <WeekReferrals :user="filters.user" height="100%" />
+        <div class="flex min-w-0 flex-col gap-4">
+          <TodayEvents :user="filters.user" height="300px" />
+          <TodayTasks :user="filters.user" height="300px" />
         </div>
-        <WeekReferrals :user="filters.user" />
       </section>
       <DashboardGrid
         v-if="!dashboardItems.loading && dashboardItems.data"
