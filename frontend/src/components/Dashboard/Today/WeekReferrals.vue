@@ -2,34 +2,40 @@
   <WidgetCard
     :title="__('Referrals this week')"
     :icon="LucideUsers"
+    :height="height"
     :loading="thisWeek.loading && !thisWeek.data"
     @expand="openDialog"
   >
     <template #header-extra>
-      <span class="text-sm text-ink-gray-5">{{ weekLabel(thisWeek.data) }}</span>
+      <span class="text-sm text-ink-gray-5">{{
+        weekLabel(thisWeek.data)
+      }}</span>
     </template>
-    <div class="flex flex-wrap items-center gap-x-6 gap-y-2 px-3.5 py-3">
+    <div class="flex h-full flex-col px-3.5 py-3">
       <div class="flex items-baseline gap-2">
         <span class="text-3xl font-semibold text-ink-gray-9">
           {{ thisWeek.data?.total ?? 0 }}
         </span>
-        <span class="text-base text-ink-gray-6">{{ __('referred leads') }}</span>
+        <span class="text-base text-ink-gray-6">{{
+          __('referred leads')
+        }}</span>
+        <Button
+          v-if="band.more"
+          class="ml-auto"
+          variant="subtle"
+          @click="openDialog"
+        >
+          {{ __('+{0} more', [band.more]) }}
+        </Button>
       </div>
-      <div
-        v-for="rep in band.shown"
-        :key="rep.user"
-        class="flex items-center gap-2 rounded-full border border-outline-gray-2 py-1 pl-1 pr-2.5"
-        :class="{ 'bg-surface-gray-2': rep.user == me }"
-      >
-        <UserAvatar :user="rep.user" size="sm" />
-        <span class="text-base text-ink-gray-8" :class="{ 'font-semibold': rep.user == me }">
-          {{ rep.user == me ? __('You') : getUser(rep.user).full_name }}
-        </span>
-        <span class="text-base font-semibold text-ink-gray-9">+{{ rep.points }}</span>
-      </div>
-      <Button v-if="band.more" variant="subtle" @click="openDialog">
-        {{ __('+{0} more', [band.more]) }}
-      </Button>
+      <ECharts
+        v-if="band.shown.length"
+        class="min-h-[240px] w-full flex-1"
+        :options="bandFunnel"
+      />
+      <p v-else class="py-6 text-center text-base text-ink-gray-5">
+        {{ __('No referrals this week.') }}
+      </p>
     </div>
   </WidgetCard>
 
@@ -46,7 +52,9 @@
               :aria-label="__('Previous week')"
               @click="shiftWeek(-7)"
             />
-            <span class="px-2 text-base text-ink-gray-8">{{ weekLabel(week.data) }}</span>
+            <span class="px-2 text-base text-ink-gray-8">{{
+              weekLabel(week.data)
+            }}</span>
             <Button
               icon="lucide-chevron-right"
               :aria-label="__('Next week')"
@@ -62,29 +70,27 @@
           />
         </div>
         <div class="flex max-h-[60vh] flex-wrap gap-5 overflow-auto">
-          <section class="w-64 shrink-0" :aria-label="__('Leaderboard')">
+          <section class="w-80 shrink-0" :aria-label="__('Leaderboard')">
             <div class="mb-2 flex items-baseline gap-2">
               <span class="text-3xl font-semibold text-ink-gray-9">
                 {{ week.data?.total ?? 0 }}
               </span>
-              <span class="text-base text-ink-gray-6">{{ __('referred leads') }}</span>
+              <span class="text-base text-ink-gray-6">{{
+                __('referred leads')
+              }}</span>
             </div>
-            <ol>
-              <li
-                v-for="(rep, i) in week.data?.reps || []"
-                :key="rep.user"
-                class="flex items-center gap-2.5 rounded px-2 py-1.5"
-                :class="{ 'bg-surface-gray-2': rep.user == me }"
-              >
-                <span class="w-4 text-right text-sm text-ink-gray-5">{{ i + 1 }}</span>
-                <UserAvatar :user="rep.user" size="sm" />
-                <span class="flex-1 truncate text-base text-ink-gray-8">
-                  {{ rep.user == me ? __('You') : getUser(rep.user).full_name }}
-                </span>
-                <span class="text-base font-semibold text-ink-gray-9">+{{ rep.points }}</span>
-              </li>
-            </ol>
-            <p v-if="!week.data?.reps?.length" class="text-base text-ink-gray-5">
+            <div
+              v-if="week.data?.reps?.length"
+              :style="{
+                height: `${Math.max(240, week.data.reps.length * 40)}px`,
+              }"
+            >
+              <ECharts class="h-full w-full" :options="weekFunnel" />
+            </div>
+            <p
+              v-if="!week.data?.reps?.length"
+              class="text-base text-ink-gray-5"
+            >
               {{ __('No referrals this week.') }}
             </p>
           </section>
@@ -92,8 +98,11 @@
             <table class="w-full text-base">
               <thead>
                 <tr class="text-left text-ink-gray-6">
-                  <th class="py-2 pr-3 font-medium">{{ __('Referred lead') }}</th>
+                  <th class="py-2 pr-3 font-medium">
+                    {{ __('Referred lead') }}
+                  </th>
                   <th class="py-2 pr-3 font-medium">{{ __('Referred by') }}</th>
+                  <th class="py-2 pr-3 font-medium">{{ __('Point to') }}</th>
                   <th class="py-2 pr-3 font-medium">{{ __('Lead owner') }}</th>
                   <th class="py-2 font-medium">{{ __('Created') }}</th>
                 </tr>
@@ -124,6 +133,9 @@
                     </router-link>
                   </td>
                   <td class="py-2 pr-3 text-ink-gray-7">
+                    {{ lead.point_to && repName(lead.point_to) }}
+                  </td>
+                  <td class="py-2 pr-3 text-ink-gray-7">
                     {{ lead.lead_owner && getUser(lead.lead_owner).full_name }}
                   </td>
                   <td class="whitespace-nowrap py-2 text-ink-gray-5">
@@ -147,17 +159,17 @@
 
 <script setup>
 import WidgetCard from './WidgetCard.vue'
-import UserAvatar from '@/components/UserAvatar.vue'
 import LucideUsers from '~icons/lucide/users'
 import { taskReference } from '@/components/ContactInactivity/taskReference'
 import { usersStore } from '@/stores/users'
-import { bandReps } from '@/utils/todayWidgets'
+import { bandReps, referralFunnelOptions } from '@/utils/todayWidgets'
 import { formatDate } from '@/utils'
-import { createResource, Dialog, dayjs } from 'frappe-ui'
+import { createResource, Dialog, ECharts, dayjs } from 'frappe-ui'
 import { computed, ref, watch } from 'vue'
 
 const props = defineProps({
   user: { type: String, default: null },
+  height: { type: String, default: 'auto' },
 })
 
 const { getUser } = usersStore()
@@ -184,6 +196,14 @@ watch(
 )
 
 const band = computed(() => bandReps(thisWeek.data?.reps, me))
+
+function repName(user) {
+  return user == me ? __('You') : getUser(user).full_name
+}
+
+const funnel = (reps) => referralFunnelOptions(reps, { me, nameOf: repName })
+const bandFunnel = computed(() => funnel(band.value.shown))
+const weekFunnel = computed(() => funnel(week.data?.reps))
 
 function weekLabel(data) {
   if (!data) return ''

@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { groupTasks, bandReps } from '@/utils/todayWidgets'
+import {
+  groupTasks,
+  bandReps,
+  referralFunnelOptions,
+} from '@/utils/todayWidgets'
 
 describe('groupTasks', () => {
   it('groups in Overdue, Today, Completed order and drops empty groups', () => {
@@ -49,5 +53,28 @@ describe('bandReps', () => {
       ],
       more: 0,
     })
+  })
+})
+
+describe('referralFunnelOptions', () => {
+  it('keeps the leaderboard order, scales to the top score and marks the viewer', () => {
+    const reps = [
+      { user: 'a', points: 4 },
+      { user: 'me', points: 2 },
+    ]
+    const [series] = referralFunnelOptions(reps, {
+      me: 'me',
+      nameOf: (u) => u.toUpperCase(),
+    }).series
+    expect(series.sort).toBe('none')
+    expect(series.max).toBe(4)
+    expect(series.data.map((d) => [d.name, d.value])).toEqual([
+      ['A', 4],
+      ['ME', 2],
+    ])
+    expect(series.data[1].itemStyle.color).not.toBe(
+      series.data[0].itemStyle.color,
+    )
+    expect(series.data[1].label.fontWeight).toBe('bold')
   })
 })
