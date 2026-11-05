@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { groupTasks, bandReps } from '@/utils/todayWidgets'
+import {
+  groupTasks,
+  bandReps,
+  referralFunnelOptions,
+} from '@/utils/todayWidgets'
 
 describe('groupTasks', () => {
   it('groups in Overdue, Today, Completed order and drops empty groups', () => {
@@ -49,5 +53,44 @@ describe('bandReps', () => {
       ],
       more: 0,
     })
+  })
+})
+
+describe('referralFunnelOptions', () => {
+  it('keeps the leaderboard order, scales to the top score and marks the viewer', () => {
+    const reps = [
+      { user: 'a', points: 4 },
+      { user: 'me', points: 2 },
+    ]
+    const [series] = referralFunnelOptions(reps, {
+      me: 'me',
+      nameOf: (u) => u.toUpperCase(),
+    }).series
+    expect(series.sort).toBe('none')
+    expect(series.max).toBe(4)
+    expect(series.data.map((d) => [d.name, d.value])).toEqual([
+      ['A', 4],
+      ['ME', 2],
+    ])
+    expect(series.data[1].itemStyle.color).not.toBe(
+      series.data[0].itemStyle.color,
+    )
+    expect(series.data[1].label.fontWeight).toBe('bold')
+    expect(series.data.map((d) => d.rank)).toEqual([1, 2])
+    expect(
+      series.label.formatter({ data: series.data[1], value: 2, name: 'ME' }),
+    ).toBe('2.  +2  ME')
+  })
+
+  it('keeps the real rank of a viewer appended from outside the top 5', () => {
+    const { shown } = bandReps(
+      ['a', 'b', 'c', 'd', 'e', 'f', 'me'].map((user, i) => ({
+        user,
+        points: 9 - i,
+      })),
+      'me',
+    )
+    const [series] = referralFunnelOptions(shown, { me: 'me' }).series
+    expect(series.data.at(-1).rank).toBe(7)
   })
 })

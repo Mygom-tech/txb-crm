@@ -1325,18 +1325,15 @@ def get_today_events(user: str | None = None):
 @sales_user_only
 def get_week_referrals(week_of: str | None = None, user: str | None = None):
 	"""Leads created in the week of `week_of` (default this week) with Referred By set. Each is a
-	point for its lead owner. Everyone sees the points; the lead rows are only the readable ones."""
-	from crm.txb.constants import FIELD_REFERRED_BY, FIELD_REFERRED_BY_TYPE
+	point for the referrer's owner: the Lead's owner, or the Contact's. Everyone sees the points;
+	the lead rows are only the readable ones."""
+	from crm.txb.constants import FIELD_REFERRED_BY, FIELD_REFERRED_BY_TYPE, OWNER_FIELDS
 
 	week_start = frappe.utils.get_first_day_of_week(week_of or frappe.utils.nowdate())
 	week_end = frappe.utils.add_days(week_start, 6)
-	filters = {FIELD_REFERRED_BY: ("is", "set"), "creation": ("between", [week_start, week_end])}
-	user = user if _is_widget_manager() else None
-	if user:
-		filters["lead_owner"] = user
 	leads = frappe.get_all(
 		"CRM Lead",
-		filters=filters,
+		filters={FIELD_REFERRED_BY: ("is", "set"), "creation": ("between", [week_start, week_end])},
 		fields=[
 			"name",
 			"lead_name",
@@ -1349,10 +1346,26 @@ def get_week_referrals(week_of: str | None = None, user: str | None = None):
 		ignore_permissions=True,
 	)
 
+	# The referrer's current owner earns the point.
+	owners = {}
+	for doctype in {lead.referred_by_type for lead in leads}:
+		field = OWNER_FIELDS.get(doctype)
+		if not field or not frappe.get_meta(doctype).has_field(field):
+			continue
+		names = [lead.referred_by for lead in leads if lead.referred_by_type == doctype]
+		for row in frappe.get_all(doctype, filters={"name": ("in", names)}, fields=["name", field]):
+			owners[(doctype, row.name)] = row.get(field)
+	for lead in leads:
+		lead.point_to = owners.get((lead.referred_by_type, lead.referred_by))
+
+	user = user if _is_widget_manager() else None
+	if user:
+		leads = [lead for lead in leads if lead.point_to == user]
+
 	points = {}
 	for lead in leads:
-		if lead.lead_owner:
-			points[lead.lead_owner] = points.get(lead.lead_owner, 0) + 1
+		if lead.point_to:
+			points[lead.point_to] = points.get(lead.point_to, 0) + 1
 	reps = [{"user": u, "points": p} for u, p in sorted(points.items(), key=lambda i: (-i[1], i[0]))]
 
 	readable = set(
