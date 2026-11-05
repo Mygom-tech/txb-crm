@@ -1,4 +1,5 @@
 import frappe
+from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 from frappe.tests.utils import FrappeTestCase
 from frappe.utils import add_days, get_datetime, get_first_day_of_week, nowdate
 
@@ -24,6 +25,10 @@ class TestDashboardWidgets(FrappeTestCase):
 	def setUpClass(cls):
 		super().setUpClass()
 		add_lead_referred_by_reference_fields.execute()
+		# A site Custom Field in production, not shipped by the app.
+		create_custom_fields(
+			{"Contact": [{"fieldname": "custom_contact_owner", "fieldtype": "Link", "options": "User"}]}
+		)
 		frappe.db.commit()
 
 	def setUp(self):
@@ -122,34 +127,48 @@ class TestDashboardWidgets(FrappeTestCase):
 		self.assertFalse({"yesterday", "cancelled"} & self._subjects())
 		self.assertEqual(self._subjects(self.rep), {"rep meeting", "other with rep"})
 
-	def _referred(self, owner, created, referrer=None):
-		referrer = referrer or create_lead(first_name="Referrer").name
-		lead = create_lead(first_name="Referred", lead_owner=owner)
+	def _referred(self, created, referrer, referrer_type="CRM Lead", owner=None):
+		lead = create_lead(first_name="Referred", lead_owner=owner or self.other)
 		frappe.db.set_value(
 			"CRM Lead",
 			lead.name,
-			{FIELD_REFERRED_BY_TYPE: "CRM Lead", FIELD_REFERRED_BY: referrer},
+			{FIELD_REFERRED_BY_TYPE: referrer_type, FIELD_REFERRED_BY: referrer},
 			update_modified=False,
 		)
 		self._backdate("CRM Lead", lead.name, "creation", get_datetime(f"{created} 10:00:00"))
 		return lead.name
 
-	def test_referrals_count_for_the_new_leads_owner(self):
+	def test_referrals_earn_the_referrers_owner_a_point(self):
 		week_start = get_first_day_of_week(self.today)
 		last_week = add_days(week_start, -3)
 		frappe.db.delete("CRM Lead", {FIELD_REFERRED_BY: ("is", "set")})
-		self._referred(self.rep, week_start)
-		self._referred(self.rep, week_start)
-		other_lead = self._referred(self.other, week_start)
-		self._referred(self.other, last_week)
+		rep_lead = create_lead(first_name="Rep's", lead_owner=self.rep).name
+		other_lead = create_lead(first_name="Other's", lead_owner=self.other).name
+		contact = frappe.get_doc(
+			{"doctype": "Contact", "first_name": "Referrer", "custom_contact_owner": self.other}
+		).insert(ignore_permissions=True)
+
+		# Other's new lead referred by rep's lead: rep earns it.
+		hidden = self._referred(week_start, rep_lead, owner=self.other)
+		self._referred(week_start, rep_lead, owner=self.rep)  # self-referral counts
+		self._referred(week_start, contact.name, "Contact")
+		ownerless = create_lead(first_name="Ownerless").name
+		frappe.db.set_value("CRM Lead", ownerless, "lead_owner", None)
+		self._referred(week_start, ownerless)  # counted, no point
+		self._referred(last_week, other_lead)
 		create_lead(first_name="Unreferred", lead_owner=self.rep)
 
 		this_week = get_week_referrals()
-		self.assertEqual(this_week["total"], 3)
+		self.assertEqual(this_week["total"], 4)
 		self.assertEqual(this_week["reps"], [{"user": self.rep, "points": 2}, {"user": self.other, "points": 1}])
 		self.assertEqual(get_week_referrals(week_of=str(last_week))["reps"], [{"user": self.other, "points": 1}])
 
+		frappe.set_user(self.manager)
+		mine = get_week_referrals(user=self.rep)
+		self.assertEqual(mine["total"], 2)
+		self.assertEqual({lead["point_to"] for lead in mine["leads"]}, {self.rep})
+
 		frappe.set_user(self.rep)
-		seen = get_week_referrals()
+		seen = get_week_referrals(user=self.other)  # a sales user can't filter
 		self.assertEqual(seen["reps"], this_week["reps"])
-		self.assertNotIn(other_lead, {lead["name"] for lead in seen["leads"]})
+		self.assertNotIn(hidden, {lead["name"] for lead in seen["leads"]})
