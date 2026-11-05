@@ -25,10 +25,11 @@ class TestDashboardWidgets(FrappeTestCase):
 	def setUpClass(cls):
 		super().setUpClass()
 		add_lead_referred_by_reference_fields.execute()
-		# A site Custom Field in production, not shipped by the app.
-		create_custom_fields(
-			{"Contact": [{"fieldname": "custom_contact_owner", "fieldtype": "Link", "options": "User"}]}
-		)
+		# A site Custom Field in production, not shipped by the app. Never touch a real one.
+		if not frappe.db.exists("Custom Field", "Contact-custom_contact_owner"):
+			create_custom_fields(
+				{"Contact": [{"fieldname": "custom_contact_owner", "fieldtype": "Link", "options": "User"}]}
+			)
 		frappe.db.commit()
 
 	def setUp(self):

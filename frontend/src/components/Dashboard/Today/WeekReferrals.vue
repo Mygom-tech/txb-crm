@@ -28,13 +28,15 @@
           {{ __('+{0} more', [band.more]) }}
         </Button>
       </div>
-      <ECharts
+      <div
         v-if="band.shown.length"
-        class="min-h-[240px] w-full flex-1"
-        :options="bandFunnel"
-      />
+        class="max-h-full"
+        :style="{ height: funnelHeight(band.shown) }"
+      >
+        <ECharts class="h-full w-full" :options="bandFunnel" />
+      </div>
       <p v-else class="py-6 text-center text-base text-ink-gray-5">
-        {{ __('No referrals this week.') }}
+        {{ emptyText(thisWeek.data) }}
       </p>
     </div>
   </WidgetCard>
@@ -81,9 +83,7 @@
             </div>
             <div
               v-if="week.data?.reps?.length"
-              :style="{
-                height: `${Math.max(240, week.data.reps.length * 40)}px`,
-              }"
+              :style="{ height: funnelHeight(week.data.reps) }"
             >
               <ECharts class="h-full w-full" :options="weekFunnel" />
             </div>
@@ -91,7 +91,7 @@
               v-if="!week.data?.reps?.length"
               class="text-base text-ink-gray-5"
             >
-              {{ __('No referrals this week.') }}
+              {{ emptyText(week.data) }}
             </p>
           </section>
           <section class="min-w-0 flex-1" :aria-label="__('Referred leads')">
@@ -202,6 +202,13 @@ function repName(user) {
 }
 
 const funnel = (reps) => referralFunnelOptions(reps, { me, nameOf: repName })
+// Bars keep a readable height however few reps there are.
+const funnelHeight = (reps) => `${reps.length * 52 + 16}px`
+// Referrals whose referrer has no owner count but earn nobody a point.
+const emptyText = (data) =>
+  data?.total
+    ? __('No points earned this week.')
+    : __('No referrals this week.')
 const bandFunnel = computed(() => funnel(band.value.shown))
 const weekFunnel = computed(() => funnel(week.data?.reps))
 

@@ -76,5 +76,21 @@ describe('referralFunnelOptions', () => {
       series.data[0].itemStyle.color,
     )
     expect(series.data[1].label.fontWeight).toBe('bold')
+    expect(series.data.map((d) => d.rank)).toEqual([1, 2])
+    expect(
+      series.label.formatter({ data: series.data[1], value: 2, name: 'ME' }),
+    ).toBe('2.  +2  ME')
+  })
+
+  it('keeps the real rank of a viewer appended from outside the top 5', () => {
+    const { shown } = bandReps(
+      ['a', 'b', 'c', 'd', 'e', 'f', 'me'].map((user, i) => ({
+        user,
+        points: 9 - i,
+      })),
+      'me',
+    )
+    const [series] = referralFunnelOptions(shown, { me: 'me' }).series
+    expect(series.data.at(-1).rank).toBe(7)
   })
 })

@@ -35,7 +35,9 @@ const FUNNEL_BLUES = [
 const FUNNEL_MINE = '#7c3aed'
 
 // ECharts options for the referrals leaderboard drawn as a funnel: one bar per rep, widest at
-// the top, width in proportion to points. The viewer's bar stands out.
+// the top, width in proportion to points. The viewer's bar stands out. The label leads with the
+// rank and points so a long name is what gets truncated; a viewer from outside the top 5 shows
+// their real rank. No tooltip: the label already says it all.
 export function referralFunnelOptions(
   reps = [],
   { me, nameOf = (u) => u } = {},
@@ -44,11 +46,6 @@ export function referralFunnelOptions(
   return {
     animationDuration: 500,
     textStyle: { fontFamily: ['InterVar', 'sans-serif'] },
-    tooltip: {
-      trigger: 'item',
-      confine: true,
-      formatter: (p) => `${p.name}: +${p.value}`,
-    },
     series: [
       {
         type: 'funnel',
@@ -59,17 +56,20 @@ export function referralFunnelOptions(
         bottom: 8,
         min: 0,
         max,
-        minSize: '35%',
+        minSize: '50%',
         gap: 4,
         label: {
           position: 'inside',
           color: '#fff',
           fontSize: 13,
-          formatter: (p) => `${p.name}  +${p.value}`,
+          width: 140,
+          overflow: 'truncate',
+          formatter: (p) => `${p.data.rank}.  +${p.value}  ${p.name}`,
         },
         data: reps.map((rep, i) => ({
           name: nameOf(rep.user),
           value: rep.points,
+          rank: rep.rank ?? i + 1,
           itemStyle: {
             color:
               rep.user === me
